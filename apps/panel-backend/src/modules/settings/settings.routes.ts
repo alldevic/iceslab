@@ -97,6 +97,12 @@ async function peerCertificateExpiry(url: string): Promise<string | null> {
  *                                                   so SNI-based DPI cannot
  *                                                   cleanly match the handshake.
  *                                                   Default false. Xray JSON only.
+ *   - `subscriptionWgDns` (string[] of IPs)       - resolvers for the `DNS =` line of
+ *                                                   WireGuard / AmneziaWG configs and
+ *                                                   `dns1`/`dns2` of the vpn:// key.
+ *                                                   Empty/NULL: no line (default).
+ *   - `subscriptionWgDropIpv6` (boolean)          - take `::/0` out of `AllowedIPs`
+ *                                                   in every wg config. Default false.
  *
  * Future keys land in the same table; flip `isPublic` per key.
  */
@@ -185,6 +191,12 @@ const UpsertInput = z.object({
   // Host only, no scheme and no path: `nw.example.com`. A scheme is stripped
   // on read rather than rejected here, because an operator pasting a URL is
   // the expected mistake, not a malformed request.
+  subscriptionWgDns: z
+    .array(z.union([z.ipv4(), z.ipv6()], { message: 'not an IP address' }))
+    .max(4)
+    .nullable()
+    .optional(),
+  subscriptionWgDropIpv6: z.boolean().optional(),
   subscriptionPublicHost: z
     .string()
     .max(253)

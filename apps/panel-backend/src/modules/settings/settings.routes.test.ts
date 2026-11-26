@@ -19,6 +19,7 @@ import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
+import { getSubscriptionSettings, invalidateSubscriptionSettingsCache } from './settings.service.js';
 
 let app: FastifyInstance;
 let token: string;
@@ -200,5 +201,54 @@ describe('the admin door stays locked', () => {
       payload: { subscriptionUpdateIntervalHours: 0 },
     });
     expect(res.statusCode, 'a poll interval of zero would make every client hammer /sub').toBe(400);
+  });
+});
+
+describe('the wg config settings (9.8)', () => {
+  beforeEach(() => invalidateSubscriptionSettingsCache());
+
+  const readAdmin = async () =>
+    JSON.parse((await app.inject({ method: 'GET', url: '/api/settings', headers: auth() })).body);
+
+  it('stores a DNS list and the ::/0 switch, and reads them back', async () => {
+    await put({ subscriptionWgDns: ['1.1.1.1', '2606:4700:4700::1111'], subscriptionWgDropIpv6: true });
+    const body = await readAdmin();
+    expect(body.subscriptionWgDns).toEqual(['1.1.1.1', '2606:4700:4700::1111']);
+    expect(body.subscriptionWgDropIpv6).toBe(true);
+    const settings = await getSubscriptionSettings();
+    expect(settings.wgDns).toEqual(['1.1.1.1', '2606:4700:4700::1111']);
+    expect(settings.wgDropIpv6).toBe(true);
+  });
+
+  it('is empty and off on a panel that never set them', async () => {
+    const settings = await getSubscriptionSettings();
+    expect(settings.wgDns).toEqual([]);
+    expect(settings.wgDropIpv6).toBe(false);
+  });
+
+  it('refuses a DNS entry that is not an IP address, and more than four', async () => {
+    for (const bad of [['dns.example.com'], ['1.1.1.1', 'nope'], ['1.1.1.1\nPostUp = x'], ['999.1.1.1'], ['1.1.1.1/32'], ['1.1.1.1', '1.0.0.1', '8.8.8.8', '8.8.4.4', '9.9.9.9']]) {
+      const res = await app.inject({ method: 'PUT', url: '/api/settings', headers: auth(), payload: { subscriptionWgDns: bad } });
+      expect(res.statusCode, JSON.stringify(bad)).toBe(400);
+    }
+    expect((await readAdmin()).subscriptionWgDns).toBeNull();
+  });
+
+  it('busts the cache on write and clears with null', async () => {
+    await put({ subscriptionWgDns: ['9.9.9.9'] });
+    expect((await getSubscriptionSettings()).wgDns).toEqual(['9.9.9.9']);
+    await put({ subscriptionWgDns: null });
+    expect((await getSubscriptionSettings()).wgDns).toEqual([]);
+  });
+
+  it('a hand-edited row cannot put anything but an IP into a config', async () => {
+    await prisma.appSetting.create({
+      data: { key: 'subscriptionWgDns', value: ['1.1.1.1', 'x\nPostUp = rm', 5, '8.8.8.8'], isPublic: false },
+    });
+    await prisma.appSetting.create({ data: { key: 'subscriptionWgDropIpv6', value: 'yes', isPublic: false } });
+    invalidateSubscriptionSettingsCache();
+    const settings = await getSubscriptionSettings();
+    expect(settings.wgDns).toEqual(['1.1.1.1', '8.8.8.8']);
+    expect(settings.wgDropIpv6).toBe(false);
   });
 });

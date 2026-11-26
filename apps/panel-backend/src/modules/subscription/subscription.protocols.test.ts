@@ -146,7 +146,7 @@ describe('?format=wgconf with plain WireGuard (9.2)', () => {
     expect(res.body).toContain(`PublicKey = ${WG_TEST_PUBLIC_KEY}`);
     expect(res.body).toContain(':51830');
     expect(res.body).not.toMatch(AWG_LINES);
-    expect(res.headers['content-disposition']).toContain('alice-wireguard.conf');
+    expect(res.headers['content-disposition']).toMatch(/filename="[A-Za-z0-9._-]{1,15}-wg\.conf"/);
   });
 
   it('with both tunnels and no ?protocols= it answers as the base: the AmneziaWG config; ?protocols=amneziawg the same', async () => {
@@ -155,8 +155,7 @@ describe('?format=wgconf with plain WireGuard (9.2)', () => {
     expect(bare.statusCode).toBe(200);
     expect(bare.body).toMatch(/^Address = 10\.66\.66\./m);
     expect(bare.body).toMatch(/^Jc = /m);
-    expect(bare.headers['content-disposition']).toContain('alice.conf');
-    expect(bare.headers['content-disposition']).not.toContain('wireguard');
+    expect(bare.headers['content-disposition']).toMatch(/filename="[A-Za-z0-9._-]{1,15}-awg\.conf"/);
     const awg = await get(`/sub/${s.token}?format=wgconf&protocols=amneziawg`);
     expect(awg.body).toBe(bare.body);
   });
@@ -206,7 +205,7 @@ describe('?format=wgconf with plain WireGuard (9.2)', () => {
     const s = await both();
     const res = await get(`/sub/${s.token}`, { accept: 'text/html' });
     expect(res.statusCode).toBe(200);
-    expect(res.body).toContain('wireguard-eu-1.conf');
+    expect(res.body).toMatch(/conf-row__file">[A-Za-z0-9._-]{1,15}-wg\.conf</);
   });
 });
 

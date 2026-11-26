@@ -48,6 +48,10 @@ export interface AdminSettings extends PublicSettings {
   /** TLS-fragment - split the ClientHello in the Xray JSON format so SNI-DPI
    *  cannot match the handshake. Xray JSON only. */
   subscriptionTlsFragment?: boolean;
+  /** Resolvers for the `DNS =` line of wg configs; null/empty = no line. */
+  subscriptionWgDns?: string[] | null;
+  /** Take `::/0` out of AllowedIPs in every wg config. */
+  subscriptionWgDropIpv6?: boolean;
   /** R3-b - raw custom xray routing rules. */
   subscriptionCustomRoutingRules?: Record<string, unknown>[] | null;
   /** R3 - operator-defined custom domain lists (direct/proxy/block). */
@@ -148,6 +152,8 @@ export interface UpdateSettingsInput {
   subscriptionAnnounceTemplate?: string | null;
   subscriptionRoutingPreset?: RoutingPresetId;
   subscriptionTlsFragment?: boolean;
+  subscriptionWgDns?: string[] | null;
+  subscriptionWgDropIpv6?: boolean;
   subscriptionCustomRoutingRules?: Record<string, unknown>[] | null;
   subscriptionCustomDomainLists?: {
     direct?: string[];

@@ -72,6 +72,9 @@ interface Draft {
   announce: string;
   preset: RoutingPresetId;
   tlsFragment: boolean;
+  /** One field, comma- or space-separated: what an operator pastes. */
+  wgDns: string;
+  wgDropIpv6: boolean;
 }
 
 export function SubscriptionMetadataPage() {
@@ -106,6 +109,8 @@ export function SubscriptionMetadataPage() {
         subscriptionAnnounceTemplate: draft.announce.trim() || null,
         subscriptionRoutingPreset: draft.preset,
         subscriptionTlsFragment: draft.tlsFragment,
+        subscriptionWgDns: wgDnsList(draft.wgDns),
+        subscriptionWgDropIpv6: draft.wgDropIpv6,
       });
     },
     onSuccess: async () => {
@@ -136,6 +141,9 @@ export function SubscriptionMetadataPage() {
   const patch = (p: Partial<Draft>) => setDraft((d) => (d ? { ...d, ...p } : d));
   // Bound once, because the narrowing above does not reach into the callbacks.
   const announce = draft.announce;
+  // The first thing in the DNS field that is not an IP, so Save is not offered
+  // a value the server will refuse with a message about a field it cannot name.
+  const wgDnsBad = wgDnsList(draft.wgDns).find((v) => !looksLikeIp(v));
 
   /** Drop a placeholder where the caret is, rather than making the operator
    *  type the braces exactly right. */
@@ -157,7 +165,7 @@ export function SubscriptionMetadataPage() {
     });
   }
 
-  const canSave = dirty && !saveMutation.isPending;
+  const canSave = dirty && !saveMutation.isPending && !wgDnsBad;
 
   return (
     <Stack gap={20}>
@@ -391,6 +399,38 @@ export function SubscriptionMetadataPage() {
               {t('metadata.fragmentHint')}
             </Text>
           </Stack>
+
+          {/* WireGuard / AmneziaWG config lines */}
+          <Stack
+            gap={12}
+            style={{ padding: 20, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}
+          >
+            <Box style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <RouteIcon size={15} color={MOSS} />
+              <CardCaption>{t('metadata.wgTitle')}</CardCaption>
+            </Box>
+            <Stack gap={6}>
+              <FieldLabel>{t('metadata.wgDns')}</FieldLabel>
+              <TextInput
+                placeholder={t('metadata.wgDnsPlaceholder')}
+                value={draft.wgDns}
+                error={wgDnsBad ? t('metadata.wgDnsInvalid', { value: wgDnsBad }) : undefined}
+                onChange={(e) => patch({ wgDns: e.currentTarget.value })}
+              />
+              <Hint>{t('metadata.wgDnsHint')}</Hint>
+            </Stack>
+            <Box style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+              <FieldLabel>{t('metadata.wgDropIpv6')}</FieldLabel>
+              <Box style={{ flex: 1, minWidth: 0 }} />
+              <Switch
+                checked={draft.wgDropIpv6}
+                onChange={(e) => patch({ wgDropIpv6: e.currentTarget.checked })}
+              />
+            </Box>
+            <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: MIST }}>
+              {t('metadata.wgDropIpv6Hint')}
+            </Text>
+          </Stack>
         </Box>
       </Box>
     </Stack>
@@ -407,7 +447,21 @@ function toDraft(s: AdminSettings): Draft {
     announce: s.subscriptionAnnounceTemplate ?? '',
     preset: s.subscriptionRoutingPreset ?? 'proxy-all',
     tlsFragment: s.subscriptionTlsFragment ?? false,
+    wgDns: (s.subscriptionWgDns ?? []).join(', '),
+    wgDropIpv6: s.subscriptionWgDropIpv6 ?? false,
   };
+}
+
+/** A dotted quad or a colon-hex address; the server's check is the strict one. */
+function looksLikeIp(v: string): boolean {
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(v);
+  if (v4) return v4.slice(1).every((o) => Number(o) <= 255);
+  return v.includes(':') && /^[0-9a-f:.]+$/i.test(v);
+}
+
+/** The addresses typed in the DNS field, in order; blanks dropped. */
+function wgDnsList(text: string): string[] {
+  return text.split(/[\s,;]+/).filter(Boolean);
 }
 
 /* ───── Preview ─────────────────────────────────────────────────────────── */

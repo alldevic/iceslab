@@ -3,6 +3,7 @@ import type {
   SubscriptionEndpoint,
   AmneziawgSubscriptionEndpoint,
 } from '../subscription.formats.js';
+import { wgClientAllowedIps, wgClientDns, type WgClientOpts } from './wgconf.js';
 import { ofDevice, pickServer } from '../endpoint-identity.js';
 
 /**
@@ -20,6 +21,7 @@ export function buildAwgVpnLink(
   endpoints: SubscriptionEndpoint[],
   node?: string,
   device?: string,
+  opts?: Pick<WgClientOpts, 'dns' | 'dropIpv6'>,
 ): string {
   const awgEndpoints = endpoints.filter(
     (e): e is AmneziawgSubscriptionEndpoint => e.protocol === 'amneziawg',
@@ -27,7 +29,11 @@ export function buildAwgVpnLink(
   const awg = pickServer(ofDevice(awgEndpoints, device), node);
   if (!awg) return '';
 
+  const dns = wgClientDns(opts);
+  const clientAllowedIps = wgClientAllowedIps(opts, awg);
   return buildAmneziaVpnLink({
+    ...(dns ? { dns } : {}),
+    ...(clientAllowedIps ? { clientAllowedIps } : {}),
     privateKey: awg.privateKey,
     allowedIp: awg.allowedIp,
     serverPublicKey: awg.serverPublicKey,

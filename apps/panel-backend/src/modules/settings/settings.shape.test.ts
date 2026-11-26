@@ -61,6 +61,8 @@ const WRITABLE = [
   'subscriptionLinkShape',
   'subscriptionDeadTexts',
   'subscriptionPublicHost',
+  'subscriptionWgDns',
+  'subscriptionWgDropIpv6',
 ];
 
 describe('the settings response', () => {

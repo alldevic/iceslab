@@ -107,6 +107,8 @@ export interface SubscriptionPageData {
     device?: number;
     /** The wg-quick config this node hands out. */
     conf?: string;
+    /** The file name the `.conf` is served under (the tunnel name, 15 at most). */
+    file?: string;
     /** Raw AmneziaVPN vpn:// key. Also what the copy button hands over, since
      *  the dense key QR is unreliable on screen and paste-the-key is the
      *  robust import path. */
@@ -127,6 +129,8 @@ export interface SubscriptionPageData {
     device?: number;
     /** The wg-quick config this node hands out (no obfuscation directives). */
     conf?: string;
+    /** The file name the `.conf` is served under, as on awgNodes. */
+    file?: string;
   }>;
   /**
    * One entry per MTProto node, with its proxy link already built.
@@ -539,10 +543,10 @@ function renderSteps(
 
   if (platform === 'router') {
     const s = t.stepsRouter;
-    const confRow = (n: TunnelNode, prefix: string) =>
+    const confRow = (n: TunnelNode & { file?: string }, prefix: string) =>
       `<a class="conf-row" href="${esc(withQuery(data.subUrl, `format=wgconf&${tunnelQuery(n)}`))}">` +
       `<span class="conf-row__name">${esc(tunnelLabel(n))}</span>` +
-      `<span class="conf-row__file">${prefix}-${esc(tunnelLabel(n).replace(' #', '-'))}.conf</span></a>`;
+      `<span class="conf-row__file">${n.file ? esc(n.file) : `${prefix}-${esc(tunnelLabel(n).replace(' #', '-'))}.conf`}</span></a>`;
     const confs =
       (data.awgNodes ?? []).map((n) => confRow(n, 'awg')).join('') +
       (data.wgNodes ?? []).map((n) => confRow(n, 'wireguard')).join('');

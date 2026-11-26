@@ -4,6 +4,7 @@ import {
   type DefaultSubscriptionFormat,
   type RoutingPresetId,
 } from '@iceslab/shared';
+import { isIP } from 'node:net';
 import { prisma } from '../../prisma.js';
 import { getLogger } from '../../lib/infra/logger.js';
 
@@ -92,6 +93,11 @@ export interface SubscriptionSettings {
    * only make the panel advertise an address nothing answers on.
    */
   publicHost: string | null;
+  /** Resolvers for the `DNS =` line of wg configs and `dns1`/`dns2` of the
+   *  vpn:// key. Empty = no line, as the base always gave. */
+  wgDns: string[];
+  /** Take `::/0` out of `AllowedIPs` in every wg config. Off by default. */
+  wgDropIpv6: boolean;
 }
 
 // B5 - in-process cache for the subscription settings. `/sub/:token` is hit on
@@ -222,6 +228,13 @@ export async function getSubscriptionSettings(): Promise<SubscriptionSettings> {
     return Object.keys(out).length > 0 ? out : null;
   })();
 
+  // Only IP literals reach a `DNS =` line: a hand-edited row must not be able
+  // to put anything else into a config. At most four, empty = no line.
+  const wgDnsRaw = map.get('subscriptionWgDns');
+  const wgDns = Array.isArray(wgDnsRaw)
+    ? wgDnsRaw.filter((v): v is string => typeof v === 'string' && isIP(v) !== 0).slice(0, 4)
+    : [];
+
   const value: SubscriptionSettings = {
     profileTitle: asString('subscriptionProfileTitle'),
     updateIntervalHours: asInt('subscriptionUpdateIntervalHours', 24),
@@ -243,6 +256,9 @@ export async function getSubscriptionSettings(): Promise<SubscriptionSettings> {
     // value carrying one: `https://host` would concatenate into
     // `https://https://host`.
     publicHost: asString('subscriptionPublicHost')?.replace(/^https?:\/\//, '') ?? null,
+    wgDns,
+    // Only the literal boolean, like tlsFragment: garbage keeps `::/0`.
+    wgDropIpv6: map.get('subscriptionWgDropIpv6') === true,
   };
   settingsCache = { value, expiresAt: Date.now() + SETTINGS_CACHE_TTL_MS };
   return value;

@@ -14,7 +14,7 @@ import { parseProtocolsParam, protocolsOf, withProtocols } from './subscription.
 import * as service from './subscription.service.js';
 import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson } from './formats/singbox.js';
-import { buildWgQuickConf, pickWgconfEndpoint } from './formats/wgconf.js';
+import { buildWgQuickConf, wgconfTunnelName, type WgClientOpts } from './formats/wgconf.js';
 import { buildAwgVpnLink } from './formats/amneziavpn.js';
 import { buildXrayJson, buildXrayJsonArray } from './formats/xrayjson.js';
 import { buildOutlineJson, outlineAccessKey } from './formats/outline.js';
@@ -372,6 +372,21 @@ async function refusalPage(
   });
 }
 
+
+/**
+ * What the panel settings add to every wg config it hands out: the resolvers,
+ * the `::/0` switch and the brand the tunnel is named after (the title clients
+ * show, then the brand, as the page's own title). One read for the file, the
+ * vpn:// key and the page's codes, so they cannot disagree.
+ */
+async function wgClientOpts(): Promise<WgClientOpts & { brand: string }> {
+  const settings = await getSubscriptionSettings();
+  return {
+    dns: settings.wgDns,
+    dropIpv6: settings.wgDropIpv6,
+    brand: settings.profileTitle ?? settings.brandName ?? 'Iceslab',
+  };
+}
 
 // Strip characters Content-Disposition can't legally carry to keep
 // browsers happy across OSes. Username comes from admin-controlled
@@ -748,6 +763,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         // AmneziaWG app, vpn:// for the AmneziaVPN app) instead of only the first
         // node's, and each of their devices its own key. ecl 'L' keeps the long
         // payloads scannable.
+        const wgOpts = await wgClientOpts();
         const awgSeen = new Set<string>();
         const awgNodes = filtered
           .filter((e): e is AmneziawgSubscriptionEndpoint => e.protocol === 'amneziawg')
@@ -759,12 +775,13 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
             // By the endpoint's id, the key the per-node links carry (A-107).
             const id = endpointId(e);
             const device = e.deviceIndex ?? 1;
-            const conf = buildWgQuickConf(filtered, id, String(device));
-            const vpn = buildAwgVpnLink(filtered, id, String(device));
+            const conf = buildWgQuickConf(filtered, id, String(device), wgOpts);
+            const vpn = buildAwgVpnLink(filtered, id, String(device), wgOpts);
             return {
               nodeName: e.nodeName,
               id,
               device,
+              file: `${wgconfTunnelName(filtered, wgOpts.brand, id, String(device))}.conf`,
               // The PAYLOADS, not pictures of them. The codes are drawn in the
               // browser now: three server-rendered SVGs cost about 49 KB gzip
               // on this page, the encoder costs 4.3 KB once, and the code on
@@ -790,7 +807,13 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           .map((e) => {
             const id = endpointId(e);
             const device = e.deviceIndex ?? 1;
-            return { nodeName: e.nodeName, id, device, conf: buildWgQuickConf(filtered, id, String(device)) || undefined };
+            return {
+              nodeName: e.nodeName,
+              id,
+              device,
+              file: `${wgconfTunnelName(filtered, wgOpts.brand, id, String(device))}.conf`,
+              conf: buildWgQuickConf(filtered, id, String(device), wgOpts) || undefined,
+            };
           });
         /**
          * One row per MTProto node, with the link already built.
@@ -1086,20 +1109,22 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
             .send(buildSingboxJson(served, { bundle: sbBundle, routingPreset, ownPresetRules, frame }));
         }
         case 'wgconf': {
-          // Filename = `<username>-<node>.conf` so a user with several AWG
-          // servers can tell the downloaded files apart (the browser otherwise
-          // saves test.conf, test(1).conf, ...). The .conf suffix matters: the
-          // AmneziaWG / wg-quick / Hiddify file-pickers filter by *.conf, so an
-          // extensionless name fails the picker on Windows / macOS.
-          // 9.2: a plain WireGuard file says so, `<username>[-<node>]-wireguard.conf`;
-          // the AmneziaWG one keeps the name it always had.
-          const nodePart = nodeLabel ? `-${sanitizeFilename(nodeLabel)}` : '';
-          const kindPart = pickWgconfEndpoint(served, query.node, query.device)?.protocol === 'wireguard' ? '-wireguard' : '';
-          const fname = `${sanitizeFilename(result.json.user.username)}${nodePart}${kindPart}.conf`;
+          // The file name IS the tunnel name the client shows (wg-quick has no
+          // name field), so it is the brand's, at most 15 characters and the
+          // same string as the `# Name =` line inside (wgConfName), not the
+          // `<username>-<node>` it was before 9.8. Several servers and devices
+          // are told apart by the node, kind and device in that name. The .conf
+          // suffix matters: the AmneziaWG / wg-quick / WireGuard file-pickers
+          // filter by *.conf.
+          const wgOpts = await wgClientOpts();
+          const fname = `${wgconfTunnelName(served, wgOpts.brand, query.node, query.device)}.conf`;
           return reply
-            .type('text/plain; charset=utf-8')
+            // Not text/plain, though the body is text: Android takes the file's
+            // extension from the MIME type, finds none for `.conf` under
+            // text/plain and appends `.txt`, which the file pickers then hide.
+            .type('application/octet-stream')
             .header('Content-Disposition', `attachment; filename="${fname}"`)
-            .send(buildWgQuickConf(served, query.node, query.device));
+            .send(buildWgQuickConf(served, query.node, query.device, wgOpts));
         }
         case 'amneziavpn': {
           // AmneziaVPN-app "vpn://" connection key (base64 blob the flagship
@@ -1109,7 +1134,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // for this user (same 204-style contract as wgconf).
           return reply
             .type('text/plain; charset=utf-8')
-            .send(buildAwgVpnLink(served, query.node, query.device));
+            .send(buildAwgVpnLink(served, query.node, query.device, await wgClientOpts()));
         }
         case 'xrayjson': {
           const xjBundle: 'flat' | 'balancer' | undefined =

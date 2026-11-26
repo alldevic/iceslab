@@ -149,12 +149,15 @@ describe('?device= on wgconf', () => {
     const s = await subscriber();
     const one = await get(`/sub/${s.token}?format=wgconf&protocols=amneziawg`);
     const two = await get(`/sub/${s.token}?format=wgconf&protocols=amneziawg&device=2`);
-    expect(one.headers['content-disposition']).toContain('filename="alice.conf"');
-    expect(two.headers['content-disposition']).toContain('filename="alice-2.conf"');
+    const fname = (r: { headers: Record<string, unknown> }) =>
+      /filename="([^"]+)\.conf"/.exec(String(r.headers['content-disposition']))![1]!;
+    // 9.8: the brand's name (15 at most), the device after the kind.
+    expect(fname(one)).toMatch(/^[A-Za-z0-9._-]{1,15}-awg$/);
+    expect(fname(two)).toBe(`${fname(one)}-2`);
     // With a node: the device follows the node's name.
     const label = (JSON.parse((await get(`/sub/${s.token}?format=json&protocols=amneziawg`)).body).endpoints as { nodeName: string }[])[0]!.nodeName;
     const named = await get(`/sub/${s.token}?format=wgconf&protocols=amneziawg&device=3&node=${encodeURIComponent(label)}`);
-    expect(named.headers['content-disposition']).toMatch(/filename="alice-.+-3\.conf"/);
+    expect(named.headers['content-disposition']).toMatch(/filename="[A-Za-z0-9._-]{1,15}-awg-3\.conf"/);
   });
 });
 

@@ -374,6 +374,15 @@ export const common = {
     fragmentTitle: 'TLS fragment',
     fragmentHint:
       'Dials each server through a fragment outbound that chops the ClientHello into pieces, so SNI-based DPI cannot cleanly match it. Xray JSON format only.',
+    wgTitle: 'WireGuard configs',
+    wgDns: 'DNS servers',
+    wgDnsPlaceholder: '1.1.1.1, 9.9.9.9',
+    wgDnsHint:
+      'IP addresses, separated by commas or spaces (up to 4). Written as the DNS line of WireGuard and AmneziaWG configs and into the AmneziaVPN key (the first two). Empty: no DNS line, the client keeps its own resolver.',
+    wgDnsInvalid: 'Not an IP address: {{value}}',
+    wgDropIpv6: 'Leave IPv6 out of the tunnel',
+    wgDropIpv6Hint:
+      'Removes ::/0 from AllowedIPs in every WireGuard and AmneziaWG config. Turn it on when the tunnel carries no IPv6: otherwise the client keeps sending IPv6 into a tunnel that cannot take it, and with this on its IPv6 goes outside the tunnel. Off: ::/0 stays, as before.',
   },
   // One label per subscription format name, ONE for the whole panel: the host
   // screen, the "default format" setting and the delivery rule all read it.

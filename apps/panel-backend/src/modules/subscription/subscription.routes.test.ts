@@ -370,7 +370,11 @@ describe('GET /sub/:token - multi-format (slice 21)', () => {
       url: `/sub/${user.subscriptionToken}?format=wgconf`,
     });
     expect(res.statusCode).toBe(200);
-    expect(res.headers['content-type']).toContain('text/plain');
+    // 9.8, the one deliberate change of a base assertion: was text/plain.
+    // Android derives the saved file's extension from the type and, for
+    // text/plain, appends `.txt` to `.conf`.
+    expect(res.headers['content-type']).toBe('application/octet-stream');
+    expect(res.headers['content-disposition']).toMatch(/^attachment; filename="[A-Za-z0-9._-]+\.conf"$/);
     expect(res.body).toBe('');
   });
 
