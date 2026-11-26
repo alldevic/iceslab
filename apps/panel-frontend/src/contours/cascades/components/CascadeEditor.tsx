@@ -1,7 +1,7 @@
 import { Fragment, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Box, SegmentedControl, Select, Stack, Switch, Text, UnstyledButton } from '@mantine/core';
+import { Box, SegmentedControl, Select, Stack, Switch, Text, TextInput, UnstyledButton } from '@mantine/core';
 import { Link } from 'react-router-dom';
 import type { CascadeProtocol } from '@/lib/domain/cascades';
 import type { Node } from '@/lib/domain/nodes';
@@ -1579,6 +1579,50 @@ export function FieldLabel({
       </Text>
       {required && <Text style={{ fontFamily: MONO, fontSize: 10, lineHeight: '12px', color: RED }}>*</Text>}
     </Box>
+  );
+}
+
+/**
+ * The pinned name of a line, as a client shows it (11.3). Empty means derived:
+ * the placeholder is the name that would go out, from the same function the
+ * server uses. `warnOnDivergence` is for Auto, where the pinned name drifting
+ * from the derived one is the usual sign the cascade was renamed.
+ */
+export function LineLabelField({
+  value,
+  derived,
+  onChange,
+  warnOnDivergence = false,
+}: {
+  value: string;
+  derived: string;
+  onChange: (v: string) => void;
+  warnOnDivergence?: boolean;
+}) {
+  const { t } = useTranslation();
+  const pinned = value.trim();
+  return (
+    <Stack gap={4}>
+      <Box style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <FieldLabel>{t('cascadeEdit.lineLabel')}</FieldLabel>
+        <Box style={{ width: 300, maxWidth: '100%' }}>
+          <TextInput
+            size="xs"
+            value={value}
+            maxLength={64}
+            placeholder={derived}
+            aria-label={t('cascadeEdit.lineLabel')}
+            onChange={(e) => onChange(e.currentTarget.value)}
+          />
+        </Box>
+        <Hint>{pinned ? t('cascadeEdit.lineLabelPinned') : t('cascadeEdit.lineLabelDerived', { name: derived })}</Hint>
+      </Box>
+      {warnOnDivergence && pinned && pinned !== derived && (
+        <Note tone={AMBER} icon={<WarnIcon size={13} color={AMBER} />}>
+          {t('cascadeEdit.autoLabelDiverges', { pinned, derived })}
+        </Note>
+      )}
+    </Stack>
   );
 }
 

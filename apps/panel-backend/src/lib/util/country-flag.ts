@@ -1,3 +1,5 @@
+import { countryFlagEmoji, derivedAutoLineLabel, derivedDirectionLineLabel } from '@iceslab/shared';
+
 /**
  * ISO 3166-1 alpha-2 country code to its flag emoji.
  *
@@ -8,19 +10,10 @@
  * Used in the server names a client displays. The panel's own "what people see"
  * preview has always shown the flag; until 2026-07-30 the subscription itself
  * did not, so the preview and the client disagreed.
+ *
+ * The formula lives in shared: the panel's editor derives the same names.
  */
-const REGIONAL_INDICATOR_A = 0x1f1e6;
-const LETTER_A = 'A'.charCodeAt(0);
-
-export function countryFlag(code: string | null | undefined): string {
-  if (!code) return '';
-  const upper = code.trim().toUpperCase();
-  if (!/^[A-Z]{2}$/.test(upper)) return '';
-  return String.fromCodePoint(
-    REGIONAL_INDICATOR_A + (upper.charCodeAt(0) - LETTER_A),
-    REGIONAL_INDICATOR_A + (upper.charCodeAt(1) - LETTER_A),
-  );
-}
+export const countryFlag = countryFlagEmoji;
 
 /**
  * The line a user reads in their client.
@@ -67,7 +60,7 @@ export function subscriptionServerName(opts: {
  * clients themselves use for this, in every locale.
  */
 export function cascadeAutoProfileLabel(cascadeName: string): string {
-  return `⚡ ${cascadeName} → Auto`;
+  return derivedAutoLineLabel(cascadeName);
 }
 
 export function cascadeProfileLabel(
@@ -75,11 +68,5 @@ export function cascadeProfileLabel(
   exitCountryCode: string | null | undefined,
   exitNodeName: string,
 ): string {
-  const flag = countryFlag(exitCountryCode);
-  // An arrow, not a separator dot. The first half is the cascade's NAME, which
-  // an operator usually takes from where the traffic ENTERS, and the second is
-  // where it leaves. Written as "ru · NL" that reads as "ru via NL", i.e.
-  // backwards, and it was read that way the first time an operator saw it.
-  if (!flag) return `${cascadeName} → ${exitNodeName}`;
-  return `${flag} ${cascadeName} → ${exitCountryCode!.toUpperCase()}`;
+  return derivedDirectionLineLabel(cascadeName, exitCountryCode, exitNodeName);
 }

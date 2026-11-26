@@ -67,6 +67,8 @@ export interface IncomingDirection {
   /** Phase 10: the named outbound in place of a pool. */
   outboundId?: string | null;
   countryCode?: string | null;
+  /** 11.3: the pinned name of the line; absent leaves it, null clears it. */
+  label?: string | null;
   linkProtocol?: string | null;
   linkParams?: LegParams | null;
 }
@@ -80,6 +82,7 @@ export interface ResolvedDirection {
   nodeIds: string[];
   outboundId?: string | null;
   countryCode?: string | null;
+  label?: string | null;
   linkProtocol?: string | null;
   linkParams?: LegParams | null;
 }
@@ -181,6 +184,9 @@ export function resolveDirections<S extends StoredDirection>(
       // as both (DIRECTION_OUTBOUND_AND_NODES) rather than guessed at.
       outboundId: 'outboundId' in d ? (d.outboundId ?? null) : (kept.outboundId ?? null),
       countryCode: 'countryCode' in d ? d.countryCode : kept.countryCode,
+      // The same rule, and the one that matters most here: a caller that never
+      // heard of the pinned name must not un-pin it by omission.
+      label: 'label' in d ? d.label : kept.label,
       linkProtocol: 'linkProtocol' in d ? d.linkProtocol : kept.linkProtocol,
       linkParams: 'linkParams' in d ? d.linkParams : kept.linkParams,
     };

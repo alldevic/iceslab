@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { LINK_CELLS, LINK_CONGESTIONS, LINK_UNDERLAYS } from '@iceslab/shared';
+import { LINE_LABEL_MAX_LENGTH, LINK_CELLS, LINK_CONGESTIONS, LINK_UNDERLAYS } from '@iceslab/shared';
 
 // Max hops in a single cascade. Each hop adds latency + an inter-hop link
 // (UFW port LINK_PORT_BASE+i), so the chain is capped. Enforced at the schema
@@ -181,6 +181,15 @@ export const CascadeDirectionSchema = z.object({
   tag: z.number().int().optional(),
   countryCode: z.string().length(2).nullish(),
   /**
+   * The name this direction's line carries in the subscriber's client (11.3).
+   * Absent leaves the pinned name alone; null or an empty string clears it and
+   * the name is derived again (`<flag> <cascade name> → <CC>`); a string pins
+   * it. Pinning is how a rename the operator makes for their own reasons stays
+   * out of the subscribers' clients: a renamed line is not renamed there, it is
+   * a second server beside the old one.
+   */
+  label: z.string().max(LINE_LABEL_MAX_LENGTH).nullish(),
+  /**
    * Empty only beside an `outboundId` (phase 10): a direction with neither a
    * pool nor an outbound is refused, DIRECTION_EMPTY (ARCH 26.09). It used to
    * be allowed as "the tag exists, the node does not yet".
@@ -240,6 +249,9 @@ const CascadeBaseFields = {
   /** Offer the Auto line: one profile that names no direction and lets the
    *  entry pick the fastest exit. Off by default, see the schema comment. */
   autoProfile: z.boolean().default(false),
+  /** The pinned name of the Auto line, same three values as a direction's
+   *  `label`: absent leaves it, null or empty clears it, a string pins it. */
+  autoLabel: z.string().max(LINE_LABEL_MAX_LENGTH).nullish(),
   /** Phase 9.3: the route policy for the entry's users who cannot pick one.
    *  Absent = none on create; on update absent = no edit, null = clear. */
   entryPolicyId: z.uuid().nullable().optional(),
@@ -275,6 +287,7 @@ export const UpdateCascadeSchema = z
     mode: CascadeMode.optional(),
     hideHopsFromSub: z.boolean().optional(),
     autoProfile: z.boolean().optional(),
+    autoLabel: z.string().max(LINE_LABEL_MAX_LENGTH).nullish(),
     // No default: absent is no edit, null clears (the three-value rule).
     entryPolicyId: z.uuid().nullable().optional(),
     hops: z.array(CascadeHopSchema).min(2).max(MAX_CASCADE_HOPS).optional(),

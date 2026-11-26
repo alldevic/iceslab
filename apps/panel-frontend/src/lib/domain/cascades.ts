@@ -109,6 +109,12 @@ export interface CascadeDirection {
   id: string;
   tag: number;
   countryCode: string;
+  /** Закреплённое оператором имя линии (11.3), `null` = вычисляется. `undefined`
+   *  у сервера старше поля (CASCADE_DTO_FIELDS `directions[].label`). */
+  label?: string | null;
+  /** Что клиент подписчика показывает для этой линии: закреплённое или
+   *  вычисленное имя, как его отдаёт подписка. */
+  lineLabel?: string;
   /** Пусто ровно тогда, когда направление стоит на именованном выходе (фаза
    *  10, d28cc14). Старая строка без нод и без выхода не обслуживается. */
   nodeIds: string[];
@@ -137,6 +143,14 @@ export interface CascadeDirection {
   linkPort?: number | null;
 }
 
+/** Одна переименованная линия: её тег (у Auto это 65535) и два имени, которые
+ *  клиент подписчика теперь держит рядом. */
+export interface CascadeLineRename {
+  tag: number;
+  before: string;
+  after: string;
+}
+
 export interface Cascade {
   id: string;
   name: string;
@@ -147,6 +161,13 @@ export interface Cascade {
   /** Offer the Auto line: one profile that names no direction and lets the
    *  entry pick the fastest exit by measured RTT. */
   autoProfile: boolean;
+  /** Закреплённое имя линии Auto (11.3), `null` = вычисляется, `undefined` у
+   *  сервера старше поля. */
+  autoLabel?: string | null;
+  /** Имя линии Auto в клиенте подписчика, закреплённое или вычисленное. */
+  autoLineLabel?: string;
+  /** Только в ответе на сохранение: линии, сменившие имя для подписчиков. */
+  lineRenames?: CascadeLineRename[];
   hops: CascadeHop[];
   /** v4 shape (2026-08-04). Always present; EMPTY means the cascade predates
    *  the move and is still described by `hops`. */
@@ -241,6 +262,9 @@ export interface CascadeDirectionInput {
   id?: string;
   countryCode: string;
   nodeIds: string[];
+  /** Закреплённое имя линии (11.3). Нет ключа: не трогать; пустая строка или
+   *  `null`: снять закрепление; строка: закрепить. */
+  label?: string | null;
   /**
    * Нога направления. Отправляются ТОЛЬКО если оператор их правил.
    *
@@ -263,6 +287,8 @@ export interface CreateCascadeV4Input {
   enabled?: boolean;
   hideHopsFromSub?: boolean;
   autoProfile?: boolean;
+  /** Закреплённое имя линии Auto, те же три значения, что у `label`. */
+  autoLabel?: string | null;
   positions: CascadePositionInput[];
   directions: CascadeDirectionInput[];
   /**

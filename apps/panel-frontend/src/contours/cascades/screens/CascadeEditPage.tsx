@@ -59,6 +59,7 @@ import {
   DirectionLegRow,
   DirectionNotes,
   DirectionRow,
+  LineLabelField,
   EntryBystandersNote,
   EntryChainNote,
   EntryPolicyRow,
@@ -124,6 +125,10 @@ import {
   statusTone,
   toDirectionInputs,
   toPositionInputs,
+  autoLabelInput,
+  autoLineName,
+  directionLineName,
+  labelDraft,
   movePosition,
   removePosition,
   appendPosition,
@@ -356,6 +361,7 @@ export function CascadeEditPage() {
             enabled: draft.enabled,
             hideHopsFromSub: draft.hideHops,
             autoProfile: draft.autoProfile,
+            ...autoLabelInput(draft.autoLabel),
             positions: toPositionInputs(draft.pools),
             directions: toDirectionInputs(draft.directions),
             // Политика входа только при правке: отсутствие ключа у сервера
@@ -373,6 +379,25 @@ export function CascadeEditPage() {
       // Re-seed from what came back, so the bar stops claiming unsaved changes.
       setDraft(toDraft(saved, nodeById, entryPolicyKnown));
       watchCascadeProvisioning(id, t);
+      // Переименование не отменить ничем, кроме ручной чистки у подписчиков, и
+      // узнать о нём больше неоткуда: уведомление не закрывается само.
+      if (saved.lineRenames?.length) {
+        notifications.show({
+          color: 'yellow',
+          title: t('cascadeEdit.lineRenamesTitle'),
+          autoClose: false,
+          message: (
+            <Stack gap={4}>
+              <Text size="sm">{t('cascadeEdit.lineRenamesBody')}</Text>
+              {saved.lineRenames.map((r) => (
+                <Text key={r.tag} size="sm" style={{ fontFamily: MONO }}>
+                  {r.before} → {r.after}
+                </Text>
+              ))}
+            </Stack>
+          ),
+        });
+      }
     },
     onError: (err, confirmed) => {
       // A cascade write commits fast and provisions asynchronously, so a slow or
@@ -827,6 +852,14 @@ export function CascadeEditPage() {
                   : t('cascadeEdit.autoProfileHint')
               }
             />
+            {autoProfile && draft.autoLabel !== undefined && (
+              <LineLabelField
+                value={draft.autoLabel}
+                derived={autoLineName(name.trim(), undefined)}
+                onChange={(v) => patch({ autoLabel: v })}
+                warnOnDivergence
+              />
+            )}
           </SectionCard>
 
           <Stack
@@ -1083,6 +1116,17 @@ export function CascadeEditPage() {
                   }
                 />
                 <DirectionNotes lines={directionLines(directions, i, dirRefusal, t)} />
+                {dir.label !== undefined && (
+                  <LineLabelField
+                    value={dir.label}
+                    derived={directionLineName(
+                      name.trim(),
+                      { countryCode: dir.countryCode },
+                      nodeById.get(dir.nodeIds.find(Boolean) ?? '')?.name ?? '',
+                    )}
+                    onChange={(v) => setDirection(i, { label: v })}
+                  />
+                )}
                 {/* Нога ДО ЭТОГО выхода. До фазы 5 сервер полей не отдаёт, и
                     строка это показывает: ячейка входа, порт назначит сервер,
                     селектор заблокирован. У направления на выходе ноги нет:
@@ -1517,6 +1561,9 @@ interface Draft {
   /** Offer the Auto line in the subscription: the entry picks the fastest
    *  direction instead of the subscriber picking a country. */
   autoProfile: boolean;
+  /** Закреплённое имя линии Auto (11.3): пусто = вычисляется, `undefined` =
+   *  сервер поля не отдаёт и в запрос оно не идёт. */
+  autoLabel?: string;
   /** The entry and any transits. The exit is `directions`. */
   pools: PositionDraft[];
   directions: DirectionDraft[];
@@ -1568,6 +1615,7 @@ function toDraft(c: Cascade, byId: Map<string, Node>, entryPolicyKnown: boolean)
       enabled: c.enabled,
       hideHops: c.hideHopsFromSub ?? true,
       autoProfile: c.autoProfile ?? false,
+      autoLabel: labelDraft(c.autoLabel),
       pools: [...c.positions]
         .sort((a, b) => a.position - b.position)
         .map((p) => ({
@@ -1588,6 +1636,7 @@ function toDraft(c: Cascade, byId: Map<string, Node>, entryPolicyKnown: boolean)
         // the tag exists and waits for a node to stand behind it.
         nodeIds: d.nodeIds.length ? [...d.nodeIds] : [''],
         tag: d.tag,
+        label: labelDraft(d.label),
         // Три значения контракта переносятся В ТОМ ЖЕ ВИДЕ: `undefined` это
         // «сервер поля не отдаёт» (фаза 5 не доехала), `null` это «ячейка не
         // выбрана». Приведение одного к другому здесь стоило бы либо
@@ -1734,7 +1783,7 @@ function subscriptionRows(
   const served = (x: DirectionDraft) => !directionEmpty(x);
   if (d.autoProfile && d.directions.filter(served).length > 1) {
     rows.push({
-      label: t('cascadeEdit.subAuto', { name: d.name }),
+      label: autoLineName(d.name, d.autoLabel),
       note: t('cascadeEdit.subTag', { tag: 'ffff' }),
       tone: MOSS,
     });
@@ -1742,7 +1791,7 @@ function subscriptionRows(
   d.directions.forEach((dir, i) => {
     if (!dir.countryCode || !served(dir)) return;
     rows.push({
-      label: t('cascadeEdit.subVia', { name: d.name, where: dir.countryCode }),
+      label: directionLineName(d.name, dir, byId.get(dir.nodeIds.find(Boolean) ?? '')?.name ?? ''),
       note: t('cascadeEdit.subTag', {
         tag: (dir.tag ?? nextFreeTag(d.directions, i, d.nextTag)).toString(16).padStart(4, '0'),
       }),

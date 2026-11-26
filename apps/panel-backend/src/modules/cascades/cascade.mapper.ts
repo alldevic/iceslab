@@ -1,4 +1,5 @@
 import { storedLinkParams } from './direction-merge.js';
+import { autoLineName, directionLineName } from './cascade.line-label.js';
 import { legUnderlay, linkInListen, tunnelAddresses, tunnelIface } from './cascade-tunnel.js';
 
 /**
@@ -76,6 +77,15 @@ export interface CascadeDirectionDto {
    *  accepted as input, only reported. */
   tag: number;
   countryCode: string | null;
+  /** The name the operator pinned for this line, or null while it is derived
+   *  from the cascade's name and the exit's country (11.3). A derived name
+   *  moves when the cascade is renamed; a client that identifies a server by
+   *  name answers that by keeping BOTH lines. */
+  label: string | null;
+  /** What a subscriber's client shows for this line, pinned or derived: the
+   *  string the panel shows the operator, so it is never derived a second time
+   *  on the screen and got slightly different. */
+  lineLabel: string;
   /** Empty exactly when the direction stands on a named outbound (phase 10).
    *  A stored row written before that may still be empty and is not served. */
   nodeIds: string[];
@@ -120,10 +130,14 @@ export interface CascadeDirectionDto {
  */
 export const CASCADE_DTO_FIELDS = [
   'autoProfile',
+  'autoLabel',
+  'autoLineLabel',
   'entryPolicy',
   'nextDirectionTag',
   'tunnels',
   'positions[].linkParams',
+  'directions[].label',
+  'directions[].lineLabel',
   'directions[].linkProtocol',
   'directions[].linkParams',
   'directions[].linkPort',
@@ -141,6 +155,10 @@ export interface CascadeDto {
   /** Offer the Auto line in the subscription: one profile that names no
    *  direction and lets the entry pick the fastest exit by measured RTT. */
   autoProfile: boolean;
+  /** The pinned name of the Auto line, or null while it is derived (11.3). */
+  autoLabel: string | null;
+  /** What a subscriber's client shows for the Auto line, pinned or derived. */
+  autoLineLabel: string;
   /**
    * Phase 9.3: the route policy the entry's users who cannot pick one get
    * (hysteria, and AmneziaWG once its entry lands); xray users keep choosing
@@ -165,6 +183,25 @@ export interface CascadeDto {
   updatedAt: string;
 }
 
+/** One renamed line: the tag that identifies it (the Auto tag for Auto) and the
+ *  two names a subscriber's client will now hold side by side. */
+export interface CascadeLineRename {
+  tag: number;
+  before: string;
+  after: string;
+}
+
+/**
+ * The answer to a cascade SAVE: the cascade, and the lines the save renamed.
+ *
+ * Not a field of the DTO, which every read renders: `lineRenames` exists only
+ * on the response of an update. Empty when nothing was renamed. A client that
+ * identifies a server by name answers a rename by ADDING the new line and
+ * keeping the old one, which no longer routes; it is reported, not refused,
+ * because renaming is sometimes exactly what is meant.
+ */
+export type CascadeSaveResult = CascadeDto & { lineRenames: CascadeLineRename[] };
+
 interface CascadeRow {
   id: string;
   name: string;
@@ -174,6 +211,7 @@ interface CascadeRow {
   /** Optional so a caller selecting a narrow row shape still type-checks; a
    *  missing value reads as off, which is the default. */
   autoProfile?: boolean;
+  autoLabel?: string | null;
   /** Optional on the ROW like `autoProfile`; absent reads as none. */
   entryPolicy?: { id: string; name: string; ordinal: number } | null;
   nextDirectionTag?: number;
@@ -200,6 +238,7 @@ interface CascadeRow {
     id: string;
     tag: number;
     countryCode: string | null;
+    label?: string | null;
     /** Optional on the ROW for the same reason as `autoProfile`: a caller that
      *  selects a narrow shape still type-checks. The DTO keys stay mandatory. */
     linkProtocol?: string | null;
@@ -207,7 +246,10 @@ interface CascadeRow {
     linkParams?: unknown;
     linkPort?: number | null;
     outboundId?: string | null;
-    nodes: { nodeId: string }[];
+    /** Present where the caller included them; without, `lineLabel` falls back
+     *  to the pinned name or the country alone. */
+    nodes: { nodeId: string; node?: { name: string; countryCode: string | null } }[];
+    outbound?: { name: string; countryCode: string | null } | null;
   }[];
   /** Phase 8. Optional on the ROW so a narrow select still type-checks. */
   tunnels?: { fromNodeId: string; toNodeId: string; index: number; port: number }[];
@@ -268,6 +310,8 @@ export function mapCascade(c: CascadeRow): CascadeDto {
     mode: c.mode,
     hideHopsFromSub: c.hideHopsFromSub,
     autoProfile: c.autoProfile ?? false,
+    autoLabel: c.autoLabel ?? null,
+    autoLineLabel: autoLineName({ name: c.name, autoLabel: c.autoLabel }),
     entryPolicy: c.entryPolicy ?? null,
     hops: c.hops.map((h) => ({
       id: h.id,
@@ -294,6 +338,13 @@ export function mapCascade(c: CascadeRow): CascadeDto {
         id: d.id,
         tag: d.tag,
         countryCode: d.countryCode,
+        label: d.label ?? null,
+        lineLabel: directionLineName(c.name, {
+          label: d.label,
+          countryCode: d.countryCode,
+          nodes: d.nodes,
+          outbound: d.outbound,
+        }),
         nodeIds: d.nodes.map((n) => n.nodeId),
         outboundId: d.outboundId ?? null,
         // `?? null` and not `?.`: a row selected without these columns must

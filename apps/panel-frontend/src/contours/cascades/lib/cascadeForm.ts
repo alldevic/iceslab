@@ -1,4 +1,4 @@
-import { CHAIN_ENTRY_PROTOCOLS as SHARED_CHAIN_ENTRY_PROTOCOLS, MAX_CASCADE_HOPS, MAX_CASCADE_LINKS, SINGBOX_ENTRY_PROTOCOLS, type XraySubprotocol } from '@iceslab/shared';
+import { CHAIN_ENTRY_PROTOCOLS as SHARED_CHAIN_ENTRY_PROTOCOLS, derivedAutoLineLabel, derivedDirectionLineLabel, MAX_CASCADE_HOPS, MAX_CASCADE_LINKS, normaliseLineLabel, SINGBOX_ENTRY_PROTOCOLS, type XraySubprotocol } from '@iceslab/shared';
 import type { CascadeDirectionInput, CascadeProtocol } from '@/lib/domain/cascades';
 import { linkCellPair, nativeEngineOfIntent, type EnginePair, type EngineName } from '@/lib/domain/engines';
 import { DEFAULT_LINK_CONGESTION, DEFAULT_LINK_UNDERLAY, LINK_CONGESTIONS } from '@/lib/domain/cascades';
@@ -367,6 +367,12 @@ export interface DirectionDraft {
   /** Issued by the backend on first save, and never reused. Null while drafting. */
   tag: number | null;
   /**
+   * Закреплённое имя линии (11.3), как его печатает оператор. Пустая строка
+   * значит «не закреплено». `undefined` значит «сервер поля не отдаёт»: ключ в
+   * запрос не попадает, и закрепление, которого экран не видел, не трогается.
+   */
+  label?: string;
+  /**
    * Нога направления, фаза 5. Три значения, как в контракте: `undefined` это
    * «сервер поля не отдаёт», `null` это «ячейка не выбрана, идём ячейкой
    * входа».
@@ -505,6 +511,45 @@ export function toPositionInputs(pools: PositionDraft[]) {
 }
 
 /**
+ * Закреплённое имя линии из формы в запрос (11.3). Поля нет в черновике, когда
+ * сервер его не отдаёт: тогда и в запросе его нет, и закрепление не трогается.
+ * Пустое поле уходит пустой строкой, а не пропуском: это и есть «снять
+ * закрепление», пропуск у сервера значит «не трогать».
+ */
+export function labelInput(label: string | undefined): { label?: string } {
+  return label === undefined ? {} : { label: label.trim() };
+}
+
+/** То же для имени линии Auto: ключ `autoLabel`. */
+export function autoLabelInput(label: string | undefined): { autoLabel?: string } {
+  return label === undefined ? {} : { autoLabel: label.trim() };
+}
+
+/** Закреплённое имя из ответа сервера в поле формы: `null` это пустое поле,
+ *  `undefined` (сервер поля не знает) остаётся `undefined`. */
+export function labelDraft(stored: string | null | undefined): string | undefined {
+  return stored === undefined ? undefined : (stored ?? '');
+}
+
+/**
+ * Имя линии направления, которое клиент подписчика покажет прямо сейчас: то,
+ * что закреплено, иначе вычисленное. Та же формула, что на сервере (она в
+ * `packages/shared`), поэтому подсказка в редакторе не расходится с выдачей.
+ */
+export function directionLineName(
+  cascadeName: string,
+  d: { label?: string; countryCode: string },
+  exitName: string,
+): string {
+  return normaliseLineLabel(d.label) ?? derivedDirectionLineLabel(cascadeName, d.countryCode, exitName);
+}
+
+/** Имя линии Auto: закреплённое или вычисленное. */
+export function autoLineName(cascadeName: string, autoLabel: string | undefined): string {
+  return normaliseLineLabel(autoLabel) ?? derivedAutoLineLabel(cascadeName);
+}
+
+/**
  * ⚠ The `id` is the whole point of this function. A direction that goes back
  * without one is a NEW direction to the API: it gets a fresh tag, and every
  * client whose UUID carries the old tag quietly starts leaving through another
@@ -523,6 +568,7 @@ export function toDirectionInputs(directions: DirectionDraft[]): CascadeDirectio
       return {
         ...(d.id ? { id: d.id } : {}),
         countryCode: d.countryCode,
+        ...labelInput(d.label),
         nodeIds: [],
         outboundId: d.outboundId ?? null,
       };
@@ -535,6 +581,7 @@ function poolDirectionInput(d: DirectionDraft): CascadeDirectionInput {
   return {
     ...(d.id ? { id: d.id } : {}),
     countryCode: d.countryCode,
+    ...labelInput(d.label),
     nodeIds: d.nodeIds.filter(Boolean),
     // Переведено с выхода на пул: `outboundId: null` рядом с пулом, иначе
     // сервер оставит выход и откажет «оба сразу».

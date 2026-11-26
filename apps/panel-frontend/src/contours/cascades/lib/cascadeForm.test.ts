@@ -16,6 +16,10 @@ import {
   entryChainFacts,
   entryNoteKind,
   toDirectionInputs,
+  autoLabelInput,
+  autoLineName,
+  directionLineName,
+  labelDraft,
   lastAttemptFacts,
   legCellNotes,
   legFacts,
@@ -1358,5 +1362,57 @@ describe('A-140: позиция, сменившая номер, шлёт сво�
   it('за край не двигает', () => {
     const pools = [entry, a];
     expect(movePosition(pools, 1, 1)).toBe(pools);
+  });
+});
+describe('11.3: закреплённые имена линий, ответ сервера → форма → запрос', () => {
+  const stored = { id: 'd1', tag: 1, countryCode: 'NL', nodeIds: ['n1'], label: 'Нидерланды' };
+  const draftOf = (d: { id: string; tag: number; countryCode: string; nodeIds: string[]; label?: string | null }) => ({
+    key: 0,
+    id: d.id,
+    tag: d.tag,
+    countryCode: d.countryCode,
+    nodeIds: d.nodeIds,
+    label: labelDraft(d.label),
+  });
+
+  it('закреплённое имя возвращается в запросе тем же, что пришло', () => {
+    expect(toDirectionInputs([draftOf(stored)])[0]).toMatchObject({ id: 'd1', label: 'Нидерланды' });
+    expect(autoLabelInput(labelDraft('Fastest'))).toEqual({ autoLabel: 'Fastest' });
+  });
+
+  it('пустое поле уходит пустой строкой, то есть снимает закрепление, а не молчит', () => {
+    const cleared = toDirectionInputs([{ ...draftOf(stored), label: '   ' }])[0]!;
+    expect(cleared.label).toBe('');
+    expect('label' in cleared).toBe(true);
+    expect(autoLabelInput('')).toEqual({ autoLabel: '' });
+  });
+
+  it('направление без закрепления читается пустым полем и уходит пустой строкой', () => {
+    expect(labelDraft(null)).toBe('');
+    expect(toDirectionInputs([draftOf({ ...stored, label: null })])[0]!.label).toBe('');
+  });
+
+  it('сервер, не знающий поля, ключа в запрос не пускает: чужое закрепление не трогается', () => {
+    const old = { id: 'd1', tag: 1, countryCode: 'NL', nodeIds: ['n1'] };
+    const d = toDirectionInputs([draftOf(old)])[0]!;
+    expect('label' in d).toBe(false);
+    expect(labelDraft(undefined)).toBeUndefined();
+    expect(autoLabelInput(undefined)).toEqual({});
+  });
+
+  it('у направления на выходе имя тоже уходит', () => {
+    const d = toDirectionInputs([
+      { ...draftOf(stored), nodeIds: [''], via: 'outbound', outboundId: 'o1' },
+    ])[0]!;
+    expect(d).toMatchObject({ label: 'Нидерланды', outboundId: 'o1', nodeIds: [] });
+  });
+
+  it('подсказка редактора совпадает с именем, которое отдаёт сервер', () => {
+    // Те же строки, что в cascade.line-identity.test.ts на бэкенде.
+    expect(directionLineName('ru', { countryCode: 'NL' }, 'nl-01')).toBe('🇳🇱 ru → NL');
+    expect(directionLineName('ru', { countryCode: '' }, 'de-01')).toBe('ru → de-01');
+    expect(directionLineName('ru', { countryCode: 'NL', label: ' Pinned ' }, 'nl-01')).toBe('Pinned');
+    expect(autoLineName('ru', undefined)).toBe('⚡ ru → Auto');
+    expect(autoLineName('ru', 'Fastest')).toBe('Fastest');
   });
 });

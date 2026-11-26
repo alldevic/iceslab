@@ -11,8 +11,10 @@ import {
   type NodeCores,
   type Transport,
   type XrayCascadeFragments,
+  normaliseLineLabel,
 } from '@iceslab/shared';
-import { cascadeAutoProfileLabel, cascadeProfileLabel } from '../../lib/util/country-flag.js';
+import { cascadeProfileLabel } from '../../lib/util/country-flag.js';
+import { autoLineName, directionLineName } from './cascade.line-label.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { xrayGeoEntry } from '../geo-sets/geo-refs.js';
@@ -72,7 +74,7 @@ import type {
   UpdateCascadeInput,
 } from './cascade.schemas.js';
 import { MAX_DIRECTION_TAG } from './cascade.schemas.js';
-import { mapCascade, type CascadeDto } from './cascade.mapper.js';
+import { mapCascade, type CascadeDto, type CascadeLineRename, type CascadeSaveResult } from './cascade.mapper.js';
 import {
   renderChainConfig,
   type ChainForeignOut,
@@ -869,7 +871,13 @@ const hopInclude = {
   },
   directions: {
     orderBy: { tag: 'asc' as const },
-    include: { nodes: { select: { nodeId: true } } },
+    // The exit's name and country, and the outbound's, come along because the
+    // line a subscriber reads falls back to them (11.3): the mapper reports
+    // that string as `lineLabel` rather than making the panel derive it again.
+    include: {
+      nodes: { select: { nodeId: true, node: { select: { name: true, countryCode: true } } } },
+      outbound: { select: { name: true, countryCode: true } },
+    },
   },
   // Phase 8: the tunnels and the legs they carry, for the DTO's tunnel list and
   // its open-port answer. Narrow selects: no credential leaves the table here.
@@ -1105,10 +1113,12 @@ export async function getHysteriaEntryLabels(
     select: {
       id: true,
       name: true,
+      autoLabel: true,
       positions: { where: { position: 0 }, select: { nodes: { select: { nodeId: true } } } },
       directions: {
         orderBy: { tag: 'asc' },
         select: {
+          label: true,
           countryCode: true,
           nodes: { select: { node: { select: { name: true, countryCode: true } } } },
           outbound: { select: { name: true, countryCode: true } },
@@ -1132,9 +1142,9 @@ export async function getHysteriaEntryLabels(
     if (usable.length === 0) continue;
     let label: string;
     if (usable.length === 1) {
-      label = directionProfileLabel(c.name, usable[0]!);
+      label = directionLineName(c.name, usable[0]!);
     } else {
-      label = cascadeAutoProfileLabel(c.name);
+      label = autoLineName(c);
     }
     for (const n of c.positions[0]?.nodes ?? []) {
       if (!nodeIds.includes(n.nodeId) || out.has(n.nodeId)) continue;
@@ -1152,26 +1162,6 @@ export async function getHysteriaEntryLabels(
  */
 function directionServes(d: { nodes: unknown[]; outbound?: unknown }): boolean {
   return d.nodes.length > 0 || !!d.outbound;
-}
-
-/**
- * The subscription line of one direction, as a COUNTRY to leave from.
- *
- * The flag is the direction's own country first, then its first node's, or,
- * for a direction on a named outbound (phase 10), the outbound's. The name
- * behind the arrow, shown only when there is no country, is the first node's
- * or the outbound's: the operator's name for it, never its server address.
- */
-function directionProfileLabel(
-  cascadeName: string,
-  d: {
-    countryCode: string | null;
-    nodes: { node: { name: string; countryCode: string | null } }[];
-    outbound?: { name: string; countryCode: string | null } | null;
-  },
-): string {
-  const exit = d.nodes[0]?.node ?? d.outbound!;
-  return cascadeProfileLabel(cascadeName, d.countryCode ?? exit.countryCode, exit.name);
 }
 
 export async function getRouteProfilesByEntryNode(
@@ -1359,7 +1349,7 @@ export async function getRouteProfilesByEntryNode(
          */
         const usable = c.directions.filter(directionServes);
         if (c.autoProfile && !allowed && usable.length > 1) {
-          const autoLabel = cascadeAutoProfileLabel(c.name);
+          const autoLabel = autoLineName(c);
           profiles.push({ label: autoLabel, tag: autoRouteTag(0), cascadeId: c.id });
           // Policy variants of Auto are gated by the direction they can reach,
           // so a policy granted only for one direction does not become an Auto
@@ -1381,7 +1371,7 @@ export async function getRouteProfilesByEntryNode(
           // A direction on a named outbound is named the same way, so a
           // restricted squad can be given it now.
           if (allowed && !allowed.has(d.id)) continue;
-          const label = directionProfileLabel(c.name, d);
+          const label = directionLineName(c.name, d);
           profiles.push({ label, tag: routeTag(0, d.tag - 1), cascadeId: c.id });
           for (const p of policiesForDirection([d.id])) {
             profiles.push({
@@ -1448,7 +1438,7 @@ export async function getRouteProfilesByEntryNode(
     // as the v4 path: the operator asked for it, and the user is unrestricted,
     // since Auto can reach any exit.
     if (c.autoProfile && isBalancer && !allowed && fullExits.length > 1) {
-      const autoLabel = cascadeAutoProfileLabel(c.name);
+      const autoLabel = autoLineName(c);
       profiles.push({ label: autoLabel, tag: autoRouteTag(0), cascadeId: c.id });
       for (const p of grantedPolicies) {
         profiles.push({
@@ -1786,6 +1776,7 @@ async function directionsForSave(
           tag: true,
           outboundId: true,
           countryCode: true,
+          label: true,
           linkProtocol: true,
           linkParams: true,
           nodes: { select: { nodeId: true } },
@@ -1796,6 +1787,7 @@ async function directionsForSave(
     tag: s.tag,
     outboundId: s.outboundId,
     countryCode: s.countryCode,
+    label: s.label,
     linkProtocol: s.linkProtocol,
     linkParams: storedLinkParams(s.linkParams),
   }));
@@ -1931,6 +1923,9 @@ async function writeTopologyV4(
     /** Phase 10: the named outbound in place of the pool. */
     outboundId?: string | null;
     countryCode?: string | null;
+    /** 11.3: the pinned line name. The merge has already carried the stored one
+     *  forward where the request said nothing, so undefined here is a new row. */
+    label?: string | null;
     /** Phase 5: the last leg's cell and knobs. Null means the entry's cell. */
     linkProtocol?: string | null;
     linkParams?: LegParams | null;
@@ -2076,6 +2071,7 @@ async function writeTopologyV4(
         where: { id: d.keepId },
         data: {
           countryCode: d.countryCode ?? null,
+          label: normaliseLineLabel(d.label),
           ...leg,
           nodes: { create: d.nodeIds.map((nodeId) => ({ nodeId })) },
         },
@@ -2087,6 +2083,7 @@ async function writeTopologyV4(
         cascadeId,
         tag: d.tag,
         countryCode: d.countryCode ?? null,
+        label: normaliseLineLabel(d.label),
         ...leg,
         nodes: { create: d.nodeIds.map((nodeId) => ({ nodeId })) },
       },
@@ -2320,6 +2317,7 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
           mode,
           hideHopsFromSub: input.hideHopsFromSub,
           autoProfile: input.autoProfile,
+          autoLabel: normaliseLineLabel(input.autoLabel),
           ...(input.entryPolicyId ? { entryPolicy: { connect: { id: input.entryPolicyId } } } : {}),
           hops: {
             create: hops.map((h, idx) => ({
@@ -2420,7 +2418,56 @@ export function cascadeMemberNodeIds(c: {
   ];
 }
 
-export async function updateCascade(id: string, input: UpdateCascadeInput): Promise<CascadeDto> {
+/**
+ * What every line of a cascade is CALLED right now, keyed by its tag (Auto by
+ * the Auto tag, and only while the cascade offers it).
+ *
+ * Read before a save and again after it, so the save can report which of the
+ * names its subscribers hold have changed: a client that identifies a server by
+ * its name answers a rename by ADDING the new line and keeping the old one,
+ * which no longer routes. The names are the ones the subscription serves
+ * (directionLineName / autoLineName), never a second derivation.
+ */
+async function lineNamesByTag(
+  db: Prisma.TransactionClient | typeof prisma,
+  cascadeId: string,
+): Promise<Map<number, string>> {
+  const c = await db.cascade.findUnique({
+    where: { id: cascadeId },
+    select: {
+      name: true,
+      autoProfile: true,
+      autoLabel: true,
+      directions: {
+        select: {
+          tag: true,
+          label: true,
+          countryCode: true,
+          nodes: { select: { node: { select: { name: true, countryCode: true } } } },
+          outbound: { select: { name: true, countryCode: true } },
+        },
+      },
+    },
+  });
+  const out = new Map<number, string>();
+  if (!c) return out;
+  for (const d of c.directions) out.set(d.tag, directionLineName(c.name, d));
+  if (c.autoProfile) out.set(autoRouteTag(0), autoLineName(c));
+  return out;
+}
+
+/** Lines that existed before a save and answer to another name after it, in
+ *  tag order. A line that appeared or went away is not a rename. */
+function renamedLines(before: Map<number, string>, after: Map<number, string>): CascadeLineRename[] {
+  const out: CascadeLineRename[] = [];
+  for (const [tag, was] of before) {
+    const now = after.get(tag);
+    if (now !== undefined && now !== was) out.push({ tag, before: was, after: now });
+  }
+  return out.sort((a, b) => a.tag - b.tag);
+}
+
+export async function updateCascade(id: string, input: UpdateCascadeInput): Promise<CascadeSaveResult> {
   const existing = await prisma.cascade.findUnique({
     where: { id },
     select: {
@@ -2434,6 +2481,7 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
     },
   });
   if (!existing) throw new CascadeNotFoundError(id);
+  const namesBefore = await lineNamesByTag(prisma, id);
   // Capture the pre-update members: a node dropped from the cascade (or a
   // disable toggle) must also re-push so its now-stale fragments are removed.
   const oldNodeIds = cascadeMemberNodeIds(existing);
@@ -2564,6 +2612,8 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
             ? { hideHopsFromSub: input.hideHopsFromSub }
             : {}),
           ...(input.autoProfile !== undefined ? { autoProfile: input.autoProfile } : {}),
+          // Absent leaves the pinned name, null or empty clears it.
+          ...(input.autoLabel !== undefined ? { autoLabel: normaliseLineLabel(input.autoLabel) } : {}),
           // Three values: absent leaves it, null clears it, an id sets it.
           ...('entryPolicyId' in input && input.entryPolicyId !== undefined
             ? { entryPolicyId: input.entryPolicyId }
@@ -2624,7 +2674,18 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
     const moved = await nodesOfDeadMoved(deadBefore);
     emitCascadeChanged(id, [...new Set([...oldNodeIds, ...newNodeIds, ...moved])], 'update');
     invalidateHiddenCascadeNodeCache();
-    return mapCascade(c);
+    // Said out loud, because nothing downstream can undo it: the panel puts the
+    // list in front of the operator, and the log carries it for a save that
+    // came from a script.
+    const lineRenames = renamedLines(namesBefore, await lineNamesByTag(prisma, id));
+    for (const r of lineRenames) {
+      getLogger().warn(
+        `[cascade] ${id}: the line for tag ${r.tag} is now called "${r.after}" and was "${r.before}". ` +
+          `A client that identifies a server by name will ADD the new line and keep the old one, ` +
+          `which no longer routes: subscribers have to delete it.`,
+      );
+    }
+    return { ...mapCascade(c), lineRenames };
   } catch (err) {
     if (isCascadeNameClash(err)) throw new CascadeNameTakenError(input.name ?? '');
     throw err;
