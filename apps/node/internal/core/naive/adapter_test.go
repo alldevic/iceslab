@@ -116,7 +116,7 @@ func TestStart_ConfigOnlyWritesCaddyfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if !bytes.Contains(blob, []byte(":443, n1.example.com {")) {
+	if !bytes.Contains(blob, []byte(":443, n1.example.com:443 {")) {
 		t.Errorf("Caddyfile missing expected header: %s", blob)
 	}
 	if !a.Healthy() {
@@ -241,8 +241,13 @@ func TestApplyInbound_PortChangeRegeneratesCaddyfile(t *testing.T) {
 		t.Errorf("ListenPort not updated, got %d want 8443", a.cfg.Inbound.ListenPort)
 	}
 	blob, _ := os.ReadFile(path)
-	if !bytes.Contains(blob, []byte(":8443, n1.example.com {")) {
+	// Both addresses move: a bare hostname is that host on Caddy's default
+	// HTTPS port, so Caddy would hold 443 as well as 8443.
+	if !bytes.Contains(blob, []byte(":8443, n1.example.com:8443 {")) {
 		t.Errorf("Caddyfile missing :8443 header, got:\n%s", blob)
+	}
+	if bytes.Contains(blob, []byte("n1.example.com {")) {
+		t.Errorf("the hostname has no port, so Caddy also listens on 443:\n%s", blob)
 	}
 }
 

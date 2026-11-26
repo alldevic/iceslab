@@ -120,8 +120,9 @@ log "Detected $PRETTY_NAME"
 # ───── 2. Prereqs ─────
 log "Installing apt prereqs"
 DEBIAN_FRONTEND=noninteractive apt-get update -y
+# No software-properties-common: Debian 13 does not ship it and no PPA is added here.
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  software-properties-common gnupg ca-certificates curl \
+  gnupg ca-certificates curl \
   build-essential dkms git libmnl-dev pkg-config wireguard-tools
 
 # ───── 2a. Packages of the Amnezia PPA ─────

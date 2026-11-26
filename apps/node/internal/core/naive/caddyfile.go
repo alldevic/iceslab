@@ -161,7 +161,15 @@ func renderCaddyfile(inbound InboundConfig, users []User, adminSocket string) (s
 	fmt.Fprintln(&b, "\t\texclude http.log.error")
 	fmt.Fprintln(&b, "\t}")
 	fmt.Fprintln(&b, "}")
-	fmt.Fprintf(&b, ":%d, %s {\n", cfg.ListenPort, cfg.Hostname)
+	// Two site addresses, and the hostname carries the port too. `:<port>` is
+	// the catch-all for probes without a matching SNI; the named one switches
+	// automatic HTTPS on for the hostname. A bare hostname means that host on
+	// Caddy's default HTTPS port, 443, whatever the panel bound: a binding on
+	// 8443 had Caddy listening on 8443, 80 AND 443 (measured with `ss`), while
+	// the panel, which believes the node holds 8443 only, offered 443 as the
+	// node's next free port. `caddy validate` takes `:8443, host:8443`, a reload
+	// drops the 443 listener, and ACME keeps working over :80.
+	fmt.Fprintf(&b, ":%d, %s:%d {\n", cfg.ListenPort, cfg.Hostname, cfg.ListenPort)
 	fmt.Fprintf(&b, "\ttls %s\n", cfg.TLSEmail)
 	fmt.Fprintln(&b, "\troute {")
 	// forward_proxy with probe_resistance + zero basic_auth lines fails

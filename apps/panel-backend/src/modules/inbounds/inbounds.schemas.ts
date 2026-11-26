@@ -271,8 +271,8 @@ const ObfuscationSchema = z.object({
   jmax: z.number().int().min(64).max(1024).default(128),
   s1: z.number().int().min(0).max(64).default(32),
   s2: z.number().int().min(0).max(64).default(56),
-  s3: z.number().int().min(0).max(64).default(32),
-  s4: z.number().int().min(0).max(32).default(16),
+  s3: z.number().int().min(0).max(64).default(0),
+  s4: z.number().int().min(0).max(32).default(0),
   // H1-H4 replace the WG message-type marker; the node's config.go validate()
   // requires each > 4, pairwise distinct, and fitting a uint32. The cross-field
   // distinctness check lives in AmneziawgConfigSchema's superRefine below.
@@ -432,7 +432,7 @@ export const MtprotoConfigSchema = z.object({
  * most paths; admins on PPPoE / weird VPNs may drop to 1280.
  */
 export const MieruConfigSchema = z.object({
-  mtu: z.number().int().min(576).max(1500).default(1400),
+  mtu: z.number().int().min(1280).max(1500).default(1400),
 });
 
 /**

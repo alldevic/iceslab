@@ -12,7 +12,7 @@ export function MieruSection({
               <NumberInput
                 label="MTU"
                 placeholder="1400"
-                min={576}
+                min={1280}
                 max={1500}
                 {...form.getInputProps('mieruMtu')}
               />

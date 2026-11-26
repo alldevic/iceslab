@@ -82,8 +82,8 @@ export function profileConfigOf(values: FormValues): Record<string, unknown> {
           jmax: numOr(values.awgJmax, 128),
           s1: numOr(values.awgS1, 32),
           s2: numOr(values.awgS2, 56),
-          s3: numOr(values.awgS3, 32),
-          s4: numOr(values.awgS4, 16),
+          s3: numOr(values.awgS3, 0),
+          s4: numOr(values.awgS4, 0),
           // Never 0: an empty header is the validator's to refuse (A-286).
           ...awgHeaderConfig(values),
           // I1-I5: optional v2.0 mimicry signature packets (hex).

@@ -196,13 +196,19 @@ func (a *Adapter) Engine() string { return "amneziawg" }
 func (a *Adapter) Provisioned() bool {
 	for _, x := range a.both() {
 		x.mu.Lock()
-		has := x.cfg.Inbound.PrivateKey != ""
+		has := x.hasPrivateKeyLocked()
 		x.mu.Unlock()
 		if has {
 			return true
 		}
 	}
 	return false
+}
+
+// hasPrivateKeyLocked is the one condition for "this interface has something
+// to bring up", shared by Provisioned and startOne. Caller holds a.mu.
+func (a *Adapter) hasPrivateKeyLocked() bool {
+	return a.cfg.Inbound.PrivateKey != ""
 }
 
 // Start brings up each interface that has a config (t07-6: both).
@@ -220,7 +226,7 @@ func (a *Adapter) startOne(ctx context.Context) error {
 	defer a.restartMu.Unlock()
 
 	a.mu.Lock()
-	if a.cfg.Inbound.PrivateKey == "" {
+	if !a.hasPrivateKeyLocked() {
 		iface := a.cfg.Inbound.Interface
 		a.mu.Unlock()
 		a.logger.Info("amneziawg adapter deferred, awaiting first ApplyInbound from panel",
