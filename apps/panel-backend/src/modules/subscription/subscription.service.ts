@@ -26,7 +26,7 @@ import {
 import { subscriptionServerName } from '../../lib/util/country-flag.js';
 import { allocatePeer } from '../amneziawg/amneziawg.service.js';
 import { ensureDevices, wgDeviceCount } from '../wg-devices/wg-devices.service.js';
-import { nodeUsersQueue } from '../users/users.queue.js';
+import { eventBus } from '../../lib/infra/event-bus.js';
 import {
   getHiddenCascadeNodeIds,
   getHysteriaEntryLabels,
@@ -989,13 +989,9 @@ export async function generateSubscription(
       wgDeviceCount(user.hwidDeviceLimit, memberships.map((m) => m.group.hwidDeviceLimit)),
     );
     wgDevices = ensured.devices;
-    // A device issued now is on no node yet: the user is rolled out again, as
-    // after any change of what they hold.
-    if (ensured.issued > 0) {
-      await nodeUsersQueue.add('addUser', { userId: user.id }).catch((err: unknown) => {
-        getLogger().warn(`[subscription] user ${user.id}: devices issued, rollout not queued: ${err instanceof Error ? err.message : String(err)}`);
-      });
-    }
+    // A device issued now is on no node yet: announced, and the user is
+    // rolled out again (users.events), as after any change of what they hold.
+    if (ensured.issued > 0) eventBus.emit('wg-devices.changed', { userId: user.id, reason: 'issued' });
   }
 
   const endpoints: SubscriptionEndpoint[] = [];

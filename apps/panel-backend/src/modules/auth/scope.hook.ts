@@ -58,6 +58,7 @@ export const SCOPEABLE_RESOURCES = [
   // before keeps the scope on its row; nothing answers to it.
   'cascades',
   'hwid-devices',
+  'wg-devices',
   'settings',
   'recipes',
   'dashboard',

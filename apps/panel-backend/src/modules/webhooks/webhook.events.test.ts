@@ -69,6 +69,7 @@ const INTERNAL = [
   'binding.deleted',
   'cascade.changed',
   'geo.rolledOut',
+  'wg-devices.changed',
 ];
 
 /**

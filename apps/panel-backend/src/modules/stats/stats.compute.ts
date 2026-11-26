@@ -36,6 +36,13 @@ export interface StatsUserEntry {
    * summed snapshot per (node, user), as before.
    */
   engine?: string;
+  /**
+   * The same counters by peer public key, from a core whose user holds a peer
+   * per device (wire field `peers`; milestone 9.6), in the entry's own counter
+   * mode. Absent on other cores and on older agents. The user's accounting
+   * ignores it; modules/wg-devices/wg-devices.stats.ts credits it to devices.
+   */
+  peers?: { publicKey: string; bytesIn?: number; bytesOut?: number; lastHandshake?: number }[];
 }
 
 /** The adapter an entry's snapshot is keyed by: (protocol, engine), or

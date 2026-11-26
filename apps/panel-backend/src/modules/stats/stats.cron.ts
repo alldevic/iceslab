@@ -10,6 +10,7 @@ import {
   type StatsUserEntry,
 } from './stats.compute.js';
 import { storeLingering } from './lingering.js';
+import { creditDeviceTraffic } from '../wg-devices/wg-devices.stats.js';
 
 /**
  * Per-node in-memory snapshot of the last seen cumulative `totalBytesIn/Out`
@@ -322,6 +323,12 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
         // Advance the single-counter snapshot only after a clean commit, so a
         // failed write doesn't drop those node-level bytes (next poll
         // re-derives the delta from the un-advanced baseline).
+        // Milestone 9.6: the per-device counters of the same poll, after the
+        // users' own accounting and apart from it: a failure here costs the
+        // devices' numbers of this poll, never the users' bytes.
+        await creditDeviceTraffic(res.users ?? [], now).catch((err: unknown) =>
+          getLogger().warn({ node: node.id, err: String(err) }, '[cron] node-stats-poll: device traffic not kept'),
+        );
         if (w.newSnapshot) totalSnapshot.set(node.id, w.newSnapshot);
         if (newAdapterTotals) adapterTotalSnapshot.set(node.id, newAdapterTotals);
         ok++;

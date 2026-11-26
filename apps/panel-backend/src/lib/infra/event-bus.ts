@@ -13,6 +13,10 @@ export interface DomainEventMap {
   'user.status-changed':  { userId: string; from: string; to: string };
   'user.deleted':         { userId: string };
   'user.traffic-reset':   { userId: string; previousUsedBytes: bigint };
+  // wg-devices.changed → a user's WireGuard devices changed (issued, revoked):
+  // their peers on the nodes follow (users.events re-adds the user). Internal:
+  // not forwarded to external webhooks (webhook.events.ts lists what leaves).
+  'wg-devices.changed':   { userId: string; reason: 'issued' | 'revoked' };
   // node.created → backfill all active users to this node. Required because
   // an empty new node otherwise stays empty until each existing user is
   // mutated again. Caught live during slice-23 VPS test 2026-05-06.

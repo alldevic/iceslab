@@ -300,3 +300,75 @@ func TestDevices_TheStateFileStaysReadableByTheOldAgent(t *testing.T) {
 		t.Fatalf("the old field: %+v", old.Peers)
 	}
 }
+
+// Per-device counters (milestone 9.6): one entry per peer under the user, by
+// key, with the latest handshake; the user's entry is their sum.
+func TestAdapter_GetStats_PeersByKeyAndHandshake(t *testing.T) {
+	dump := func(rxA, rxB string) string {
+		return "srv-priv\tsrv-pub\t1234\toff\n" +
+			testWGPubKeyA + "\t(none)\t1.2.3.4:5\t10.66.66.2/32\t1778646563\t" + rxA + "\t100\t25\n" +
+			testWGPubKeyB + "\t(none)\t(none)\t10.66.66.3/32\t0\t" + rxB + "\t0\toff\n"
+	}
+	cur := dump("1000", "0")
+	a, _ := newTestAdapter(t)
+	a.cfg.AwgBin = "/usr/bin/awg"
+	a.cfg.runCmd = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "show" {
+			return []byte(cur), nil
+		}
+		return nil, nil
+	}
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := a.AddUser(core.User{UserID: "u1", AmneziaWGPeers: []core.AmneziaWGPeer{
+		{PublicKey: testWGPubKeyA, AllowedIP: "10.66.66.2/32"},
+		{PublicKey: testWGPubKeyB, AllowedIP: "10.66.66.3/32"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.GetStats(); err != nil { // baseline
+		t.Fatal(err)
+	}
+	cur = dump("1600", "50")
+	st, err := a.GetStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Users) != 1 || len(st.Users[0].Peers) != 2 {
+		t.Fatalf("want one user with two peers, got %+v", st.Users)
+	}
+	u := st.Users[0]
+	if u.BytesIn != 650 || u.BytesOut != 0 {
+		t.Errorf("user sum %d/%d, want 650/0", u.BytesIn, u.BytesOut)
+	}
+	pa, pb := u.Peers[0], u.Peers[1]
+	if pa.PublicKey != testWGPubKeyA || pa.BytesIn != 600 || pa.LastHandshake != 1778646563 {
+		t.Errorf("peer A %+v", pa)
+	}
+	if pb.PublicKey != testWGPubKeyB || pb.BytesIn != 50 || pb.LastHandshake != 0 {
+		t.Errorf("peer B %+v", pb)
+	}
+}
+
+func TestParseAwgDump_Handshakes(t *testing.T) {
+	_, _, hs := parseAwgDump(fakeAwgDump)
+	if hs[testWGPubKeyA] != 1778646563 {
+		t.Errorf("handshake A = %d", hs[testWGPubKeyA])
+	}
+	if _, ok := hs[testWGPubKeyB]; ok {
+		t.Errorf("a peer with no handshake should be absent")
+	}
+}
+
+// The same device on both interfaces is one device: bytes add, the later
+// handshake stands.
+func TestMergePeers_SameKeyAcrossInterfaces(t *testing.T) {
+	got := mergePeers(
+		[]core.PeerStats{{PublicKey: "k1", BytesIn: 1, BytesOut: 2, LastHandshake: 10}},
+		[]core.PeerStats{{PublicKey: "k1", BytesIn: 4, BytesOut: 8, LastHandshake: 30}, {PublicKey: "k2", BytesIn: 5}},
+	)
+	if len(got) != 2 || got[0].BytesIn != 5 || got[0].BytesOut != 10 || got[0].LastHandshake != 30 || got[1].PublicKey != "k2" {
+		t.Errorf("merged %+v", got)
+	}
+}

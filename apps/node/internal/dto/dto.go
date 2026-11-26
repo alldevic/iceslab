@@ -610,6 +610,19 @@ type UserStats struct {
 	// and their own restarts. The panel keys a user's snapshot by (node, user,
 	// protocol, engine). Omitted by older agents.
 	Engine EngineName `json:"engine,omitempty"`
+	// Peers: the same counters by peer public key, from a core whose user
+	// holds a peer per device (AmneziaWG, plain WireGuard; milestone 9.6).
+	// Their sum is this entry. Omitted by other cores and by older agents.
+	Peers []PeerStatsDto `json:"peers,omitempty"`
+}
+
+// PeerStatsDto mirrors StatsPeer in shared/transport.ts.
+type PeerStatsDto struct {
+	PublicKey string `json:"publicKey"`
+	BytesIn   int64  `json:"bytesIn"`
+	BytesOut  int64  `json:"bytesOut"`
+	// LastHandshake: unix seconds, omitted for a peer that has had none.
+	LastHandshake int64 `json:"lastHandshake,omitempty"`
 }
 
 // CoreTrafficTotal (A-152) is one adapter's total for this poll, with its own

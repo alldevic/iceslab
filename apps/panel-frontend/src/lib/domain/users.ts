@@ -324,3 +324,29 @@ export async function listUserDevices(userId: string): Promise<{ devices: HwidDe
 export async function deleteHwidDevice(id: string): Promise<void> {
   await api.delete(`/api/hwid-devices/${id}`);
 }
+
+// ───── WireGuard devices (milestone 9.6) ─────
+
+export interface WgDevice {
+  id: string;
+  userId: string;
+  /** Its number among the live devices: the `?device=` of its config link. */
+  index: number;
+  label: string | null;
+  publicKey: string;
+  addresses: string[];
+  /** Strings: a lifetime of bytes outgrows a JSON number's exact range. */
+  bytesIn: string;
+  bytesOut: string;
+  lastSeenAt: string | null;
+  createdAt: string;
+}
+
+export async function listUserWgDevices(userId: string): Promise<{ devices: WgDevice[] }> {
+  const { data } = await api.get<{ devices: WgDevice[] }>(`/api/users/${userId}/wg-devices`);
+  return data;
+}
+
+export async function revokeWgDevice(id: string): Promise<void> {
+  await api.delete(`/api/wg-devices/${id}`);
+}

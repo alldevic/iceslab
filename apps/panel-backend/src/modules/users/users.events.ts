@@ -126,6 +126,15 @@ export function registerUserEventHandlers(): void {
     }
   });
 
+  // A WireGuard device issued or revoked changes the peers the user's record
+  // carries on every WireGuard-family node: the whole list goes again, so a
+  // revoked device's peer comes off (and its replacement, issued by that same
+  // push, goes on). addUser skips a user who is not active.
+  eventBus.on('wg-devices.changed', async ({ userId, reason }) => {
+    console.log(`[event] wg-devices.changed - ${userId} - ${reason}`);
+    await nodeUsersQueue.add('addUser', { userId });
+  });
+
   eventBus.on('user.deleted', async ({ userId }) => {
     console.log(`[event] user.deleted - ${userId}`);
     // Deletion is soft, so the user row this references still exists.

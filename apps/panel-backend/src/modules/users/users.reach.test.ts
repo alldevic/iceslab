@@ -10,7 +10,8 @@ import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { observedCores } from '../nodes/nodes.cron.js';
 import { reachOfUsers } from './user-reach.js';
-import { syncAddUser } from './users.queue.js';
+import { nodeUsersQueue, syncAddUser } from './users.queue.js';
+import { registerUserEventHandlers } from './users.events.js';
 import { applyInboundsForNode } from '../inbounds/inbounds.queue.js';
 import { registerInboundEventHandlers } from '../inbounds/inbounds.events.js';
 import { generateSubscription } from '../subscription/subscription.service.js';
@@ -477,6 +478,59 @@ describe('WireGuard devices in the roster (9.4)', () => {
     const own = await prisma.user.findUniqueOrThrow({ where: { id: a }, select: { amneziawgPublicKey: true } });
     expect(after[0]!.publicKey).toBe(own.amneziawgPublicKey);
     expect(await prisma.wgDevice.count({ where: { userId: a } })).toBe(3);
+  });
+});
+
+describe('a revoked WireGuard device reaches the nodes (9.6)', () => {
+  const wg = (subnet: string) => ({ serverPrivateKey: WG_TEST_PRIVATE_KEY, serverPublicKey: WG_TEST_PUBLIC_KEY, subnet });
+
+  it('revoking queues a rollout of the user, after which the revoked peer is gone and its replacement is there', async () => {
+    const n = await node();
+    vi.spyOn(NodeTransport.prototype, 'applyInbounds').mockResolvedValue({ ok: true, applied: 1, skipped: 0 } as never);
+    const p = await profile('wireguard', wg('10.77.77.0/24'));
+    await host(p, n, 51840);
+    const sq = await post('/api/squads', { name: 'wg-only', profileIds: [p] });
+    const u = await user('revoke_flow', [sq.id]);
+    const first = capture();
+    await syncAddUser(u);
+    const before = first.added.at(-1)!.req.credentials.amneziawgPeers!;
+    expect(before).toHaveLength(3);
+    const gone = await prisma.wgDevice.findFirstOrThrow({ where: { publicKey: before[1]!.publicKey } });
+
+    vi.restoreAllMocks();
+    vi.spyOn(NodeTransport.prototype, 'listAssets').mockRejectedValue(new NodeRequestError('404', 404, null));
+    const queued = vi.spyOn(nodeUsersQueue, 'add').mockResolvedValue({} as never);
+    registerUserEventHandlers();
+    const res = await app.inject({ method: 'DELETE', url: `/api/wg-devices/${gone.id}`, headers: auth() });
+    expect(res.statusCode).toBe(204);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(queued.mock.calls.filter((c) => c[0] === 'addUser' && (c[1] as { userId: string }).userId === u)).toHaveLength(1);
+
+    // What that job sends: the revoked key off, a newly issued one on, and the
+    // devices that stayed unchanged.
+    const second = capture();
+    await syncAddUser(u);
+    const after = second.added.at(-1)!.req.credentials.amneziawgPeers!;
+    expect(after).toHaveLength(3);
+    const keys = after.map((x) => x.publicKey);
+    expect(keys).not.toContain(gone.publicKey);
+    expect(keys).toContain(before[0]!.publicKey);
+    expect(keys).toContain(before[2]!.publicKey);
+    expect(await prisma.wgDevice.count({ where: { userId: u, revokedAt: null } })).toBe(3);
+  });
+
+  it('a device issued by a subscription render queues a rollout too', async () => {
+    const n = await node();
+    const p = await profile('wireguard', wg('10.77.77.0/24'));
+    await host(p, n, 51840);
+    const sq = await post('/api/squads', { name: 'wg-sub', profileIds: [p] });
+    const u = await user('issue_flow', [sq.id]);
+    const queued = vi.spyOn(nodeUsersQueue, 'add').mockResolvedValue({} as never);
+    registerUserEventHandlers();
+    const sub = (await prisma.user.findUniqueOrThrow({ where: { id: u }, select: { subscriptionToken: true } })).subscriptionToken;
+    await app.inject({ method: 'GET', url: `/sub/${sub}` });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(queued.mock.calls.some((c) => c[0] === 'addUser' && (c[1] as { userId: string }).userId === u)).toBe(true);
   });
 });
 

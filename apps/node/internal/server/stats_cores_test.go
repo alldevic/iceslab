@@ -84,3 +84,34 @@ func TestEachAdapterReportsItsOwnTotalAndAMissedPollIsNoData(t *testing.T) {
 		t.Errorf("users %+v, want u on xray, u and w on awg", resp.Users)
 	}
 }
+
+// Per-peer counters ride on the user's entry when the core keeps them, and an
+// entry of a core that keeps none has no `peers` key at all (milestone 9.6).
+func TestStatsPeersOmittedWhenNone(t *testing.T) {
+	awg := &fakeAdapter{name: "amneziawg", engine: "amneziawg", stats: &core.Stats{Users: []core.UserStats{
+		{UserID: "u", BytesIn: 5, BytesOut: 1, Peers: []core.PeerStats{{PublicKey: "k", BytesIn: 5, BytesOut: 1, LastHandshake: 99}}},
+	}}}
+	hy := &fakeAdapter{name: "hysteria", engine: "hysteria", stats: &core.Stats{Users: []core.UserStats{{UserID: "v", BytesIn: 1}}}}
+	rr := httptest.NewRecorder()
+	newServerWith(t, awg, hy).routes().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/stats", nil))
+	var raw struct {
+		Users []map[string]any `json:"users"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range raw.Users {
+		_, has := u["peers"]
+		switch u["userId"] {
+		case "u":
+			p := u["peers"].([]any)[0].(map[string]any)
+			if !has || p["publicKey"] != "k" || p["lastHandshake"].(float64) != 99 {
+				t.Errorf("awg user %+v", u)
+			}
+		case "v":
+			if has {
+				t.Errorf("a core with no peers sent %+v", u)
+			}
+		}
+	}
+}

@@ -263,7 +263,7 @@ func TestAdapter_GetStats_AwgFailureIsNoData(t *testing.T) {
 }
 
 func TestParseAwgDump_SkipsMalformed(t *testing.T) {
-	rx, tx := parseAwgDump(fakeAwgDump + "garbage line with too few\n")
+	rx, tx, _ := parseAwgDump(fakeAwgDump + "garbage line with too few\n")
 	if rx["BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="] != 24390 || tx["BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="] != 348 {
 		t.Errorf("BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=: rx=%d tx=%d", rx["BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="], tx["BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="])
 	}

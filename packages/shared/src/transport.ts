@@ -1755,6 +1755,22 @@ export interface UserStats {
    * snapshot by (node, user, protocol, engine). Absent on older agents.
    */
   engine?: EngineName;
+  /**
+   * The same counters by peer public key, from a core whose user holds a peer
+   * per device (AmneziaWG, plain WireGuard; milestone 9.6). Their sum is this
+   * entry, in the same counter mode. Absent for other cores and on older
+   * agents, which the panel takes as no per-device counters.
+   */
+  peers?: StatsPeer[];
+}
+
+/** One device's peer counters inside a UserStats entry. Mirrors PeerStatsDto in dto.go. */
+export interface StatsPeer {
+  publicKey: string;
+  bytesIn: number;
+  bytesOut: number;
+  /** Unix seconds of the peer's latest handshake; absent for none. */
+  lastHandshake?: number;
 }
 
 /**

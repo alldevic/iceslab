@@ -691,9 +691,35 @@ func mergeStats(a, b *core.Stats) *core.Stats {
 		if i, ok := at[u.UserID]; ok {
 			out.Users[i].BytesIn += u.BytesIn
 			out.Users[i].BytesOut += u.BytesOut
+			out.Users[i].Peers = mergePeers(out.Users[i].Peers, u.Peers)
 			continue
 		}
 		out.Users = append(out.Users, u)
+	}
+	return out
+}
+
+// mergePeers: a device is one key on both interfaces (the 1.x and the 3.1 one
+// share it), so its two counters are one device's: bytes add, the handshake
+// is the later of the two.
+func mergePeers(a, b []core.PeerStats) []core.PeerStats {
+	out := append([]core.PeerStats(nil), a...)
+	at := make(map[string]int, len(out))
+	for i, p := range out {
+		at[p.PublicKey] = i
+	}
+	for _, p := range b {
+		i, ok := at[p.PublicKey]
+		if !ok {
+			at[p.PublicKey] = len(out)
+			out = append(out, p)
+			continue
+		}
+		out[i].BytesIn += p.BytesIn
+		out[i].BytesOut += p.BytesOut
+		if p.LastHandshake > out[i].LastHandshake {
+			out[i].LastHandshake = p.LastHandshake
+		}
 	}
 	return out
 }
@@ -741,7 +767,7 @@ func (a *Adapter) statsOne() (*core.Stats, error) {
 		return &core.Stats{Users: users}, nil
 	}
 
-	rxByPub, txByPub := parseAwgDump(string(out))
+	rxByPub, txByPub, hsByPub := parseAwgDump(string(out))
 
 	var totalIn, totalOut int64
 	// Rebuild the snapshot from scratch each poll so removed peers drop out and
@@ -769,9 +795,13 @@ func (a *Adapter) statsOne() (*core.Stats, error) {
 			}
 			// else: first sight, baseline recorded above, count nothing this tick.
 
-			// The user is billed the sum of their devices.
+			// The user is billed the sum of their devices; each device's own
+			// counters go beside it, by key (milestone 9.6).
 			entry.BytesIn += dRx
 			entry.BytesOut += dTx
+			entry.Peers = append(entry.Peers, core.PeerStats{
+				PublicKey: peer.PublicKey, BytesIn: dRx, BytesOut: dTx, LastHandshake: hsByPub[peer.PublicKey],
+			})
 		}
 		users = append(users, entry)
 		totalIn += entry.BytesIn
@@ -791,13 +821,15 @@ func (a *Adapter) statsOne() (*core.Stats, error) {
 //
 //	<pubkey> <psk> <endpoint> <allowed-ips> <latest-handshake> <rx> <tx> <keepalive>
 //
-// Returns maps pubkey→rx-bytes and pubkey→tx-bytes. From the server's
+// Returns maps pubkey→rx-bytes, pubkey→tx-bytes and pubkey→latest handshake
+// (unix seconds, 0 for never). From the server's
 // perspective: peer's "rx" is what the server received from the client
 // (BytesIn for our user), peer's "tx" is what the server sent back
 // (BytesOut for our user). Malformed lines are skipped silently.
-func parseAwgDump(dump string) (rx, tx map[string]int64) {
+func parseAwgDump(dump string) (rx, tx, handshake map[string]int64) {
 	rx = make(map[string]int64)
 	tx = make(map[string]int64)
+	handshake = make(map[string]int64)
 	lines := strings.Split(strings.TrimSpace(dump), "\n")
 	if len(lines) < 2 {
 		return
@@ -817,6 +849,10 @@ func parseAwgDump(dump string) (rx, tx map[string]int64) {
 		}
 		rx[pub] = r
 		tx[pub] = t
+		var h int64
+		if _, err := fmt.Sscanf(fields[4], "%d", &h); err == nil && h > 0 {
+			handshake[pub] = h
+		}
 	}
 	return
 }

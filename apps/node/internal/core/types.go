@@ -69,6 +69,20 @@ type UserStats struct {
 	UserID   string
 	BytesIn  int64
 	BytesOut int64
+	// Peers: the same counters by peer key, for a core whose user holds a peer
+	// per device (AmneziaWG and plain WireGuard, milestone 9.6). Their sum is
+	// BytesIn/BytesOut. Nil for a core that keeps none.
+	Peers []PeerStats
+}
+
+// PeerStats are one peer's counters, in the same mode as its user's entry.
+type PeerStats struct {
+	PublicKey string
+	BytesIn   int64
+	BytesOut  int64
+	// LastHandshake: unix seconds of the peer's latest handshake, 0 for never
+	// (or since the interface was last created).
+	LastHandshake int64
 }
 
 // Stats is what an adapter returns from GetStats. The aggregator in

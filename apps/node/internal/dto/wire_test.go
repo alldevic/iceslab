@@ -43,6 +43,7 @@ func wirePairs() []wirePair {
 	return []wirePair{
 		{"ProtocolCredentials", ProtocolCredentials{}},
 		{"AmneziawgPeerCred", AmneziaWGPeerDto{}},
+		{"StatsPeer", PeerStatsDto{}},
 		{"AddUserRequest", AddUserRequest{}},
 		{"AddUserResponse", AddUserResponse{}},
 		{"AddUsersRequest", AddUsersRequest{}},

@@ -992,6 +992,19 @@ func amneziawgPeers(in []dto.AmneziaWGPeerDto) []core.AmneziaWGPeer {
 	return out
 }
 
+// peerStats: a user's per-peer counters for the wire; nil (omitted) when the
+// core keeps none.
+func peerStats(in []core.PeerStats) []dto.PeerStatsDto {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]dto.PeerStatsDto, 0, len(in))
+	for _, p := range in {
+		out = append(out, dto.PeerStatsDto{PublicKey: p.PublicKey, BytesIn: p.BytesIn, BytesOut: p.BytesOut, LastHandshake: p.LastHandshake})
+	}
+	return out
+}
+
 // addUser puts one user onto the cores, and returns the names of the healthy
 // ones that refused (none: done).
 func (s *Server) addUser(req dto.AddUserRequest) []string {
@@ -2024,6 +2037,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 					// adapter, whose counters are its own. The sing-box adapter
 					// of the xray family is protocol "xray" too.
 					Engine: dto.EngineName(adapter.Engine()),
+					Peers:  peerStats(u.Peers),
 				})
 			}
 			// The adapter's own total when it keeps one (xray's inbound

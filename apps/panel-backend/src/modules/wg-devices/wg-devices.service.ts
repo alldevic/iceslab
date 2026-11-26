@@ -1,5 +1,6 @@
 import { prisma } from '../../prisma.js';
 import { Prisma } from '../../generated/prisma/client.js';
+import { eventBus } from '../../lib/infra/event-bus.js';
 import type { WgDevice } from '../../generated/prisma/client.js';
 import { generatePresharedKey, generateWireguardKeyPair } from '../../lib/auth/credentials.js';
 import { effectiveHwidLimit } from '../hwid/hwid.service.js';
@@ -16,8 +17,11 @@ import { effectiveHwidLimit } from '../hwid/hwid.service.js';
  * Devices are issued up front, to the user's count, when the panel first needs
  * them: a subscription render or a push to a node (ensureDevices). Order is
  * (createdAt, id): device 1 is the oldest live one, and for a user from before
- * devices it is their old keypair. Revoking, listing and traffic per device are
- * milestone 9.6; a revoked row is already left out of everything here.
+ * devices it is their old keypair. A revoked row (milestone 9.6, revokeDevice)
+ * is left out of everything: it keeps its traffic, and its place is taken by a
+ * new device on the next ensureDevices, within the user's count. A revoked
+ * device is never brought back, and there is no way to issue one beyond the
+ * count.
  *
  * Every device also holds a preshared key (milestone 9.5), always: issued with
  * the device, and given to the ones from before it on the first read that
@@ -190,4 +194,42 @@ export async function reissueDevices(
     }
     return live.length;
   });
+}
+
+/**
+ * A user's live devices with their addresses (one per profile of the family),
+ * device 1 first, for the operator's list. A revoked device is not listed: its
+ * row stays for its traffic, and nothing else reads it.
+ */
+export async function listDevicesWithPeers(userId: string) {
+  return prisma.wgDevice.findMany({
+    where: { userId, revokedAt: null },
+    orderBy: ORDER,
+    include: { peers: { select: { ip: true, profileId: true }, orderBy: { ip: 'asc' } } },
+  });
+}
+
+/**
+ * Revokes a device (milestone 9.6): the row stays, with its traffic, marked
+ * revoked; its addresses are freed (another device may take them: the key they
+ * belonged to leaves every node with the push this announces, so an old config
+ * cannot use them). The replacement is issued by that same push, to the user's
+ * count (ensureDevices), never the revoked one again. Serialised with
+ * ensureDevices per user. Null for no such device; an already revoked one is
+ * returned unchanged and announced no more.
+ */
+export async function revokeDevice(deviceId: string): Promise<WgDeviceRow | null> {
+  const result = await prisma.$transaction(async (tx) => {
+    const found = await tx.wgDevice.findUnique({ where: { id: deviceId } });
+    if (!found) return null;
+    await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${'wg-devices:' + found.userId}))`);
+    const row = await tx.wgDevice.findUnique({ where: { id: deviceId } });
+    if (!row || row.revokedAt) return { row, revoked: false };
+    const updated = await tx.wgDevice.update({ where: { id: deviceId }, data: { revokedAt: new Date() } });
+    await tx.amneziawgPeer.deleteMany({ where: { deviceId } });
+    return { row: updated, revoked: true };
+  });
+  if (!result?.row) return null;
+  if (result.revoked) eventBus.emit('wg-devices.changed', { userId: result.row.userId, reason: 'revoked' });
+  return result.row;
 }
