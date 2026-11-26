@@ -312,6 +312,14 @@ export const ConfigSchema = z.object({
   ANOMALY_MIN_BASELINE_BYTES: z.coerce.number().int().min(0).default(1_000_000),
   ANOMALY_EXPECTED_DECAY: z.coerce.number().gt(0).max(1).default(0.95),
 
+  // Cold-pool replacement (modules/ext_vptech_pool): a node the traffic sensor
+  // keeps reporting dark is replaced by a spare from the cold pool. Off by
+  // default; off, nothing subscribes and the panel behaves as without it.
+  EXT_VPTECH_POOL_ENABLED: z
+    .string()
+    .default('false')
+    .transform((s) => s.toLowerCase() === 'true' || s === '1'),
+
   // ACME contact email used by node-installers that need a Let's Encrypt
   // cert (Hysteria 2 / NaiveProxy / Caddy). Optional, install command
   // emits a placeholder when unset, admin fills manually.

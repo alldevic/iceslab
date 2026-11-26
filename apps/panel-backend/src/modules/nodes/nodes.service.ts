@@ -24,6 +24,7 @@ import type {
   CreateNodeInput,
   UpdateNodeInput,
   ListNodesQuery,
+  HardeningFlags,
   HardeningInput,
 } from './nodes.schemas.js';
 import { resolveCoreVersions, type EngineName } from '@iceslab/shared';
@@ -196,7 +197,7 @@ export async function createNode(
  * maps 1:1 to a flag in scripts/install-iceslab-node.sh. Empty for null or an
  * empty object, so a node without hardening gets the command it always got.
  */
-export function hardeningFlags(hardening?: HardeningInput | null): string[] {
+export function hardeningFlags(hardening?: HardeningFlags | null): string[] {
   if (!hardening) return [];
   const flags: string[] = [];
   // ufwLockdown: tighten the firewall beyond the default per-protocol allows
@@ -219,7 +220,7 @@ export function hardeningFlags(hardening?: HardeningInput | null): string[] {
  * line gets its continuation, the last flag has none. Kept for callers that
  * assemble lines themselves; buildInstallCommand is the one that renders.
  */
-export function appendHardeningFlags(lines: string[], hardening?: HardeningInput | null): void {
+export function appendHardeningFlags(lines: string[], hardening?: HardeningFlags | null): void {
   const flags = hardeningFlags(hardening);
   if (flags.length === 0) return;
   lines[lines.length - 1] += ' \\';
@@ -527,9 +528,16 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
   if (input.domain !== undefined) data.domain = input.domain;
   // G - Zashchita hardening. Prisma.JsonNull (not raw null) so clearing the
   // jsonb column maps to SQL NULL unambiguously (avoids DbNull/JsonNull mixup).
+  // The cold-pool labels ride in the same blob and no form edits them: a body
+  // whose hardening does not name `pool` keeps the stored labels (a cleared
+  // blob too), or saving the node page would put a burned IP back in the pool.
   if (input.hardening !== undefined) {
-    data.hardening =
-      (input.hardening as Prisma.InputJsonValue | null) ?? Prisma.JsonNull;
+    const storedPool = (existing.hardening as { pool?: unknown } | null)?.pool;
+    const hardening =
+      storedPool !== undefined && !(input.hardening && 'pool' in input.hardening)
+        ? { ...(input.hardening ?? {}), pool: storedPool }
+        : input.hardening;
+    data.hardening = (hardening as Prisma.InputJsonValue | null) ?? Prisma.JsonNull;
   }
   // Э3 F: the node's resolver. Prisma.JsonNull for the same reason as hardening
   // above: clearing a jsonb column needs JsonNull, not raw null.

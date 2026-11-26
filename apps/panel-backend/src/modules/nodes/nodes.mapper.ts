@@ -23,6 +23,8 @@ export interface HardeningDto {
   fail2ban?: boolean;
   realisticFallback?: boolean;
   sshAllowlist?: string[];
+  // Cold-pool labels (modules/ext_vptech_pool); see HardeningSchema.
+  pool?: { asn?: string; provider?: string; burned?: boolean; spare?: boolean };
 }
 
 // Shape of the nodes.coreRestarts jsonb blob. Defined once in @iceslab/shared

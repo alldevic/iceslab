@@ -137,6 +137,7 @@ services:
       ANOMALY_DEBOUNCE: ${ANOMALY_DEBOUNCE:-3}
       ANOMALY_MIN_BASELINE_BYTES: ${ANOMALY_MIN_BASELINE_BYTES:-1000000}
       ANOMALY_EXPECTED_DECAY: ${ANOMALY_EXPECTED_DECAY:-0.95}
+      EXT_VPTECH_POOL_ENABLED: ${EXT_VPTECH_POOL_ENABLED:-false}
       # ACME contact email auto-injected into Hysteria / Naive install
       # commands. Optional, UI emits placeholder when unset.
       ACME_DEFAULT_EMAIL: ${ACME_DEFAULT_EMAIL:-}

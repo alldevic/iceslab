@@ -33,6 +33,8 @@ export interface NodeHardening {
   fail2ban?: boolean;
   realisticFallback?: boolean;
   sshAllowlist?: string[];
+  // Cold-pool labels: set through the API only, no screen edits them.
+  pool?: { asn?: string; provider?: string; burned?: boolean; spare?: boolean };
 }
 
 /**

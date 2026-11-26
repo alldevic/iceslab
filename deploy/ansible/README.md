@@ -91,6 +91,40 @@ active. It does not call the agent: that needs the panel's client certificate.
    ```
 4. When the play ends, switch the node from `disabled` to `active` in the panel.
 
+## The cold pool of spares
+
+With `EXT_VPTECH_POOL_ENABLED=true` the panel replaces a node whose traffic has
+vanished (`node.anomaly`, not cleared by `node.anomaly-cleared` within 5 minutes,
+severity critical) with a spare. This is the pool's half of the picture; what
+the panel does today:
+
+- picks a spare: a node with status `disabled` and the label `spare`, not `burned`,
+  preferring another autonomous system, then another provider, then the same
+  country;
+- issues a bootstrap token for it, takes the spare out of `disabled` and removes
+  its `spare` label; **does not install it** and does not move the burned node's
+  bindings: do both by hand as in "Bringing in a spare node by hand" (the token it
+  issued lives 15 minutes, mint another);
+- sets the burned node `disabled` with `burned`, so it is never picked again.
+
+Until the panel runs this role itself, turning the pool on makes a swap leave a
+node without an agent: it shows as `unreachable` after the next status poll.
+
+The labels live in `hardening.pool` of the node and have no screen; set them with
+the API (bearer of an admin):
+
+```sh
+curl -X PUT https://panel.example.com/api/nodes/<id> -H 'Authorization: Bearer ...' \
+  -H 'Content-Type: application/json' \
+  -d '{"status":"disabled","hardening":{"pool":{"spare":true,"asn":"AS24940","provider":"hetzner"}}}'
+```
+
+`asn` and `provider` are free text, compared as written; give them to the working
+nodes as well. A `PUT` whose `hardening` does not name `pool` keeps the labels
+(a `hardening` of `null` too); one that names it replaces all of them, so send
+`spare`, `asn` and `provider` together. `burned` is set by the panel, and a node
+that has it is out of the pool until you send `pool` again without it.
+
 ## Host keys
 
 `ansible.cfg` sets `host_key_checking = False`: a spare is a fresh VPS whose host

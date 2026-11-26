@@ -45,10 +45,26 @@ export const HardeningSchema = z
     fail2ban: z.boolean().optional(),
     realisticFallback: z.boolean().optional(),
     sshAllowlist: z.array(SshAllowEntrySchema).max(16).optional(),
+    // Cold-pool labels (modules/ext_vptech_pool), read by no installer flag and
+    // set only through the API. spare marks a disabled node as one the pool may
+    // promote; asn/provider steer the choice away from the burned node's
+    // network; burned marks an IP retired by a swap, never promoted again. Kept
+    // by an edit whose hardening does not mention them (updateNode).
+    pool: z
+      .object({
+        asn: z.string().max(32).optional(),
+        provider: z.string().max(64).optional(),
+        burned: z.boolean().optional(),
+        spare: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .nullish();
 export type HardeningInput = z.infer<typeof HardeningSchema>;
+/** What the install command reads of the hardening blob: the pool labels are not part of it. */
+export type HardeningFlags = Pick<NonNullable<HardeningInput>, 'ufwLockdown' | 'fail2ban' | 'realisticFallback' | 'sshAllowlist'>;
 
 /**
  * Э3 F: who answers the name lookups of this node's users.

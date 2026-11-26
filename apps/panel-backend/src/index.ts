@@ -9,6 +9,7 @@ import { registerNodeEventHandlers } from './modules/nodes/nodes.events.js';
 import { registerCascadeEventHandlers } from './modules/cascades/cascade.events.js';
 import { registerInboundEventHandlers } from './modules/inbounds/inbounds.events.js';
 import { registerWebhookEventHandlers } from './modules/webhooks/webhook.events.js';
+import { registerPoolEventHandlers } from './modules/ext_vptech_pool/pool.service.js';
 import { registerRemnawaveWebhookEmitter } from './modules/remnawave-compat/remnawave.webhook.events.js';
 import { registerBindingsCacheBust } from './modules/subscription/subscription.bindings-cache.js';
 import { observeWorker } from './lib/infra/queue-observability.js';
@@ -62,6 +63,8 @@ async function start() {
     registerInboundEventHandlers();
     registerCascadeEventHandlers();
     registerWebhookEventHandlers();
+    // Cold-pool replacement: no-op unless EXT_VPTECH_POOL_ENABLED.
+    registerPoolEventHandlers();
     // Remnawave facade: no-op unless the facade and its webhook are configured.
     registerRemnawaveWebhookEmitter();
     // B6 - invalidate the /sub binding cache on profile/binding/node changes.
