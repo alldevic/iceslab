@@ -77,6 +77,9 @@ export interface ClientDef {
   /** Platforms where the store carries the app for money, with the price as the
    *  Russian storefront quotes it. Dated in the entry's comment: a price drifts. */
   storePrice?: Partial<Record<PlatformId, string>>;
+  /** The day the price was measured (ISO date), which the store document names
+   *  next to it. Present wherever `storePrice` is. */
+  storePriceAsOf?: string;
   /** The Russian storefront carries OTHER apps under this name (a search for it
    *  finds somebody else's client). Dated in the entry's comment. */
   storeNameAlike?: true;
@@ -194,6 +197,7 @@ export const CLIENTS = {
     // storefront ($2.99 in the US), the only paid client of the catalog there.
     // The listing also carries in-app purchases, so no "one-off" wording.
     storePrice: { ios: '249 ₽', appletv: '249 ₽' },
+    storePriceAsOf: '2026-09-16',
     name: 'Shadowrocket',
     site: 'https://apps.apple.com/app/id932747118',
     platforms: ['ios', 'macos', 'appletv'],

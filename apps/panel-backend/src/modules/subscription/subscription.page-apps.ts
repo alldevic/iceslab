@@ -35,7 +35,7 @@ function fromCatalog(
   id: ClientId,
 ): Pick<
   AppDef,
-  'client' | 'name' | 'platforms' | 'site' | 'storeGap' | 'storePrice' | 'storeNameAlike' | 'localProxyAuth'
+  'client' | 'name' | 'platforms' | 'site' | 'storeGap' | 'storePrice' | 'storePriceAsOf' | 'storeNameAlike' | 'localProxyAuth'
 > {
   const c: ClientDef = CLIENTS[id];
   return {
@@ -45,6 +45,7 @@ function fromCatalog(
     ...(c.site ? { site: c.site } : {}),
     ...(c.storeGap ? { storeGap: c.storeGap } : {}),
     ...(c.storePrice ? { storePrice: c.storePrice } : {}),
+    ...(c.storePriceAsOf ? { storePriceAsOf: c.storePriceAsOf } : {}),
     ...(c.storeNameAlike ? { storeNameAlike: c.storeNameAlike } : {}),
     ...(c.localProxyAuth ? { localProxyAuth: c.localProxyAuth } : {}),
   };
@@ -160,6 +161,7 @@ export interface AppDef {
   /** Store availability, copied from the catalog (see ClientDef.storeGap). */
   storeGap?: ClientDef['storeGap'];
   storePrice?: ClientDef['storePrice'];
+  storePriceAsOf?: ClientDef['storePriceAsOf'];
   storeNameAlike?: ClientDef['storeNameAlike'];
   /** The catalog's mark on the app's local proxy; the page warns on `off-by-default`. */
   localProxyAuth?: ClientDef['localProxyAuth'];

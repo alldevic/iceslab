@@ -16,6 +16,34 @@ export function tunnelQuery(n: { nodeName: string; id?: string; device?: number 
 }
 
 /**
+ * The `.conf` file of ONE tunnel: `subUrl` + `format=wgconf` + the tunnel's
+ * query, with plain WireGuard naming its kind (`protocols=wireguard`). The
+ * addresses of `tunnelConfigUrls` and the shop's download buttons (14.7) are
+ * this one string. The caller has already left out a host switched off for
+ * `wgconf`.
+ */
+export function tunnelFileUrl(
+  subUrl: string,
+  protocol: 'amneziawg' | 'wireguard',
+  n: { nodeName: string; id?: string; device?: number },
+): string {
+  const url = `${subUrl}?format=wgconf&${tunnelQuery(n)}`;
+  return protocol === 'wireguard' ? withProtocols(url, ['wireguard']) : url;
+}
+
+/**
+ * The subscription page opened on ONE tunnel's QR: the preselect link
+ * (`wantsTunnelPreselect`) with the `#scan` anchor. The shop's "Or scan a QR
+ * code" button (14.7) opens it. No `format=`: it is the page a browser gets.
+ */
+export function tunnelScanUrl(
+  subUrl: string,
+  n: { nodeName: string; id?: string; device?: number },
+): string {
+  return `${subUrl}?${tunnelQuery(n)}#scan`;
+}
+
+/**
  * The addresses of the files a tunnel endpoint hands out, `configUrls` of the
  * `json` format: `wgconf` (wg-quick, any WireGuard client) and, for AmneziaWG,
  * `amneziavpn` (the vpn:// key). `subUrl` is the subscription address, no
@@ -35,8 +63,11 @@ export function tunnelConfigUrls(
   const q = tunnelQuery({ nodeName: e.nodeName, id: endpointId(e), device: e.deviceIndex });
   const urls: { wgconf?: string; amneziavpn?: string } = {};
   if (!formatDisabledForHost(e.disableForFormats, 'wgconf')) {
-    const url = `${subUrl}?format=wgconf&${q}`;
-    urls.wgconf = e.protocol === 'wireguard' ? withProtocols(url, ['wireguard']) : url;
+    urls.wgconf = tunnelFileUrl(subUrl, e.protocol, {
+      nodeName: e.nodeName,
+      id: endpointId(e),
+      device: e.deviceIndex,
+    });
   }
   if (e.protocol === 'amneziawg' && !formatDisabledForHost(e.disableForFormats, 'amneziavpn')) {
     urls.amneziavpn = `${subUrl}?format=amneziavpn&${q}`;
