@@ -41,8 +41,11 @@ RUN node fetch-cores.mjs ./core-versions.ts /cores "$CORE_ARCHES"
 # serves to clients, checks a sing-box template), taken out of the archive just
 # verified above: the pinned release, of the architecture this image is built
 # for. No second download and no second pin. A build for an architecture not in
-# CORE_ARCHES stops here: the image must carry its own sing-box. cgo-free Go, so
-# it runs on alpine's musl as it is (build checks: .github/scripts/image-checks.sh).
+# CORE_ARCHES stops here: the image must carry its own sing-box. The binary is
+# cgo, linked against glibc (libc.so.6, libdl, libpthread), so the runtime stage
+# adds gcompat, the shim that lets it run on alpine's musl; without it
+# `sing-box version` is "not found" (exit 127). The check is check_singbox in
+# .github/scripts/image-checks.sh.
 ARG TARGETARCH
 RUN set -eu; \
     case "${TARGETARCH:-$(uname -m)}" in \
@@ -170,6 +173,8 @@ RUN rm -rf \
 
 # ───── Runtime stage ─────
 FROM node:${NODE_VERSION} AS runtime
+# gcompat: the glibc shim for the glibc-linked sing-box below (see the cores stage).
+RUN apk add --no-cache gcompat
 # NODE_OPTIONS heap cap: without it, Node's auto-sizing on small-RAM containers
 # (2 GB VPS) settles around a 60 MB heap, which sits at 95%+ pressure under
 # normal load. GC runs every second, CPU bursts repeatedly, dashboard shows

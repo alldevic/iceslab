@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Checks on the BUILT backend image (what ships), not on the source tree.
 #
-#   image-checks.sh content|cores|meta|migrate|boot|wait|health|no-redis|all
+#   image-checks.sh content|cores|singbox|meta|migrate|boot|wait|health|no-redis|all
 #   image-checks.sh local        # throwaway Postgres + Redis, then `all`
 #
 # CI (the `smoke` job) calls the subcommands one step each; the same script runs
@@ -368,6 +368,7 @@ all() {
 case "${1:-all}" in
   content) check_content ;;
   cores) check_cores; check_core_arches ;;
+  singbox) check_singbox ;;
   meta) check_meta ;;
   migrate) check_migrate ;;
   boot) do_boot ;;
@@ -376,5 +377,5 @@ case "${1:-all}" in
   no-redis) check_no_redis ;;
   all) all ;;
   local) run_local ;;
-  *) echo "usage: $0 content|cores|meta|migrate|boot|wait|health|no-redis|all|local" >&2; exit 2 ;;
+  *) echo "usage: $0 content|cores|singbox|meta|migrate|boot|wait|health|no-redis|all|local" >&2; exit 2 ;;
 esac
