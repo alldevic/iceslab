@@ -89,6 +89,43 @@ WORKDIR /repo
 RUN --mount=type=cache,id=pnpm,target=/root/.pnpm-store \
     pnpm install --frozen-lockfile --store-dir /root/.pnpm-store --prod --prefer-offline --filter "@iceslab/panel-backend..."
 
+# Strip the sources too. The runtime stage copies /repo wholesale, so whatever
+# survives this line is what an operator ends up hosting on their VPS: the
+# sources and tests of apps/panel-backend, its tooling configs and a copy of
+# this Dockerfile. None of it is reachable from `node dist/index.js` (tsc
+# emitted every one of those files into dist/) and none of it is secret. The
+# removal sits in the builder, before `COPY --from=builder`, so the runtime
+# layers shrink; deleting after the COPY would not.
+#
+# What must NOT go:
+#   * packages/shared/src - its package entry IS src/index.ts, and the builder
+#     emits the .js siblings next to the .ts precisely so plain node resolves
+#     them. recipes.snapshot.json lives there too and is read at runtime.
+#   * packages/shared/recipe.schema.json - read at runtime by the recipes
+#     module (recipeJsonSchemaPath).
+#   * apps/panel-backend/package.json - read by the system module (version).
+#   * prisma/ and prisma.config.ts - `docker compose run --rm migrate` runs
+#     `pnpm exec prisma migrate deploy` out of this same image and reads both.
+#   * the workspace manifests at /repo - that same pnpm invocation needs them.
+#
+# scripts/ goes whole: reset-admin.ts needs tsx, a dev dependency that the
+# prod install above has already removed, so it never ran from the image.
+# The checks that this list stays right (and stays short of the runtime's
+# own files) run against the built image: .github/scripts/image-checks.sh.
+RUN rm -rf \
+      /repo/apps/panel-backend/src \
+      /repo/apps/panel-backend/tests \
+      /repo/apps/panel-backend/scripts \
+      /repo/apps/panel-backend/vitest.config.ts \
+      /repo/apps/panel-backend/tsconfig.json \
+      /repo/apps/panel-backend/tsconfig.scripts.json \
+      /repo/apps/panel-backend/eslint.config.js \
+      /repo/apps/panel-backend/Dockerfile \
+      /repo/apps/panel-backend/README.md \
+      /repo/packages/shared/tsconfig.json \
+      /repo/packages/shared/testdata \
+      /repo/packages/shared/README.md
+
 # ───── Runtime stage ─────
 FROM node:${NODE_VERSION} AS runtime
 # NODE_OPTIONS heap cap: without it, Node's auto-sizing on small-RAM containers

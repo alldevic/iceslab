@@ -1264,38 +1264,33 @@ jobs:
           tags: iceslab-backend:smoke
           cache-from: type=gha,scope=iceslab-backend
 
+      # The checks below are one script, .github/scripts/image-checks.sh, so the
+      # same assertions run on a developer machine (`image-checks.sh local`)
+      # and not only here. The step names are what the other image checks
+      # (cores in the image, nginx paths) hang their assertions on.
+      - name: Image content (no sources, tests, scripts, env, git)
+        run: .github/scripts/image-checks.sh content
+
+      - name: Image metadata (non-root user, CMD file exists)
+        run: .github/scripts/image-checks.sh meta
+
       - name: Migrate and boot
         run: |
           set -euo pipefail
-          DB='postgres://ice:ice@172.17.0.1:5432/iceslab_smoke'
-          # Migrations run from the image too: a migration that only applies
-          # from a developer checkout is not a migration that ships.
-          docker run --rm --network host -e DATABASE_URL="$DB" \
-            --entrypoint sh iceslab-backend:smoke \
-            -c 'cd /app/apps/panel-backend && pnpm exec prisma migrate deploy'
-          docker run -d --name smoke --network host \
-            -e DATABASE_URL="$DB" \
-            -e REDIS_URL='redis://172.17.0.1:6379/0' \
-            -e JWT_SECRET='ci-smoke-secret-must-be-at-least-32-chars' \
-            -e PUBLIC_URL='https://panel.smoke.test' \
-            -e NODE_ENV='production' \
-            iceslab-backend:smoke
+          # Migrations run from the image too, twice: the second run must find
+          # nothing to apply.
+          .github/scripts/image-checks.sh migrate
+          .github/scripts/image-checks.sh boot
 
       - name: Wait for /health
         id: health
-        run: |
-          set -euo pipefail
-          for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:3000/health >/dev/null; then
-              echo "panel answered after ${i}s"
-              echo "seconds=${i}" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "panel never answered on /health"
-          docker logs smoke || true
-          exit 1
+        run: .github/scripts/image-checks.sh wait
+
+      - name: Health probe (installer's tool is in the image, HEALTHCHECK goes healthy)
+        run: .github/scripts/image-checks.sh health
+
+      - name: Start without Redis (degraded, alive, recovers)
+        run: .github/scripts/image-checks.sh no-redis
 
       - name: Container logs on failure
         if: failure()
@@ -1312,7 +1307,11 @@ jobs:
             else
               echo "- pull request: nothing is published, so the image was built here"
             fi
-            echo "- migrations applied from inside the image, then \`/health\` answered after ${{ steps.health.outputs.seconds || '-' }}s"
+            echo "- image content: no sources, tests, scripts, \`.env*\`, \`.git\`; shared sources and recipe files present"
+            echo "- image metadata: non-root user, the file named in \`CMD\` exists"
+            echo "- migrations applied from inside the image, a second run had nothing to apply, then \`/health\` answered after ${{ steps.health.outputs.seconds || '-' }}s"
+            echo "- the installer's health probe tool is in the image; \`HEALTHCHECK\` reached healthy"
+            echo "- Redis stopped: \`/health\` 503 and the process alive; Redis back: 200"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ───────────────────────────────────────────────────────────────────────
