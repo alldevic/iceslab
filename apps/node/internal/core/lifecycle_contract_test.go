@@ -3,6 +3,7 @@ package core_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -41,13 +42,17 @@ import (
 //
 //   - Healthy: mtproto, shadowsocks, naive, xray, sing-box and hysteria own a
 //     subprocess and ask whether it runs; amneziawg asks the kernel about its
-//     interface; mieru asks nothing. In config-only mode the first group and
-//     amneziawg answer from their own started flag.
+//     interface; mieru asks `mita status` (cached) when it has a binary and
+//     is not waiting for its first user. In config-only mode the first group,
+//     amneziawg and mieru answer from their own started flag.
 //   - hysteria: Start brings up the local auth-callback listener and writes no
 //     config; ApplyInbound writes it. It has no Provisioned. Its own half is
 //     covered in core/hysteria (startup_test.go, idle_test.go).
 //   - mieru: Start renders nothing (A-153); the inbounds arrive through
-//     ApplyInbound, which is also what renders. Healthy is the started flag.
+//     ApplyInbound, which is also what renders. Healthy is the started flag
+//     only without a binary (and while waiting for the first user); with one
+//     it asks mita (6.1), which this table cannot, so the exceptions below
+//     are of config-only mode and say so.
 //   - sing-box: the inbound arrives through ApplyInbound, not Config. Healthy
 //     with no inbound is the started flag.
 //
@@ -63,9 +68,15 @@ import (
 // Known differences that read like defects, recorded not fixed here (the row
 // fields below name each):
 //
-//   - mieru and sing-box answer Healthy=true after a Start that deferred, and
-//     after Idle: Healthy is "the agent is started", not "the core serves";
-//     Provisioned is what tells the panel it is unconfigured.
+//   - sing-box answers Healthy=true after a Start that deferred, and after
+//     Idle: Healthy is "the agent is started", not "the core serves";
+//     Provisioned is what tells the panel it is unconfigured. Kept on purpose
+//     (decision of 26.11.2026, milestone 6.3): sing-box stays an explicit
+//     exception, base behaviour.
+//   - mieru does the same only in config-only mode, where there is no mita to
+//     ask. Since 6.1 its Healthy asks `mita status` when a binary is set, so
+//     the old reading "Healthy is the started flag" is no longer true of a
+//     real node; the covering tests are in core/mieru.
 //   - xray's Idle only acts on a live process, so with no binary it changes
 //     nothing.
 
@@ -105,6 +116,18 @@ type adapterCase struct {
 	healthyWhenDefer  string // a deferred Start still leaves Healthy true
 	idleKeepsHealthy  string // after Idle (config-only) Healthy is still true
 	idleNeverRecovers string // reapply is not asked: no applied config to return to
+
+	// The config-write contract (config_write_contract_test.go).
+	//
+	// rewrite changes the config the adapter holds, generation gen (1, 2, ...),
+	// so that it writes the file again: the unchanged-skip guards in ApplyInbound
+	// make a repeated push write nothing. Nil means Start is what writes the
+	// file, and a second Start is the rewrite.
+	rewrite func(t *testing.T, a core.CoreAdapter, gen int)
+	// configNeedsBinary: the adapter writes its config only with a binary to
+	// run (the config is checked by the binary before it is put in place), so
+	// the config-only mode this table runs in never writes one.
+	configNeedsBinary string
 }
 
 func rawJSON(s string) json.RawMessage { return json.RawMessage(s) }
@@ -235,16 +258,26 @@ func cases() []adapterCase {
 			noConfigOnStart:  "the config is written by ApplyInbound, which build runs before Start",
 			healthyWhenDefer: "Healthy with no inbound is the started flag: the agent is up, it has nothing to run (adapter.go Healthy)",
 			idleKeepsHealthy: "Idle drops the process and the inbounds and keeps the adapter started, by design (adapter.go Idle)",
+			configNeedsBinary: "regenerateAndRestart returns before rendering with no BinaryPath, and the config is " +
+				"checked by `sing-box check` before it is written: no binary, no file. The write itself is " +
+				"atomicfile.Write (adapter.go regenerateAndRestart); the live cases run with SINGBOX_BIN",
 		},
 		{
 			name: "hysteria",
 			// No Provisionable, and Start writes no config: it brings up the
 			// auth callback, ApplyInbound writes the file.
 			build: func(t *testing.T, _ bool) (core.CoreAdapter, string) {
+				cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+				// ConfigPath set: ApplyInbound writes the YAML (unset, it
+				// accepts in memory only). ServiceUnit empty: no systemctl.
 				return hysteria.New(hysteria.Config{
 					AuthCallbackHost: "127.0.0.1",
 					AuthCallbackPort: freePort(t),
-				}, quiet()), ""
+					ConfigPath:       cfgPath,
+				}, quiet()), cfgPath
+			},
+			rewrite: func(t *testing.T, a core.CoreAdapter, gen int) {
+				mustApply(t, a, 443, fmt.Sprintf(`{"hostname":"hy.example.com","obfsPassword":"o%d"}`, gen))
 			},
 			noConfigOnStart:   "Start brings up the auth callback; ApplyInbound writes the config",
 			idleKeepsHealthy:  "Idle acts only where systemd runs hysteria (ServiceUnit set); here it is a no-op",
@@ -267,10 +300,13 @@ func cases() []adapterCase {
 				}
 				return a, cfgPath
 			},
-			reapply:          func(t *testing.T, a core.CoreAdapter) { mustApply(t, a, 2012, `{"mtu":1400}`) },
+			reapply: func(t *testing.T, a core.CoreAdapter) { mustApply(t, a, 2012, `{"mtu":1400}`) },
+			rewrite: func(t *testing.T, a core.CoreAdapter, gen int) {
+				mustApply(t, a, 2012, fmt.Sprintf(`{"mtu":%d}`, 1300+gen*10))
+			},
 			noConfigOnStart:  "Start renders nothing (A-153); the config is written by ApplyInbound, which build runs before Start",
-			healthyWhenDefer: "Healthy is the started flag (adapter.go Healthy); an unconfigured mieru reads started and is told apart by Provisioned",
-			idleKeepsHealthy: "Idle stops mita and forgets the inbounds, and leaves started alone (adapter.go Idle)",
+			healthyWhenDefer: "config-only mode (no BinaryPath): Healthy has no mita to ask and is the started flag (adapter.go Healthy); with a binary it asks `mita status`. An unconfigured mieru is told apart by Provisioned",
+			idleKeepsHealthy: "config-only mode: Idle forgets the inbounds and leaves started alone, and Healthy has no mita to ask (adapter.go Idle, Healthy)",
 		},
 	}
 }

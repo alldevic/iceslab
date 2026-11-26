@@ -232,12 +232,36 @@ func TestXrayFamilyApplyInboundGuards(t *testing.T) {
 		"self-steal":          `{"subprotocol":"vless","realityMode":"self-steal",` + reality + `}`,
 		"cascade":             `{"subprotocol":"vless","cascade":{"x":1},` + reality + `}`,
 		"tls security":        `{"subprotocol":"vless","security":"tls",` + reality + `}`,
+		"warp":                `{"subprotocol":"vless","warp":{"secretKey":"k"},` + reality + `}`,
+		"realityXver":         `{"subprotocol":"vless","realityXver":1,` + reality + `}`,
+		"fallback upload":     `{"subprotocol":"vless","realityLimitFallbackUploadBytesPerSec":1000,` + reality + `}`,
+		"fallback download":   `{"subprotocol":"vless","realityLimitFallbackDownloadBytesPerSec":1000,` + reality + `}`,
 		"bad subprotocol":     `{"subprotocol":"shadowtls",` + reality + `}`,
 		"missing reality key": `{"subprotocol":"vless","realityServerNames":["a.example"],"realityShortIds":["ab"]}`,
 	}
 	for name, cfg := range cases {
 		if err := a.ApplyInbound(443, json.RawMessage(cfg)); err == nil {
 			t.Errorf("%s: expected ApplyInbound to error, got nil", name)
+		}
+	}
+}
+
+// The knobs refused above are off at zero, absent or null: a push that names
+// them off is the panel's usual wire and must be accepted.
+func TestXrayFamilyApplyInboundOffKnobsAccepted(t *testing.T) {
+	a := New(Config{Protocol: "xray"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	reality := `"realityPrivateKey":"k","realityServerNames":["a.example"],"realityShortIds":["ab"]`
+	cases := map[string]string{
+		"absent": `{"subprotocol":"vless",` + reality + `}`,
+		"zero":   `{"subprotocol":"vless","realityXver":0,"realityLimitFallbackUploadBytesPerSec":0,"realityLimitFallbackDownloadBytesPerSec":0,` + reality + `}`,
+		"null":   `{"subprotocol":"vless","warp":null,"cascade":null,` + reality + `}`,
+	}
+	for name, cfg := range cases {
+		if err := a.ApplyInbound(443, json.RawMessage(cfg)); err != nil {
+			t.Errorf("%s: ApplyInbound: %v", name, err)
 		}
 	}
 }

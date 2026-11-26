@@ -228,6 +228,77 @@ describe('an xray-family profile on the sing-box engine', () => {
   });
 });
 
+describe.each([
+  ['realityXver', 1],
+  ['realityLimitFallbackUploadBytesPerSec', 1000],
+  ['realityLimitFallbackDownloadBytesPerSec', 1000],
+] as const)('REALITY knob %s on the sing-box engine', (field, value) => {
+  it('is refused at create with the field in the path, and a zero saves', async () => {
+    const res = await create(`sb-${field}`, { ...reality, [field]: value }, 'singbox');
+    expect(res.statusCode, res.body).toBe(400);
+    expect(issuePath(res.body)).toEqual(['config', field]);
+    const off = await create(`sb-${field}-off`, { ...reality, [field]: 0 }, 'singbox');
+    expect(off.statusCode, off.body).toBe(201);
+  });
+
+  it('is refused when the engine changes to sing-box, and when a config edit sets it', async () => {
+    const created = await create(`xr-${field}`, { ...reality, [field]: value }, 'xray');
+    expect(created.statusCode, created.body).toBe(201);
+    const id = JSON.parse(created.body).id as string;
+    const move = await app.inject({ method: 'PUT', url: `/api/profiles/${id}`, headers: auth(), payload: { engine: 'singbox' } });
+    expect(move.statusCode, move.body).toBe(400);
+    expect(JSON.parse(move.body)).toMatchObject({ error: 'SINGBOX_XRAY_FAMILY', path: ['config', field] });
+    expect((await prisma.profile.findUniqueOrThrow({ where: { id } })).engine).toBe('xray');
+
+    const sb = await create(`sb-edit-${field}`, reality, 'singbox');
+    const sbId = JSON.parse(sb.body).id as string;
+    const edit = await app.inject({
+      method: 'PUT',
+      url: `/api/profiles/${sbId}`,
+      headers: auth(),
+      payload: { config: { ...reality, [field]: value } },
+    });
+    expect(edit.statusCode, edit.body).toBe(400);
+    expect(JSON.parse(edit.body)).toMatchObject({ error: 'SINGBOX_XRAY_FAMILY', path: ['config', field] });
+  });
+
+  it('is refused in the overrides of a binding, on create and on edit; a zero passes', async () => {
+    const created = await create(`sb-bind-${field}`, reality, 'singbox');
+    const profileId = JSON.parse(created.body).id as string;
+    const node = await app.inject({
+      method: 'POST',
+      url: '/api/nodes',
+      headers: auth(),
+      payload: { name: `node-${field}`, address: '10.0.0.11:8443' },
+    });
+    const nodeId = JSON.parse(node.body).id as string;
+    const bad = await app.inject({
+      method: 'POST',
+      url: '/api/bindings',
+      headers: auth(),
+      payload: { profileId, nodeId, port: 8443, overrides: { [field]: value } },
+    });
+    expect(bad.statusCode, bad.body).toBe(400);
+    expect(JSON.parse(bad.body)).toMatchObject({ error: 'SINGBOX_XRAY_FAMILY', path: ['overrides', field] });
+
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/api/bindings',
+      headers: auth(),
+      payload: { profileId, nodeId, port: 8443, overrides: { [field]: 0 } },
+    });
+    expect(ok.statusCode, ok.body).toBe(201);
+    const edit = await app.inject({
+      method: 'PUT',
+      url: `/api/bindings/${JSON.parse(ok.body).id as string}`,
+      headers: auth(),
+      payload: { overrides: { [field]: value } },
+    });
+    expect(edit.statusCode, edit.body).toBe(400);
+    expect(JSON.parse(edit.body)).toMatchObject({ error: 'SINGBOX_XRAY_FAMILY', path: ['overrides', field] });
+  });
+});
+
 describe('singboxRefusesXrayField', () => {
   it('mirrors the agent: absent values pass, socks and http are not its question', () => {
     expect(singboxRefusesXrayField('xray', 'singbox', {})).toBeNull();
@@ -237,5 +308,24 @@ describe('singboxRefusesXrayField', () => {
     expect(singboxRefusesXrayField('shadowsocks', 'singbox', { network: 'ws' })).toBeNull();
     // The legacy alias the agent does not map either.
     expect(singboxRefusesXrayField('xray', 'singbox', { network: 'tcp' })).toBe('network');
+  });
+});
+
+describe('REALITY knobs sing-box has no equivalent for', () => {
+  const base = { security: 'reality', realityMode: 'steal-others', network: 'raw' };
+  it('a set xver or fallback limit is refused on sing-box, named by its field', () => {
+    expect(singboxRefusesXrayField('xray', 'singbox', { ...base, realityXver: 1 })).toBe('realityXver');
+    expect(singboxRefusesXrayField('xray', 'singbox', { ...base, realityLimitFallbackUploadBytesPerSec: 1000 })).toBe(
+      'realityLimitFallbackUploadBytesPerSec',
+    );
+    expect(singboxRefusesXrayField('xray', 'singbox', { ...base, realityLimitFallbackDownloadBytesPerSec: 1000 })).toBe(
+      'realityLimitFallbackDownloadBytesPerSec',
+    );
+  });
+
+  it('0 is off and passes; on the xray engine all of them are fine', () => {
+    const off = { ...base, realityXver: 0, realityLimitFallbackUploadBytesPerSec: 0, realityLimitFallbackDownloadBytesPerSec: 0 };
+    expect(singboxRefusesXrayField('xray', 'singbox', off)).toBeNull();
+    expect(singboxRefusesXrayField('xray', null, { ...base, realityXver: 2 })).toBeNull();
   });
 });

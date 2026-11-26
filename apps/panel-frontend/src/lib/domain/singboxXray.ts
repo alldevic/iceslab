@@ -19,7 +19,16 @@ const CODE = 'SINGBOX_XRAY_FAMILY';
 
 // realityServerNames since A-159 (96aee27a): sing-box takes one REALITY
 // server name, a list of more is refused on that field.
-export const SINGBOX_XRAY_FIELDS = ['security', 'realityMode', 'network', 'realityServerNames'] as const;
+export const SINGBOX_XRAY_FIELDS = [
+  'security',
+  'realityMode',
+  'network',
+  'realityServerNames',
+  // REALITY knobs sing-box has no equivalent for.
+  'realityXver',
+  'realityLimitFallbackUploadBytesPerSec',
+  'realityLimitFallbackDownloadBytesPerSec',
+] as const;
 export type SingboxXrayField = (typeof SINGBOX_XRAY_FIELDS)[number];
 
 export interface SingboxXrayRefusal {
