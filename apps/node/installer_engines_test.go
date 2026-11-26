@@ -163,6 +163,28 @@ func TestInstallerTakesTheSetAndTheFlagsFollowTheirCore(t *testing.T) {
 		}
 	}
 
+	// The private key alone pre-fills (the agent asks for nothing else): short
+	// ids may be empty, a REALITY client sending an empty short id.
+	r = runInstallWith(t, true, "", "xray", false, "XR_PRIVATE_KEY='priv'")
+	if r.err != nil {
+		t.Fatalf("%v\n%s", r.err, r.out)
+	}
+	for _, want := range []string{
+		"XRAY_REALITY_PRIVATE_KEY=priv\n",
+		"XRAY_REALITY_SHORT_IDS=\n",
+		"XRAY_REALITY_SERVER_NAMES=www.cloudflare.com\n",
+		"XRAY_PORT=443\n",
+	} {
+		if !strings.Contains(r.env, want) {
+			t.Errorf("the key alone: the env lacks %q:\n%s", want, r.env)
+		}
+	}
+	// No key, nothing: short ids alone are not a pre-seed.
+	r = runInstallWith(t, true, "", "xray", false, "XR_SHORT_IDS='ab12'")
+	if r.err != nil || strings.Contains(r.env, "XRAY_REALITY_") {
+		t.Errorf("short ids without a key wrote a block: %v\n%s", r.err, r.env)
+	}
+
 	// A flag of a core the node does not get writes nothing.
 	r = runInstallWith(t, true, "", "xray", false, "HY_DOMAIN='hy.example.com'\nHY_EMAIL='ops@example.com'")
 	if r.err != nil || strings.Contains(r.env, "HYSTERIA_") {
@@ -319,10 +341,44 @@ func TestHysteriaFlagsAreCheckedBeforeTheTokenIsRedeemed(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(blob)
-	check := strings.Index(s, "\ncheck_hysteria_flags\n")
+	// Indented: the checks sit in the block --uninstall skips.
+	check := regexp.MustCompile(`(?m)^\s*check_hysteria_flags$`).FindStringIndex(s)
 	redeem := strings.Index(s, "/api/internal/bootstrap/$BOOTSTRAP_TOKEN")
-	if check == -1 || redeem == -1 || check > redeem {
-		t.Errorf("check_hysteria_flags at %d, the redemption at %d", check, redeem)
+	if check == nil || redeem == -1 || check[0] > redeem {
+		t.Errorf("check_hysteria_flags at %v, the redemption at %d", check, redeem)
+	}
+}
+
+// ab309130: the --xray-* flags reach one place, the REALITY block of a node with
+// xray and a private key. Anywhere else they are refused by name, before the
+// token (the hysteria flags on a node without hysteria stay a silent no-op, see
+// above: a deliberate difference).
+func TestXrayFlagsAreRefusedByNameWhereTheyCannotAct(t *testing.T) {
+	bash := needBash(t)
+	for _, c := range []struct {
+		name, protocol, engines, given, key string
+		refused                             bool
+		says                                string
+	}{
+		{"no xray", "", "hysteria", " --xray-port", "", true, "--xray-port: the REALITY pre-seed is written only on a node with xray"},
+		{"no xray, with a key", "", "hysteria", " --xray-reality-private-key", "k", true, "--xray-reality-private-key: the REALITY pre-seed"},
+		{"no core at all", "", "", " --xray-reality-dest", "", true, "no core"},
+		{"xray, no key", "", "xray", " --xray-port --xray-reality-short-ids", "", true, "--xray-port --xray-reality-short-ids needs --xray-reality-private-key"},
+		{"xray and the key", "", "xray", " --xray-reality-private-key --xray-port", "k", false, ""},
+		{"the key alone", "", "xray", " --xray-reality-private-key", "k", false, ""},
+		{"shadowsocks runs on xray", "shadowsocks", "", " --xray-reality-private-key", "k", false, ""},
+		{"no flag given", "", "hysteria", "", "", false, ""},
+	} {
+		prog := "set -euo pipefail\nlog() { :; }\nwarn() { :; }\nfail() { echo \"fail: $*\"; exit 1; }\n" + coresSection(t) + "\n" +
+			"PROTOCOL='" + c.protocol + "'\nENGINES_ARG='" + c.engines + "'\nENGINES_GIVEN=0\nWITH_SINGBOX=0\n" +
+			"XR_FLAGS_GIVEN='" + c.given + "'\nXR_PRIVATE_KEY='" + c.key + "'\nresolve_engines\ncheck_xray_flags\necho checked\n"
+		out, err := exec.Command(bash, "-c", prog).CombinedOutput()
+		if c.refused != (err != nil) || c.refused == strings.Contains(string(out), "checked") {
+			t.Errorf("%s: refused=%v want %v:\n%s", c.name, err != nil, c.refused, out)
+		}
+		if c.says != "" && !strings.Contains(string(out), c.says) {
+			t.Errorf("%s: the output lacks %q:\n%s", c.name, c.says, out)
+		}
 	}
 }
 

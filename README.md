@@ -100,14 +100,16 @@ The flags a panel's command uses, for reading or adjusting it:
 | `--hysteria-port-range <a-b>` | Port hopping range, default `20000-50000`; `""` turns it off. |
 | `--harden-ufw` | Rate-limit SSH and tighten the firewall. |
 | `--fail2ban` | Install fail2ban with jails for sshd and Hysteria auth. |
-| `--ssh-allowlist <csv>` | Allow 22/tcp only from these IPs or CIDRs. |
+| `--ssh-allowlist <csv>` | Allow the SSH port only from these IPs or CIDRs. A world-open SSH rule left by an earlier install is removed once the narrow ones are in, when the address of the current session is known. |
+| `--ssh-port <port>` | The port sshd listens on, default `22`: every SSH firewall rule and the fail2ban jail use it. The port of the current session is allowed too. |
 | `--realistic-fallback` | A real-looking fallback for probes. |
 | `--reset` | Wipe a previous install on this VPS first. |
-| `--uninstall` | Remove the agent and its cores (`--keep-cores` leaves the cores). |
+| `--uninstall` | Remove the agent, its cores and the firewall rules it opened (`--keep-cores` leaves the cores, and their rules). Your own `/etc/fail2ban/jail.local` stays; so does ufw's forward policy, which an AmneziaWG install set to ACCEPT. |
+| `--help` | Print the flags and leave: no root needed, nothing is touched. |
 
 `--payload-file <path>` (or `--payload`) installs from the node's payload instead of a bootstrap token, for example a file copied over with scp. The panel shows the payload once, when the node is created: download it then. A panel whose `PUBLIC_URL` is not https prints this command instead of the bootstrap one, since the installer redeems a token over https only.
 
-The installer accepts a few more, which a panel's command does not use: `--hysteria-masquerade-url`, `--hysteria-obfs-password`, `--xray-port`, `--xray-reality-public-key`. Commands printed by older panels keep working: the installer still accepts their spellings (`--protocol`, `--with-singbox`, `--xray-reality-*`).
+The installer accepts a few more, which a panel's command does not use: `--hysteria-masquerade-url`, `--hysteria-obfs-password` (both do nothing: the profile decides), and the REALITY pre-fill `--xray-reality-private-key`, `--xray-reality-short-ids`, `--xray-reality-server-names`, `--xray-reality-dest`, `--xray-port`: the private key alone is enough, and any of them without xray in `--engines` or without the key is refused by name before the token is spent. Commands printed by older panels keep working: the installer still accepts their spellings (`--protocol`, `--with-singbox`, `--xray-reality-*`).
 
 Per core:
 

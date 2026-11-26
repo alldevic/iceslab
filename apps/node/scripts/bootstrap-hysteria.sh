@@ -181,7 +181,7 @@ port_hopping() {
   # as long as packets flow, which for a WireGuard tunnel is forever. The agent
   # drops those entries with `conntrack`, so the tool comes with the redirect.
   if ! command -v conntrack >/dev/null 2>&1; then
-    DEBIAN_FRONTEND=noninteractive apt-get install -y conntrack >/dev/null 2>&1 \
+    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y conntrack >/dev/null 2>&1 \
       || warn "could not install conntrack; a flow caught by the redirect before the agent guards its port keeps it until it goes idle"
   fi
   # The rule of the range it had, taken down by the helper that knows it: once

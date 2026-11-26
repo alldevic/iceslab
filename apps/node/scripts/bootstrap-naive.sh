@@ -103,8 +103,8 @@ log "Detected $PRETTY_NAME"
 
 # ───── 2. Prereqs ─────
 log "Installing apt prereqs (curl, ca-certificates, git)"
-DEBIAN_FRONTEND=noninteractive apt-get update -y
-DEBIAN_FRONTEND=noninteractive apt-get install -y \
+DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 update -y
+DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y \
   curl ca-certificates git build-essential
 
 # ───── 3. Go toolchain ─────

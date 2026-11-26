@@ -83,6 +83,9 @@
 #     --xray-reality-server-names www.cloudflare.com \
 #     --xray-reality-dest www.cloudflare.com:443
 #   # Optional: --xray-port 443
+#   # The private key alone is enough to pre-fill (short ids may be empty). Any
+#   # --xray-* flag without xray among the cores, or without the private key,
+#   # is refused by name before the bootstrap token is spent.
 #
 # AmneziaWG / NaiveProxy / Shadowsocks / MTProto / Mieru: these protocols
 # take no install-time flags; they start idle and wait for the panel to push
@@ -95,13 +98,27 @@
 # wizard; all default off (a node without them installs identically):
 #   --harden-ufw            rate-limit SSH (ufw limit) + tighten the firewall
 #   --fail2ban              install + enable fail2ban with an sshd jail
-#   --ssh-allowlist <csv>   lock 22/tcp to these IP/CIDRs only (comma-list)
+#   --ssh-allowlist <csv>   lock SSH to these IP/CIDRs only (comma-list)
+#   --ssh-port <port>       the port sshd listens on, default 22. Every SSH
+#                           rule of the firewall and the fail2ban jail use it;
+#                           the port this session arrived on (SSH_CONNECTION)
+#                           is allowed as well, so ufw cannot cut it. Pass it if
+#                           you moved sshd: ufw would open a port sshd is not on.
+#   --panel-ip <ip|cidr>    allow only this address (or comma-list) to reach
+#                           the agent's mTLS port. Without it the port is open
+#                           to the whole internet: mTLS turns everyone away,
+#                           but the handshakes still cost CPU and the cert
+#                           names what this box is. Give it the panel's IP.
 #   --realistic-fallback    record REALISTIC_FALLBACK=1 in the node env so the
 #                           agent serves a real-looking fallback on probe
 # Example:
 #   bash <(curl -fsSL .../install-iceslab-node.sh) \
 #     --panel-url https://panel.example.com --bootstrap bs_xxx --protocol xray \
 #     --harden-ufw --fail2ban --ssh-allowlist 203.0.113.4,10.0.0.0/8
+#
+# Other flags:
+#   --port <n>              the port the agent listens on (default 1337).
+#   -h, --help              print this header and exit (no root, nothing touched).
 #
 # Alternative flows (file-based, for air-gapped or self-hosted gist setups):
 #   bash <(curl -fsSL .../install-iceslab-node.sh) --protocol xray --payload-file /tmp/payload.b64
@@ -133,9 +150,14 @@
 #   bash <(curl -fsSL .../install-iceslab-node.sh) --uninstall
 #     # a clean machine: stops the agent and every core, takes each core off
 #     # with its bootstrap's --remove, then removes the unit, binary,
-#     # /etc/iceslab-node, /opt/iceslab-node and the UFW allow-rule for
-#     # $NODE_PORT/tcp. Ends with "Removed: agent, ...; kept: ...".
-#     # Add --keep-cores to leave the cores on the machine (the old behaviour).
+#     # /etc/iceslab-node, /opt/iceslab-node and the UFW allow-rules: the
+#     # agent's $NODE_PORT/tcp and the protocols' open 443/tcp, 443/udp, 80/tcp
+#     # and 1234/udp (a rule that names a source address is left alone), but
+#     # not /etc/fail2ban/jail.local, which is the operator's. ufw's forward
+#     # policy, which an AmneziaWG install sets, is not restored.
+#     # Ends with "Removed: agent, ...; kept: ...".
+#     # Add --keep-cores to leave the cores on the machine (the old behaviour);
+#     # their protocol rules stay too then.
 #
 # Without either flag, an existing install triggers an interactive prompt.
 
@@ -212,7 +234,17 @@ banner() {
   printf '\n'
 }
 
-[[ $EUID -eq 0 ]] || fail "Must run as root (sudo bash $0)"
+# --help prints this file's own header and leaves, before anything else: no
+# root, no handover (so no network), no lock, no apt. The arguments are only
+# looked at, not taken: the handover below passes them on as they came. A script
+# that is a pipe ($0 is /dev/fd/N under `bash <(curl ...)`) cannot be read back,
+# so there --help goes on to the handover, which runs a copy that is a file.
+print_help() { grep '^#' "$0" | sed 's/^# \?//'; }
+if [[ -f "$0" ]]; then
+  for _arg in "$@"; do
+    case "$_arg" in -h|--help) print_help; exit 0 ;; esac
+  done
+fi
 
 ICESLAB_NODE_REPO=${ICESLAB_NODE_REPO:-https://github.com/alldevic/iceslab.git}
 ICESLAB_NODE_REF=${ICESLAB_NODE_REF:-omega}
@@ -271,15 +303,12 @@ handover_to_ref() {
 }
 handover_to_ref "$ICESLAB_NODE_REF" "$ICESLAB_NODE_REPO" scripts/install-iceslab-node.sh "$@"
 
-banner
-
 # ───── Concurrency + apt lock hygiene ─────
-# flock against concurrent runs, apt's own wait (DPkg::Lock::Timeout) on every
-# apt call, and a wait for a running apt before the first one (wait_for_apt).
-exec 9>/var/run/iceslab-node-install.lock || fail "cannot open install lockfile"
-if ! flock -n 9; then
-  fail "another install-iceslab-node.sh is already running. Wait, or remove /var/run/iceslab-node-install.lock if you're sure it crashed."
-fi
+# Definitions only down to the flag parser: root, banner, the flock against
+# concurrent runs and the wait for a running apt come after it (-1 below), so
+# --help, a typo in a flag and a refused value cost nothing on any host. apt's
+# own wait (DPkg::Lock::Timeout) goes on every apt call, and wait_for_apt
+# waits for a running apt before the first one.
 
 APT_OPTS=(-o "DPkg::Lock::Timeout=300" -o "Dpkg::Options::=--force-confold" -o "Dpkg::Options::=--force-confdef")
 APT_ENV=(env DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none)
@@ -358,7 +387,6 @@ wait_for_apt() {
   done
   dpkg --configure -a >/dev/null 2>&1 || true
 }
-wait_for_apt
 
 ICESLAB_NODE_DIR=${ICESLAB_NODE_DIR:-/opt/iceslab-node}
 # ICESLAB_NODE_REPO and ICESLAB_NODE_REF are set above, before the handover.
@@ -455,15 +483,20 @@ PANEL_IP=""
 #                          beyond the default per-protocol allows.
 #   --fail2ban           : install + enable fail2ban with an sshd jail (bans
 #                          IPs that brute-force SSH; raises probe/scan cost).
-#   --ssh-allowlist <csv>: comma-list of IP/CIDR; locks 22/tcp to these only
-#                          instead of world-open. Mirrors the --panel-ip loop.
+#   --ssh-allowlist <csv>: comma-list of IP/CIDR; locks the SSH port to these
+#                          only instead of world-open. Mirrors the --panel-ip loop.
 #   --realistic-fallback : record REALISTIC_FALLBACK=1 into the node env so the
 #                          agent serves a real-looking fallback site on probe
 #                          instead of a bare reset (active-probe resistance).
 HARDEN_UFW=0
 FAIL2BAN=0
 REALISTIC_FALLBACK=0
-SSH_ALLOWLIST=""   # comma-list of IP/CIDR; empty = keep world-open 22/tcp
+SSH_ALLOWLIST=""   # comma-list of IP/CIDR; empty = keep the SSH port world-open
+#   --ssh-port <port>    : the port sshd listens on (default 22). Every SSH rule
+#                          of the firewall block and the fail2ban jail use it, so
+#                          they cannot disagree. The port this session arrived
+#                          on (SSH_CONNECTION) is allowed as well.
+SSH_PORT="${SSH_PORT:-22}"
 
 # Hysteria 2 (only used when hysteria is a core): the domain and e-mail its
 # ACME certificate is asked for, written to the agent's env (core_flags_env);
@@ -489,11 +522,14 @@ HY_PORT_RANGE="20000-50000"
 # Without these flags the Xray adapter stays disabled until the admin edits
 # the env file manually (panel will auto-push these later).
 XR_PRIVATE_KEY=""
-XR_PUBLIC_KEY=""
 XR_SHORT_IDS=""
 XR_SERVER_NAMES="www.cloudflare.com"
 XR_DEST="www.cloudflare.com:443"
 XR_PORT="443"
+# Which of the --xray-* flags were passed. Four of them carry a non-empty
+# default, so "was it given" cannot be read off the value, and the refusal
+# (check_xray_flags) has to name the flag the operator typed.
+XR_FLAGS_GIVEN=""
 
 # Resolve a payload value: if it starts with "@", treat the rest as a path
 # and read the file content. Otherwise return as-is. Mirrors curl's `-d @file`
@@ -508,7 +544,12 @@ XR_PORT="443"
 # (uninstall_all below, E41), and --reset and --keep-cores leave them, so only
 # the config files tied to the panel's domain/email/keys are wiped here.
 # Idempotent, safe on a half-installed VPS.
+#
+# do_uninstall [keep_protocol_rules]: with 1 the ufw rules of the protocols stay
+# (--uninstall --keep-cores: the cores stay, and the operator may run them
+# themselves); --reset and a full --uninstall take them off.
 do_uninstall() {
+  local keep_protocol_rules="${1:-0}" rule
   log "Stopping iceslab-node service (if running)"
   systemctl stop iceslab-node 2>/dev/null || true
   systemctl disable iceslab-node 2>/dev/null || true
@@ -542,12 +583,12 @@ do_uninstall() {
   log "Removing env directory (/etc/iceslab-node)"
   rm -rf /etc/iceslab-node
 
-  # fail2ban: remove only our jail/filter (leave the fail2ban package
-  # installed, it may protect other services). jail.local is the legacy
-  # path written by older versions of this script.
+  # fail2ban: remove only our jail/filter and leave the package installed, it
+  # may protect other services. Not /etc/fail2ban/jail.local: no version of this
+  # script ever wrote it (the jail is jail.d/iceslab.local), and it is fail2ban's
+  # own place for local configuration, where an operator's jails live.
   rm -f /etc/fail2ban/jail.d/iceslab.local \
-        /etc/fail2ban/filter.d/iceslab-hysteria.conf \
-        /etc/fail2ban/jail.local
+        /etc/fail2ban/filter.d/iceslab-hysteria.conf
   systemctl reload fail2ban 2>/dev/null || true
 
   log "Removing source checkout ($ICESLAB_NODE_DIR)"
@@ -560,6 +601,17 @@ do_uninstall() {
     if grep -q "${NODE_PORT}/tcp" <<<"$ufw_rules"; then
       log "Removing UFW allow rule for ${NODE_PORT}/tcp"
       ufw --force delete allow "${NODE_PORT}/tcp" >/dev/null || true
+    fi
+    # The open rules the firewall step wrote for the protocols (PROTOCOL_PORTS):
+    # `delete allow <port>/<proto>` takes only that rule, never one that names a
+    # source address, so an operator's own rule for these ports stays.
+    if [[ "$keep_protocol_rules" != 1 ]]; then
+      for rule in $PROTOCOL_PORTS; do
+        if grep -Eq "^${rule}( \(v6\))?[[:space:]]+ALLOW( IN)?[[:space:]]+Anywhere" <<<"$ufw_rules"; then
+          log "Removing UFW allow rule for ${rule}"
+          ufw --force delete allow "$rule" >/dev/null || true
+        fi
+      done
     fi
   fi
 }
@@ -580,6 +632,32 @@ do_uninstall() {
 #   4. do_uninstall, which removes the checkout last.
 # --keep-cores keeps the old behaviour (1 and 4 only), for an operator who
 # keeps the cores themselves.
+
+# The open ufw rules the firewall step writes for the cores (443/tcp for xray,
+# naive, mtproto, mieru; 443/udp for hysteria, amneziawg, mieru; 80/tcp for the
+# ACME of hysteria and naive; 1234/udp for amneziawg), taken off by do_uninstall.
+PROTOCOL_PORTS="443/tcp 443/udp 80/tcp 1234/udp"
+UFW_DEFAULT_FILE=/etc/default/ufw
+PROC_ROOT=/proc
+
+# find_ssh_connection: SSH_CONNECTION of the ssh session this run belongs to,
+# for when the environment lost it (`sudo bash ...` resets it, which is the usual
+# way to run this). Walks up the process tree from this shell (PPid in
+# /proc/<pid>/status) and prints the first ancestor's SSH_CONNECTION (NUL-separated
+# in /proc/<pid>/environ, readable as root); nothing when no ancestor has one.
+find_ssh_connection() {
+  local pid=$$ val n=0
+  while [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && $n -lt 64 ]]; do
+    n=$((n + 1))
+    val="$(tr '\0' '\n' <"$PROC_ROOT/$pid/environ" 2>/dev/null | sed -n 's/^SSH_CONNECTION=//p' | head -n 1 || true)"
+    if [[ -n "$val" ]]; then
+      printf '%s' "$val"
+      return 0
+    fi
+    pid="$(sed -n 's/^PPid:[[:space:]]*//p' "$PROC_ROOT/$pid/status" 2>/dev/null || true)"
+  done
+  return 0
+}
 
 # The processes of the cores our bootstraps install, by name.
 CORE_PROCESSES="xray sing-box hysteria mtg caddy-naive mita"
@@ -680,7 +758,7 @@ uninstall_all() {
     log "Removing the cores (bootstrap-*.sh --remove)"
     remove_cores "$ICESLAB_NODE_DIR/apps/node/scripts"
   fi
-  do_uninstall
+  do_uninstall "$KEEP_CORES"
   local e
   removed="agent"
   for e in "${REMOVED_CORES[@]}"; do removed+=", $e"; done
@@ -688,6 +766,47 @@ uninstall_all() {
   for e in "${KEPT_CORES[@]}"; do kept+="${kept:+, }$e"; done
   [[ $KEEP_CORES -eq 1 ]] && kept="every core (--keep-cores)"
   log "Removed: ${removed}; kept: ${kept:-none}"
+  # An AmneziaWG install sets ufw's forward policy to ACCEPT; the uninstall does
+  # not put it back (it cannot know what it was before).
+  if grep -q '^DEFAULT_FORWARD_POLICY="ACCEPT"' "$UFW_DEFAULT_FILE" 2>/dev/null; then
+    log "Not restored: ufw's forward policy. An AmneziaWG install set DEFAULT_FORWARD_POLICY=\"ACCEPT\" in $UFW_DEFAULT_FILE (and ran 'ufw default allow routed'); set it back to DROP yourself if nothing else on this machine needs forwarding."
+  fi
+}
+
+# confirm_reinstall: the decision about a previous install (EXISTING_INSTALL),
+# taken before the bootstrap token is redeemed; it only asks and refuses, the
+# wipe is do_uninstall's, later. --reset says yes in advance. TTY_DEV is the
+# terminal the answer is read from.
+TTY_DEV=/dev/tty
+confirm_reinstall() {
+  local ans
+  [[ $EXISTING_INSTALL -eq 1 ]] || return 0
+  if [[ $RESET -eq 1 ]]; then
+    log "--reset given: wiping previous installation"
+    return 0
+  fi
+  [[ -e "$TTY_DEV" ]] || fail "Previous install detected and no /dev/tty for prompt. Pass --reset to overwrite or --uninstall to remove."
+  warn "Detected previous iceslab-node install on this VPS."
+  warn "Re-installing against a different panel without wiping state will"
+  warn "cause mTLS verification to fail (old server cert vs new panel CA)."
+  # `read -rp "..." ans </dev/tty` silently lost the keypress in the
+  # `bash <(curl ...)` process-substitution flow: the prompt printed but
+  # the read returned empty, hitting the `*` branch with "Aborted by user"
+  # even when `y` was typed. Splitting the prompt print from the read fixes
+  # it, so read has /dev/tty as a clean terminal handle without the
+  # prompt-print racing the input side.
+  printf '\033[1;33mWipe previous installation and continue? [y/N]:\033[0m '
+  # The device node is there over a non-interactive ssh too, and opening it
+  # fails: a read that fails is not a person typing "n", and "Aborted by user"
+  # about a session where nobody was asked sends the reader looking for the user.
+  if ! read -r ans 2>/dev/null <"$TTY_DEV"; then
+    printf '\n'
+    fail "Could not read the answer from $TTY_DEV (not an interactive session). Pass --reset to overwrite or --uninstall to remove."
+  fi
+  case "${ans,,}" in
+    y|yes) ;;
+    *)     fail "Aborted by user. Pass --reset to skip this prompt, or --uninstall to remove without re-installing." ;;
+  esac
 }
 
 resolve_payload() {
@@ -818,6 +937,20 @@ check_hysteria_flags() {
   fi
 }
 
+# check_xray_flags: the --xray-* flags, before anything is spent. They reach one
+# place, the REALITY block core_flags_env writes, and only on a node with xray
+# and with a private key to pre-seed from. Anywhere else they were read and
+# dropped, and the install reported success while the xray adapter waited for a
+# push. An operator who typed one meant the node to serve REALITY on boot, and a
+# re-run of a command still in the scrollback costs less than noticing late.
+# (The hysteria flags on a node without hysteria stay a silent no-op: the other
+# choice, pinned by TestInstallerTakesTheSetAndTheFlagsFollowTheirCore.)
+check_xray_flags() {
+  [[ -n "$XR_FLAGS_GIVEN" ]] || return 0
+  has_engine xray || fail "${XR_FLAGS_GIVEN# }: the REALITY pre-seed is written only on a node with xray. Add xray to --engines (this node gets: ${ENGINES[*]:-no core}) or drop the flag(s)."
+  [[ -n "$XR_PRIVATE_KEY" ]] || fail "${XR_FLAGS_GIVEN# } needs --xray-reality-private-key: without it the agent starts no REALITY inbound and the rest of the pre-seed is never written."
+}
+
 # core_flags_env: the install flags of each core in the set, into the env. By
 # the core, not by --protocol: --hysteria-domain acts on any node with
 # hysteria, a REALITY key on any node with xray.
@@ -830,7 +963,10 @@ core_flags_env() {
     if [[ -n "$HY_EMAIL" ]]; then echo "HYSTERIA_ACME_EMAIL=${HY_EMAIL}" >> "$ENV_FILE"; fi
   fi
   # Xray REALITY pre-filled from --xray-reality-*, so the adapter starts at once.
-  if has_engine xray && [[ -n "$XR_PRIVATE_KEY" && -n "$XR_SHORT_IDS" ]]; then
+  # The private key alone decides, as it does in the agent (buildXrayConfig in
+  # apps/node/main.go reads XRAY_REALITY_PRIVATE_KEY and nothing else): empty
+  # short ids are a REALITY client sending an empty short id, which is valid.
+  if has_engine xray && [[ -n "$XR_PRIVATE_KEY" ]]; then
     cat >> "$ENV_FILE" <<EOF
 XRAY_REALITY_PRIVATE_KEY=${XR_PRIVATE_KEY}
 XRAY_REALITY_SHORT_IDS=${XR_SHORT_IDS}
@@ -990,12 +1126,12 @@ while [[ $# -gt 0 ]]; do
     # stays untouched).
     --hysteria-port-range)     HY_PORT_RANGE="$2"; shift 2 ;;
     # Xray REALITY: pre-fill env so the adapter starts immediately
-    --xray-reality-private-key)  XR_PRIVATE_KEY="$2"; shift 2 ;;
-    --xray-reality-public-key)   XR_PUBLIC_KEY="$2"; shift 2 ;;
-    --xray-reality-short-ids)    XR_SHORT_IDS="$2"; shift 2 ;;
-    --xray-reality-server-names) XR_SERVER_NAMES="$2"; shift 2 ;;
-    --xray-reality-dest)         XR_DEST="$2"; shift 2 ;;
-    --xray-port)                 XR_PORT="$2"; shift 2 ;;
+    # Each is noted in XR_FLAGS_GIVEN for check_xray_flags.
+    --xray-reality-private-key)  XR_PRIVATE_KEY="$2"; XR_FLAGS_GIVEN="$XR_FLAGS_GIVEN $1"; shift 2 ;;
+    --xray-reality-short-ids)    XR_SHORT_IDS="$2"; XR_FLAGS_GIVEN="$XR_FLAGS_GIVEN $1"; shift 2 ;;
+    --xray-reality-server-names) XR_SERVER_NAMES="$2"; XR_FLAGS_GIVEN="$XR_FLAGS_GIVEN $1"; shift 2 ;;
+    --xray-reality-dest)         XR_DEST="$2"; XR_FLAGS_GIVEN="$XR_FLAGS_GIVEN $1"; shift 2 ;;
+    --xray-port)                 XR_PORT="$2"; XR_FLAGS_GIVEN="$XR_FLAGS_GIVEN $1"; shift 2 ;;
     # Re-installation flow on a VPS that already hosts a previous agent:
     #   --reset      : wipe prior state silently before installing
     #   --uninstall  : wipe prior state and exit (no install)
@@ -1012,20 +1148,64 @@ while [[ $# -gt 0 ]]; do
     --fail2ban)           FAIL2BAN=1; shift ;;
     --realistic-fallback) REALISTIC_FALLBACK=1; shift ;;
     --ssh-allowlist)      SSH_ALLOWLIST="$2"; shift 2 ;;
+    --ssh-port)           SSH_PORT="$2"; shift 2 ;;
     # The cores this node gets, comma-separated, in any order:
     # xray,singbox,hysteria,amneziawg,mtproto,mieru,naive. See resolve_engines.
     --engines)            ENGINES_ARG="$2"; ENGINES_GIVEN=1; shift 2 ;;
     # The old spelling of adding singbox, still accepted.
     --with-singbox)       WITH_SINGBOX=1; shift ;;
+    # Caught above when the script is a file; here for the one that is a pipe.
     -h|--help)
-      grep '^#' "$0" | sed 's/^# \?//'
+      print_help
       exit 0
       ;;
     *) fail "Unknown arg: $1" ;;
   esac
 done
 
-# ───── -1. Uninstall fast-path ─────
+# ───── -2. The values of the flags, before anything is touched ─────
+# Nothing above this line has done more than define and read arguments, and
+# nothing here touches the machine, so --help, a typo in a flag and a value
+# refused here cost nothing on any host, root or not, and never the one-shot
+# bootstrap token. --uninstall skips them: an install-only flag standing between
+# the operator and an uninstall is the same mistake as spending the token.
+if [[ $UNINSTALL -eq 0 ]]; then
+  # --ssh-port picks the port every SSH firewall rule opens AND the one the
+  # fail2ban jail watches. A value that is not a port makes ufw refuse each rule
+  # SILENTLY (they all end in `|| true`), and then `ufw --force enable` comes up
+  # with no SSH rule at all.
+  case "$SSH_PORT" in
+    ''|*[!0-9]*) fail "--ssh-port must be a number (got: $SSH_PORT)" ;;
+  esac
+  if [[ "$SSH_PORT" -lt 1 || "$SSH_PORT" -gt 65535 ]]; then
+    fail "--ssh-port out of range 1..65535 (got: $SSH_PORT)"
+  fi
+
+  # The cores come from --engines; --protocol (the older spelling) is optional
+  # and adds its core. Nothing named at all: the agent alone (25.09), no menu.
+  case "$PROTOCOL" in
+    ""|hysteria|xray|amneziawg|naive|shadowsocks|mtproto|mieru|tuic|anytls|shadowtls) ;;
+    *)  fail "Unknown protocol: $PROTOCOL (valid: hysteria|xray|amneziawg|naive|shadowsocks|mtproto|mieru|tuic|anytls|shadowtls)" ;;
+  esac
+  resolve_engines
+  check_hysteria_flags
+  check_xray_flags
+fi
+
+# ───── -1. Everything that touches the machine starts here ─────
+[[ $EUID -eq 0 ]] || fail "Must run as root (sudo bash $0)"
+
+banner
+
+# flock against concurrent runs, and a wait for a running apt: do_uninstall
+# needs both as much as an install does.
+exec 9>/var/run/iceslab-node-install.lock || fail "cannot open install lockfile"
+if ! flock -n 9; then
+  fail "another install-iceslab-node.sh is already running. Wait, or remove /var/run/iceslab-node-install.lock if you're sure it crashed."
+fi
+wait_for_apt
+
+# ───── Uninstall fast-path ─────
 # Run BEFORE bootstrap-token redemption, otherwise `--uninstall` would
 # pointlessly consume a one-shot bootstrap token.
 if [[ $UNINSTALL -eq 1 ]]; then
@@ -1037,7 +1217,24 @@ if [[ $UNINSTALL -eq 1 ]]; then
   exit 0
 fi
 
-check_hysteria_flags
+# ───── The existing-install decision, before the token is spent ─────
+# Detect a prior installation. The env file is the canonical marker: if
+# it's there, the agent has at least been bootstrapped against some panel
+# before. Re-using it against a different (or freshly-rebuilt) panel is the
+# top source of "panel can't reach node" support tickets, because the old
+# server cert won't validate against the new panel CA.
+#
+# The question and the refusal come here, ahead of the redemption below: every
+# way out of the decision but "yes" stops the install, and a stopped install that
+# had already redeemed the one-shot token left the operator re-running the same
+# command with --reset into "token already consumed", which reads as an expiry.
+# Only the DECISION is here; the wipe stays at step 0, after the panel has
+# answered, because it is destructive.
+EXISTING_INSTALL=0
+if [[ -f /etc/iceslab-node/env || -x /usr/local/bin/iceslab-node ]]; then
+  EXISTING_INSTALL=1
+fi
+confirm_reinstall
 
 # If both --panel-url and --bootstrap given, redeem the bootstrap token to
 # fetch the full payload from panel over HTTP. This is the recommended flow:
@@ -1114,50 +1311,12 @@ EOF
 }
 
 # ───── 0. Existing-install handling ─────
-# Detect a prior installation. The env file is the canonical marker: if
-# it's there, the agent has at least been bootstrapped against some panel
-# before. Re-using it against a different (or freshly-rebuilt) panel is the
-# top source of "panel can't reach node" support tickets, because the old
-# server cert won't validate against the new panel CA.
-EXISTING_INSTALL=0
-if [[ -f /etc/iceslab-node/env || -x /usr/local/bin/iceslab-node ]]; then
-  EXISTING_INSTALL=1
-fi
-
+# The wipe itself, after the payload is in hand and before anything is written.
+# The decision to wipe was taken above, before the token.
 if [[ $EXISTING_INSTALL -eq 1 ]]; then
-  if [[ $RESET -eq 1 ]]; then
-    log "--reset given: wiping previous installation"
-    do_uninstall
-  elif [[ -e /dev/tty ]]; then
-    warn "Detected previous iceslab-node install on this VPS."
-    warn "Re-installing against a different panel without wiping state will"
-    warn "cause mTLS verification to fail (old server cert vs new panel CA)."
-    # `read -rp "..." ans </dev/tty` silently lost the keypress in the
-    # `bash <(curl ...)` process-substitution flow: the prompt printed but
-    # the read returned empty, hitting the `*` branch with "Aborted by user"
-    # even when `y` was typed. Splitting the prompt print from the read fixes
-    # it, so read has /dev/tty as a clean terminal handle without the
-    # prompt-print racing the input side.
-    printf '\033[1;33mWipe previous installation and continue? [y/N]:\033[0m '
-    if ! read -r ans </dev/tty; then
-      ans=""
-    fi
-    case "${ans,,}" in
-      y|yes) do_uninstall ;;
-      *)     fail "Aborted by user. Pass --reset to skip this prompt, or --uninstall to remove without re-installing." ;;
-    esac
-  else
-    fail "Previous install detected and no /dev/tty for prompt. Pass --reset to overwrite or --uninstall to remove."
-  fi
+  do_uninstall
 fi
 
-# The cores come from --engines; --protocol (the older spelling) is optional
-# and adds its core. Nothing named at all: the agent alone (25.09), no menu.
-case "$PROTOCOL" in
-  ""|hysteria|xray|amneziawg|naive|shadowsocks|mtproto|mieru|tuic|anytls|shadowtls) ;;
-  *)  fail "Unknown protocol: $PROTOCOL (valid: hysteria|xray|amneziawg|naive|shadowsocks|mtproto|mieru|tuic|anytls|shadowtls)" ;;
-esac
-resolve_engines
 LEGACY_CHECKOUT=0
 
 step "Prerequisites"
@@ -1421,20 +1580,35 @@ step "Firewall (ufw)"
 # then flip defaults to deny + enable. Skip with SKIP_FIREWALL=1.
 if [[ "${SKIP_FIREWALL:-0}" != "1" ]]; then
   log "ufw: SSH + panel-mTLS:$NODE_PORT + protocol-specific"
-  # SSH FIRST (the lockout-safety rule above). Zashchita: when an
-  # --ssh-allowlist is given, lock 22/tcp to those IP/CIDRs only (mirror of
-  # the --panel-ip loop below) instead of world-open. --harden-ufw additionally
-  # rate-limits SSH (`ufw limit`) to slow brute-force scanners. The two compose:
-  # allowlisted hosts still get rate-limited if both flags are set.
+  # SSH FIRST (the lockout-safety rule above), on SSH_PORT (--ssh-port, default
+  # 22). Zashchita: when an --ssh-allowlist is given, lock the SSH port to those
+  # IP/CIDRs only (mirror of the --panel-ip loop below) instead of world-open.
+  # --harden-ufw additionally rate-limits SSH (`ufw limit`) to slow brute-force
+  # scanners. The two compose: allowlisted hosts still get rate-limited if both
+  # flags are set.
+  #
+  # SSH_CONNECTION is "client-ip client-port server-ip SERVER-PORT": where this
+  # session comes from and the port it arrived on, the only evidence of where
+  # sshd really listens, and worth more than the flag: a wrong --ssh-port plus
+  # `ufw --force enable` ends the operator's access. Not set on a console or
+  # serial install, or once sudo has dropped the environment.
+  _SSH_CONN="${SSH_CONNECTION:-}"
+  if [[ -z "$_SSH_CONN" ]]; then
+    _SSH_CONN="$(find_ssh_connection)"
+    [[ -z "$_SSH_CONN" ]] || log "SSH_CONNECTION is not in the environment (sudo?); read it from the ssh session above this process"
+  fi
+  _CUR_SSH_IP="$(printf '%s' "$_SSH_CONN" | awk '{print $1}')"
+  _CUR_SSH_PORT="$(printf '%s' "$_SSH_CONN" | awk '{print $4}')"
+  [[ "$_CUR_SSH_PORT" =~ ^[0-9]+$ ]] || _CUR_SSH_PORT=""
   if [[ -n "$SSH_ALLOWLIST" ]]; then
-    log "Restricting SSH 22/tcp to SSH_ALLOWLIST=$SSH_ALLOWLIST (comma-list)"
+    log "Restricting SSH ${SSH_PORT}/tcp to SSH_ALLOWLIST=$SSH_ALLOWLIST (comma-list)"
     IFS=',' read -ra _SSH_IPS <<< "$SSH_ALLOWLIST"
     for ip in "${_SSH_IPS[@]}"; do
       [[ -z "${ip// /}" ]] && continue
       if [[ "$HARDEN_UFW" == "1" ]]; then
-        ufw limit from "${ip// /}" to any port 22 proto tcp >/dev/null 2>&1 || true
+        ufw limit from "${ip// /}" to any port "$SSH_PORT" proto tcp >/dev/null 2>&1 || true
       else
-        ufw allow from "${ip// /}" to any port 22 proto tcp >/dev/null 2>&1 || true
+        ufw allow from "${ip// /}" to any port "$SSH_PORT" proto tcp >/dev/null 2>&1 || true
       fi
     done
     unset _SSH_IPS
@@ -1443,22 +1617,65 @@ if [[ "${SKIP_FIREWALL:-0}" != "1" ]]; then
     # so the operator can't brick their own access; warn so a jump-host IP can
     # be removed later. (A CIDR in the list already covering it just makes this
     # a harmless extra /32 rule.)
-    _CUR_SSH_IP="$(printf '%s' "${SSH_CONNECTION:-}" | awk '{print $1}')"
     _AL_NOSPACE="${SSH_ALLOWLIST// /}"
     if [[ -n "$_CUR_SSH_IP" && ",${_AL_NOSPACE}," != *",${_CUR_SSH_IP},"* ]]; then
       warn "current SSH IP ${_CUR_SSH_IP} is NOT in --ssh-allowlist; allowing it to"
       warn "avoid locking out this session. Remove later if unintended:"
-      warn "  ufw delete allow from ${_CUR_SSH_IP} to any port 22 proto tcp"
-      ufw allow from "${_CUR_SSH_IP}" to any port 22 proto tcp >/dev/null 2>&1 || true
+      warn "  ufw delete allow from ${_CUR_SSH_IP} to any port ${SSH_PORT} proto tcp"
+      ufw allow from "${_CUR_SSH_IP}" to any port "$SSH_PORT" proto tcp >/dev/null 2>&1 || true
     fi
-  elif [[ "$HARDEN_UFW" == "1" ]]; then
-    # No allowlist but hardening on: keep 22/tcp world-reachable but rate-limit
-    # it so password/key brute-force probes get throttled (ufw limit = max 6
-    # connections per 30s per source).
-    log "Hardening SSH: rate-limiting 22/tcp (ufw limit)"
-    ufw limit 22/tcp                     >/dev/null 2>&1 || true
+    # The port of this session, when it is not SSH_PORT: for this address only,
+    # the world-open version below would undo what --ssh-allowlist is for.
+    if [[ -n "$_CUR_SSH_PORT" && "$_CUR_SSH_PORT" != "$SSH_PORT" ]]; then
+      warn "this session arrived on port ${_CUR_SSH_PORT}, not the ${SSH_PORT} passed as --ssh-port."
+      warn "Allowing ${_CUR_SSH_PORT} as well so enabling ufw cannot end this session."
+      warn "Check --ssh-port: every other SSH rule and the fail2ban jail use ${SSH_PORT}."
+      if [[ -n "$_CUR_SSH_IP" ]]; then
+        ufw allow from "${_CUR_SSH_IP}" to any port "$_CUR_SSH_PORT" proto tcp >/dev/null 2>&1 || true
+      else
+        ufw allow "${_CUR_SSH_PORT}/tcp" >/dev/null 2>&1 || true
+      fi
+    fi
+    # Drop a world-open SSH rule a PREVIOUS install left behind. ufw matches in
+    # order and the first match wins, so a `22/tcp ALLOW IN Anywhere` at the top
+    # answers every packet and the allowlist rules above, which land after it,
+    # restrict nothing; `ufw status` shows them and reads as locked down.
+    # do_uninstall leaves it as well (it takes off the agent's port and the
+    # protocols'), so --reset does not clear it.
+    #
+    # After the narrow rules are in place, never before, so SSH has a rule at
+    # every moment. And only when we KNOW where this session comes from: without
+    # SSH_CONNECTION the guard above allowed nothing, the blanket rule is all that
+    # keeps the operator in, and removing it on a guess ends the session.
+    if [[ -n "$_CUR_SSH_IP" ]]; then
+      ufw --force delete allow "${SSH_PORT}/tcp" >/dev/null 2>&1 || true
+      ufw --force delete limit "${SSH_PORT}/tcp" >/dev/null 2>&1 || true
+    else
+      warn "no SSH_CONNECTION in the environment or in any parent process${SUDO_USER:+ (run through sudo by $SUDO_USER)}, so this session's source is unknown."
+      warn "Leaving any world-open ${SSH_PORT}/tcp rule from a previous install in place:"
+      warn "removing it could lock you out. --ssh-allowlist does NOT restrict SSH while"
+      warn "that rule exists (ufw matches in order). Remove it yourself once you are sure:"
+      warn "  ufw status numbered   # find the '${SSH_PORT}/tcp ALLOW IN Anywhere' line"
+      warn "  ufw --force delete allow ${SSH_PORT}/tcp"
+    fi
   else
-    ufw allow 22/tcp                     >/dev/null 2>&1 || true
+    if [[ "$HARDEN_UFW" == "1" ]]; then
+      # No allowlist but hardening on: keep the SSH port world-reachable but
+      # rate-limit it so password/key brute-force probes get throttled (ufw limit
+      # = max 6 connections per 30s per source).
+      log "Hardening SSH: rate-limiting ${SSH_PORT}/tcp (ufw limit)"
+      ufw limit "${SSH_PORT}/tcp"          >/dev/null 2>&1 || true
+    else
+      ufw allow "${SSH_PORT}/tcp"          >/dev/null 2>&1 || true
+    fi
+    # No allowlist, so the port this session arrived on, when it is not
+    # SSH_PORT, is opened like the rest: a session on a port no rule covers is
+    # cut when ufw comes up.
+    if [[ -n "$_CUR_SSH_PORT" && "$_CUR_SSH_PORT" != "$SSH_PORT" ]]; then
+      warn "this session arrived on port ${_CUR_SSH_PORT}, not the ${SSH_PORT} passed as --ssh-port;"
+      warn "allowing it too so enabling ufw cannot end this session."
+      ufw allow "${_CUR_SSH_PORT}/tcp"     >/dev/null 2>&1 || true
+    fi
   fi
   # Restrict mTLS port to the panel's IP if --panel-ip given, otherwise
   # (--panel-ip not set) fall back to world-open with a loud warn.
@@ -1509,8 +1726,8 @@ if [[ "${SKIP_FIREWALL:-0}" != "1" ]]; then
       # flip clients reach "Connected" and the handshake completes, but the
       # FORWARD chain silently drops their decrypted traffic. Caught live
       # on a production node.
-      if [[ -f /etc/default/ufw ]]; then
-        sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
+      if [[ -f "$UFW_DEFAULT_FILE" ]]; then
+        sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' "$UFW_DEFAULT_FILE"
       fi
       ufw default allow routed           >/dev/null 2>&1 || true
       ;;
@@ -1585,7 +1802,7 @@ maxretry = 5
 
 [sshd]
 enabled  = true
-port     = ${SSH_PORT:-22}
+port     = ${SSH_PORT}
 
 [iceslab-hysteria]
 enabled  = true
