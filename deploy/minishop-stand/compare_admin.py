@@ -120,6 +120,18 @@ ACCEPTED_DIVERGENCE: dict[str, dict[str, str]] = {
         # report is only that their seeded user has a connection timestamp and
         # ours has genuinely never connected.
         "last_vpn_connected_at": "reference-only fixture: their SQL stamps a connection time; ours truly never connected",
+        # Same fixture: seed-remnawave.sql gives the seeded user hwid_device_limit 5 and
+        # three registered devices; the user our shop sync creates has neither. The buyer's
+        # hwid-limit step compares clean on both halves.
+        "hwid_devices.max_devices": "reference-only fixture: their SQL gives the seeded user a device limit of 5 (and three devices)",
+    },
+    "users-list": {
+        # The expired demo user: the reference's SQL holds a panel row for it (username
+        # runes_expired), on our half the shop's sync never creates a panel user for an
+        # expired subscription, so the shop keeps only the dangling panel uuid
+        # ('unverified', no username). Literal row path on purpose: the same field on the
+        # buyer must still be compared.
+        "users.{runes.expired@example.com}.panel_username": "reference-only fixture: their SQL holds a panel user for the expired demo user, ours has none",
     },
 }
 
@@ -187,9 +199,14 @@ def accepted_reason(step: str, line: str) -> tuple[str, str] | None:
         return None
     quoted = re.findall(r"`([^`]+)`", line)
     for path in quoted:
+        # A list aligned by identity names its rows `.{name}`; an entry written
+        # for the list (`x[].y`) covers every row. Entries naming one row
+        # (`x.{row}.y`) still match literally, on the original path.
+        generic = re.sub(r"\.\{[^}]*\}", "[]", path)
         for known, reason in paths.items():
-            if path == known or path.startswith(known + "[") or path.startswith(known + "."):
-                return known, reason
+            for candidate in (path, generic):
+                if candidate == known or candidate.startswith(known + "[") or candidate.startswith(known + "."):
+                    return known, reason
     return None
 
 
