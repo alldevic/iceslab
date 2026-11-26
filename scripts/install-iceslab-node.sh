@@ -1336,6 +1336,20 @@ if [[ -f /etc/iceslab-node/env || -x /usr/local/bin/iceslab-node ]]; then
 fi
 confirm_reinstall
 
+# The URL carries the one-shot token, and a curl argument is readable by any
+# local user in `ps` for as long as curl runs. It goes in as a curl config on
+# stdin instead. A `"`, a `\` or a control character would break out of the
+# config line, so such a URL is refused (a token is base64url, a panel URL has
+# none of them). Prints the http_code, like the plain `-w` did.
+redeem_bootstrap_request() {
+  local url="$1" out="$2"
+  case "$url" in
+    *[\"\\[:cntrl:]]*) return 1 ;;
+  esac
+  printf 'url = "%s"\n' "$url" \
+    | curl -K - --proto '=https' --max-redirs 0 -sS -o "$out" -w '%{http_code}'
+}
+
 # If both --panel-url and --bootstrap given, redeem the bootstrap token to
 # fetch the full payload from panel over HTTP. This is the recommended flow:
 # it sidesteps the 4 KB TTY paste limit because the long payload travels
@@ -1360,8 +1374,7 @@ if [[ -n "$BOOTSTRAP_TOKEN" && -n "$PANEL_URL" ]]; then
     https://*) ;;
     *) fail "--panel-url must start with https:// (got: $PANEL_URL)" ;;
   esac
-  HTTP_CODE=$(curl --proto '=https' --max-redirs 0 -sS -o "$TMP_PAYLOAD" -w '%{http_code}' \
-    "$PANEL_URL/api/internal/bootstrap/$BOOTSTRAP_TOKEN" 2>/dev/null) || HTTP_CODE="000"
+  HTTP_CODE=$(redeem_bootstrap_request "$PANEL_URL/api/internal/bootstrap/$BOOTSTRAP_TOKEN" "$TMP_PAYLOAD" 2>/dev/null) || HTTP_CODE="000"
   case "$HTTP_CODE" in
     200) PAYLOAD=$(tr -d '\n\r \t' < "$TMP_PAYLOAD"); rm -f "$TMP_PAYLOAD" ;;
     404) rm -f "$TMP_PAYLOAD"; fail "Bootstrap token not found at $PANEL_URL: typo or expired+purged" ;;
