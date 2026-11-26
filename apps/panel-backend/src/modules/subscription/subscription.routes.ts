@@ -14,6 +14,7 @@ import { parseProtocolsParam, protocolsOf, withProtocols } from './subscription.
 import * as service from './subscription.service.js';
 import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson } from './formats/singbox.js';
+import { selfHostedGeo } from '../geo-sets/geo-self-host.js';
 import { buildWgQuickConf, wgconfTunnelName } from './formats/wgconf.js';
 import { buildAwgVpnLink } from './formats/amneziavpn.js';
 import { wantsTunnelPreselect, withConfigUrls } from './subscription.tunnel-links.js';
@@ -1047,6 +1048,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
                 ownPresetRules,
                 customDomainLists,
                 frame,
+                geo: await selfHostedGeo(),
                 dialect: format === 'clash' ? 'mihomo' : format,
               }),
             );
@@ -1063,7 +1065,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               : undefined;
           return reply
             .type('application/json')
-            .send(buildSingboxJson(served, { bundle: sbBundle, routingPreset, ownPresetRules, frame }));
+            .send(buildSingboxJson(served, { bundle: sbBundle, routingPreset, ownPresetRules, frame, geo: await selfHostedGeo() }));
         }
         case 'wgconf': {
           // The file name IS the tunnel name the client shows (wg-quick has no

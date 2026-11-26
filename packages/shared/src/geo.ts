@@ -80,6 +80,18 @@ export const GEO_SET_NAME = /^[a-z0-9-]{1,32}$/;
 export const GEO_ASSET_NAME =
   /^(geosite\.dat|geoip\.dat|iceslab-[a-z0-9-]{1,32}\.dat|iceslab-[a-z0-9-]{1,32}\.[a-z0-9@!_-]{1,64}\.json)$/;
 
+/**
+ * A compiled sing-box rule-set the panel serves to CLIENTS (milestone 10.5,
+ * GET /geo/<token>/<name>), one per set and tag: `geosite-<tag>.srs` and
+ * `geoip-<tag>.srs` for the built-in sets (the sing-geosite / sing-geoip
+ * spelling, so the file name is the rule-set's tag), `iceslab-<set>.<tag>.srs`
+ * for any other set. The tag is lower case, `@attr` and a leading `!` kept, no
+ * dot, slash or `..`. Panel and clients only: a node never holds a `.srs`, so
+ * the agent has no mirror of this.
+ */
+export const GEO_SRS_NAME =
+  /^(?:(geosite|geoip)-([a-z0-9@!_-]{1,64})|iceslab-([a-z0-9-]{1,32})\.([a-z0-9@!_-]{1,64}))\.srs$/;
+
 /** The agent's geo directory (internal/geo/store.go DefaultDir). The chain
  *  config names its rule-sets by path, so the panel has to know it. */
 export const GEO_DIR_ON_NODE = '/etc/iceslab-node/geo';

@@ -46,3 +46,18 @@ describe('geo self-hosting settings', () => {
     expect(parse({ RATE_LIMIT_GEO_PER_MIN: '0' }).success).toBe(false);
   });
 });
+
+/** SINGBOX_BIN (milestone 10.5): optional, read where it is used (lib/util/singbox-bin.ts). */
+describe('SINGBOX_BIN', () => {
+  it('is optional, and blank is unset', () => {
+    for (const v of [undefined, '', '  ']) {
+      const r = parse(v === undefined ? {} : { SINGBOX_BIN: v });
+      expect(r.success && r.data.SINGBOX_BIN, JSON.stringify(v)).toBeUndefined();
+    }
+  });
+
+  it('a path is taken as given, trimmed', () => {
+    const r = parse({ SINGBOX_BIN: ' /usr/local/bin/sing-box ' });
+    expect(r.success && r.data.SINGBOX_BIN).toBe('/usr/local/bin/sing-box');
+  });
+});

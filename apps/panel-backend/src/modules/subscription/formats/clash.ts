@@ -2,9 +2,10 @@ import { transportServed, type RoutingPresetId } from '@iceslab/shared';
 import { emitsVisionFlow, isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 import { makeTagger } from '../endpoint-identity.js';
 import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
-import { clashDeviceRuleLines, clashDomainRuleBody, clashNeedsGeo } from '../subscription.device-rules.js';
+import { clashCanUsePanelGeo, clashDeviceRuleLines, clashDomainRuleBody, clashNeedsGeo } from '../subscription.device-rules.js';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { asArray, asObject, defaultFrame, openFrame, type Frame } from '../subscription.frames.js';
+import type { SelfHostedGeo } from '../../geo-sets/geo-self-host.js';
 
 /**
  * Clash YAML subscription formatter (targets Clash Meta / Mihomo, covers
@@ -71,6 +72,8 @@ export interface ClashBuildOpts {
    * understand them. Empty/undefined = none = byte-identical output.
    */
   customDomainLists?: { direct: string[]; proxy: string[]; block: string[] };
+  /** What the panel serves to clients itself (GEO_SELF_HOST); null/undefined = the base's addresses. */
+  geo?: SelfHostedGeo | null;
 }
 
 // Geo-database block (shared by every split preset). The testingcf.jsdelivr.net
@@ -88,6 +91,23 @@ const SPLIT_GEO_LINES: readonly string[] = [
   '  mmdb: "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb"',
   '',
 ];
+
+/**
+ * The panel's own copy (milestone 10.5, GEO_SELF_HOST): geosite and geoip from
+ * the panel's address, and `geodata-mode` so that GEOIP reads geoip.dat and no
+ * country.mmdb is asked for. Replaces SPLIT_GEO_LINES whole, never one file of it.
+ */
+function panelGeoLines(baseUrl: string): readonly string[] {
+  return [
+    'geodata-mode: true',
+    'geo-auto-update: true',
+    'geo-update-interval: 72',
+    'geox-url:',
+    `  geosite: ${JSON.stringify(`${baseUrl}/geosite.dat`)}`,
+    `  geoip: ${JSON.stringify(`${baseUrl}/geoip.dat`)}`,
+    '',
+  ];
+}
 
 /**
  * Split DNS (R2). fake-ip keeps app-side resolution instant; RU domains are
@@ -516,6 +536,7 @@ export function buildClashYaml(
     deviceRules,
     dnsLines,
     customDomainLists: buildOpts.customDomainLists,
+    geo: buildOpts.geo,
   });
 }
 
@@ -557,6 +578,7 @@ export function renderClashFrame(
     deviceRules: readonly DeviceRouteRule[];
     dnsLines: readonly string[];
     customDomainLists?: { direct: string[]; proxy: string[]; block: string[] };
+    geo?: SelfHostedGeo | null;
   },
 ): string {
   const { cfg, routing } = openFrame(frame);
@@ -599,7 +621,9 @@ export function renderClashFrame(
       if (!routing) continue;
       // The geo databases are fetched only when the rules name them (GEOSITE /
       // GEOIP). DNS is emitted for every preset.
-      if (clashNeedsGeo(p.deviceRules) && cfg['geox-url'] === undefined) lines.push(...SPLIT_GEO_LINES);
+      if (clashNeedsGeo(p.deviceRules) && cfg['geox-url'] === undefined) {
+        lines.push(...(clashCanUsePanelGeo(p.deviceRules, p.geo) ? panelGeoLines(p.geo.baseUrl) : SPLIT_GEO_LINES));
+      }
       if (cfg.dns === undefined) lines.push(...p.dnsLines);
     } else if (key === 'proxies') {
       lines.push('proxies:');

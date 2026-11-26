@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFrame } from '../subscription.frames.js';
 import { buildClashYaml } from './clash.js';
 import type { SubscriptionEndpoint } from '../subscription.formats.js';
+import type { SelfHostedGeo } from '../../geo-sets/geo-self-host.js';
 
 const hysteriaEp: SubscriptionEndpoint = {
   protocol: 'hysteria',
@@ -594,6 +595,67 @@ describe('buildClashYaml', () => {
       expect(rules[0]).toBe('- DOMAIN-SUFFIX,example.ru,DIRECT');
       expect(rules).toContain('- GEOSITE,category-ads-all,REJECT');
       expect(rules[rules.length - 1]).toBe('- MATCH,Auto');
+    });
+  });
+  // Milestone 10.5: the databases from the panel itself (GEO_SELF_HOST).
+  describe('the panel serves the geo databases (GEO_SELF_HOST)', () => {
+    const RU_TAGS = ['category-ads-all', 'category-ru', 'category-gov-ru', 'ru'];
+    const geo = (over: Partial<SelfHostedGeo> = {}): SelfHostedGeo => ({
+      baseUrl: 'https://panel.example.com/geo/tok',
+      tags: { geosite: new Set(RU_TAGS), geoip: new Set(RU_TAGS) },
+      srs: true,
+      ...over,
+    });
+    const base = buildClashYaml([xrayEp], { routingPreset: 'ru-split' });
+
+    it('no geo (the flag off): the output is the base, byte for byte', () => {
+      expect(buildClashYaml([xrayEp], { routingPreset: 'ru-split', geo: null })).toBe(base);
+      expect(buildClashYaml([xrayEp], { routingPreset: 'ru-split', geo: undefined })).toBe(base);
+    });
+
+    it('geox-url points at the panel, geodata-mode on, no country.mmdb, the rest unchanged', () => {
+      const out = buildClashYaml([xrayEp], { routingPreset: 'ru-split', geo: geo() });
+      expect(out).toContain('geodata-mode: true');
+      expect(out).toContain('  geosite: "https://panel.example.com/geo/tok/geosite.dat"');
+      expect(out).toContain('  geoip: "https://panel.example.com/geo/tok/geoip.dat"');
+      expect(out).not.toContain('mmdb');
+      expect(out).not.toContain('jsdelivr');
+      // Only the geo block differs: the rules and the DNS are the base's.
+      const strip = (t: string) => t.slice(t.indexOf('dns:'));
+      expect(strip(out)).toBe(strip(base));
+    });
+
+    it('a tag the panel set lacks: the base addresses stay, whole', () => {
+      const out = buildClashYaml([xrayEp], {
+        routingPreset: 'ru-split',
+        geo: geo({ tags: { geosite: new Set(RU_TAGS.filter((t) => t !== 'category-gov-ru')), geoip: new Set(RU_TAGS) } }),
+      });
+      expect(out).toBe(base);
+    });
+
+    it('a geoip tag the panel set lacks: the base addresses stay, whole', () => {
+      expect(buildClashYaml([xrayEp], { routingPreset: 'ru-split', geo: geo({ tags: { geosite: new Set(RU_TAGS), geoip: new Set(['cn']) } }) })).toBe(base);
+    });
+
+    it('a set the panel does not serve: the base addresses stay', () => {
+      expect(buildClashYaml([xrayEp], { routingPreset: 'ru-split', geo: geo({ tags: { geosite: new Set(RU_TAGS), geoip: null } }) })).toBe(base);
+      expect(buildClashYaml([xrayEp], { routingPreset: 'ru-split', geo: geo({ tags: { geosite: null, geoip: null } }) })).toBe(base);
+    });
+
+    it('no sing-box on the panel does not matter to clash: the databases are .dat', () => {
+      const out = buildClashYaml([xrayEp], { routingPreset: 'ru-split', geo: geo({ srs: false }) });
+      expect(out).toContain('/geo/tok/geosite.dat');
+    });
+
+    it('a preset that names no geo database gets no geo block either way', () => {
+      expect(buildClashYaml([xrayEp], { geo: geo() })).toBe(buildClashYaml([xrayEp]));
+    });
+
+    it('a template that sets geox-url itself is not touched', () => {
+      const frame = readFrame('mihomo', 'geox-url:\n  geosite: "https://own.example/geosite.dat"\niceslab: {}\nproxies: []\nproxy-groups: []\nrules: []\n');
+      const out = buildClashYaml([xrayEp], { routingPreset: 'ru-split', frame, geo: geo() });
+      expect(out).toContain('https://own.example/geosite.dat');
+      expect(out).not.toContain('panel.example.com');
     });
   });
 });

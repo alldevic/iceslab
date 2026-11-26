@@ -37,6 +37,29 @@ COPY packages/shared/src/core-versions.ts ./core-versions.ts
 COPY apps/panel-backend/scripts/fetch-cores.mjs ./fetch-cores.mjs
 RUN node fetch-cores.mjs ./core-versions.ts /cores "$CORE_ARCHES"
 
+# The sing-box the PANEL runs (SINGBOX_BIN: compiles the `.srs` rule-sets it
+# serves to clients, checks a sing-box template), taken out of the archive just
+# verified above: the pinned release, of the architecture this image is built
+# for. No second download and no second pin. A build for an architecture not in
+# CORE_ARCHES stops here: the image must carry its own sing-box. cgo-free Go, so
+# it runs on alpine's musl as it is (build checks: .github/scripts/image-checks.sh).
+ARG TARGETARCH
+RUN set -eu; \
+    case "${TARGETARCH:-$(uname -m)}" in \
+      amd64|x86_64) arch=amd64 ;; \
+      arm64|aarch64) arch=arm64 ;; \
+      arm|armv7l) arch=armv7 ;; \
+      *) echo "no sing-box for architecture ${TARGETARCH:-$(uname -m)}" >&2; exit 1 ;; \
+    esac; \
+    stored=$(A="$arch" node --input-type=module -e 'const m = await import("/fetch/core-versions.ts"); const v = m.CORE_VERSIONS.singbox.pinned; const x = m.coreArtifacts([process.env.A]).find((a) => a.component === "singbox" && a.version === v); if (!x) process.exit(1); console.log(x.stored)') \
+      || { echo "the manifest has no sing-box $arch release: add $arch to CORE_ARCHES" >&2; exit 1; }; \
+    test -f "/cores/$stored" || { echo "/cores/$stored is not there: add $arch to CORE_ARCHES" >&2; exit 1; }; \
+    mkdir -p /singbox-x /singbox; \
+    tar -xzf "/cores/$stored" -C /singbox-x; \
+    bin=$(find /singbox-x -type f -name sing-box | head -n 1); \
+    test -n "$bin"; \
+    install -m 0755 "$bin" /singbox/sing-box
+
 # ───── Build stage ─────
 FROM node:${NODE_VERSION} AS builder
 # NODE_OPTIONS caps the V8 heap during build, without it pnpm + tsc can climb
@@ -170,6 +193,10 @@ COPY --from=builder /repo /app
 # served as they are. Placed after the workspace copy so a manifest change does
 # not invalidate the (larger) layer above.
 COPY --from=cores /cores /app/cores
+# The sing-box of the panel itself (see the cores stage), root-owned and not
+# writable by `node`. SINGBOX_BIN is what the panel reads.
+COPY --from=cores /singbox/sing-box /usr/local/bin/sing-box
+ENV SINGBOX_BIN=/usr/local/bin/sing-box
 
 WORKDIR /app/apps/panel-backend
 

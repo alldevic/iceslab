@@ -1,5 +1,4 @@
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +11,7 @@ import { buildClashYaml } from '../subscription/formats/clash.js';
 import { buildSingboxJson } from '../subscription/formats/singbox.js';
 import { buildXrayJson, buildXrayJsonArray } from '../subscription/formats/xrayjson.js';
 import { checkTemplateBody } from './templates.parse.js';
+import { findBinary, singboxBinary } from '../../lib/util/singbox-bin.js';
 
 const run = promisify(execFile);
 
@@ -76,10 +76,6 @@ export const DRY_RUN_NODES = [
   { nodeId: 'dry-3', port: 443, protocol: 'hysteria', nodeName: 'dry-run-3', host: 'node-3.example.com', uri: '', password: 'dry-run' },
 ] as unknown as SubscriptionEndpoint[];
 
-function binary(env: string | undefined, paths: string[]): string {
-  return env ?? paths.find((p) => existsSync(p)) ?? '';
-}
-
 async function coreCheck(bin: string, args: (f: string) => string[], configs: string[], name: string): Promise<CheckAnswer> {
   if (!bin) return { ok: null, message: `not checked: no ${name} binary on the panel` };
   const dir = await mkdtemp(join(tmpdir(), 'iceslab-dry-'));
@@ -127,7 +123,7 @@ export async function dryRun(type: TemplateType, body: string): Promise<DryRun> 
     if (!groups.some((g) => (g.outbounds ?? []).some((m) => names.some((n) => m.startsWith(n))))) {
       warnings.push({ code: 'NO_SELECTOR_HOLDS_NODE', message: 'no selector or urltest group holds a node: the client cannot pick a server' });
     }
-    const bin = binary(process.env.SINGBOX_BIN, ['/usr/local/bin/sing-box', '/usr/bin/sing-box']);
+    const bin = singboxBinary();
     const check = await coreCheck(bin, (f) => ['check', '-c', f], [rendered], 'sing-box');
     return { ok: overall(check, warnings), rendered, check, warnings };
   }
@@ -135,7 +131,7 @@ export async function dryRun(type: TemplateType, body: string): Promise<DryRun> 
   const rendered = type === 'xray-json' ? buildXrayJson(DRY_RUN_NODES, { frame }) : buildXrayJsonArray(DRY_RUN_NODES, { frame });
   const parsed = JSON.parse(rendered) as unknown;
   const configs = (Array.isArray(parsed) ? parsed : [parsed]).map((c) => JSON.stringify(c));
-  const bin = binary(process.env.XRAY_BIN, ['/usr/local/bin/xray', '/usr/bin/xray']);
+  const bin = findBinary(process.env.XRAY_BIN, ['/usr/local/bin/xray', '/usr/bin/xray']);
   const check = await coreCheck(bin, (f) => ['-test', '-c', f], configs, 'xray');
   return { ok: overall(check, warnings), rendered, check, warnings };
 }

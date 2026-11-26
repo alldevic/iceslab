@@ -4,6 +4,7 @@ import { makeTagger } from '../endpoint-identity.js';
 import { exitsHaveIpv6, singboxDnsStrategy } from '../subscription.address-family.js';
 import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
 import { singboxDeviceRoute } from '../subscription.device-rules.js';
+import type { SelfHostedGeo } from '../../geo-sets/geo-self-host.js';
 import { asArray, asObject, defaultFrame, insertAfter, openFrame, type Frame } from '../subscription.frames.js';
 
 /**
@@ -50,6 +51,8 @@ export interface SingboxBuildOpts {
   ownPresetRules?: readonly DeviceRouteRule[];
   /** A-236: the operator template to fill; absent = the Default in the code. */
   frame?: Frame;
+  /** What the panel serves to clients itself (GEO_SELF_HOST); null/undefined = the base's addresses. */
+  geo?: SelfHostedGeo | null;
 }
 
 /**
@@ -361,6 +364,7 @@ export function buildSingboxJson(
     fillSingboxFrame(frame, outbounds, proxyTags, deviceRules, {
       preset: splitPreset,
       strategy: singboxDnsStrategy(exitsHaveIpv6(endpoints)),
+      geo: opts.geo,
     }) + '\n'
   );
 }
@@ -449,7 +453,7 @@ function fillSingboxFrame(
   proxyOutbounds: Record<string, unknown>[],
   proxyTags: string[],
   deviceRules: readonly DeviceRouteRule[],
-  dnsOpts: { preset: RoutingPresetId | null; strategy: string | undefined },
+  dnsOpts: { preset: RoutingPresetId | null; strategy: string | undefined; geo?: SelfHostedGeo | null },
 ): string {
   const { cfg, routing } = openFrame(frame);
   const own = asArray(cfg.outbounds).map(asObject);
@@ -473,7 +477,7 @@ function fillSingboxFrame(
     return typeof rule.outbound === 'string' && gone.has(rule.outbound) ? { ...rule, outbound: 'direct' } : rule;
   });
   const target = proxyTags.length > 0 && typeof route.final === 'string' ? route.final : null;
-  const preset = routing ? singboxDeviceRoute(deviceRules, target) : { rules: [], ruleSets: [] };
+  const preset = routing ? singboxDeviceRoute(deviceRules, target, dnsOpts.geo) : { rules: [], ruleSets: [] };
   const rules = [...preset.rules, ...ownRules];
   const dns =
     routing && target && cfg.dns === undefined ? splitDns(dnsOpts.preset, preset.rules, target, dnsOpts.strategy) : null;

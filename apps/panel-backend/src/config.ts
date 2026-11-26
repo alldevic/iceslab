@@ -142,6 +142,16 @@ export const ConfigSchema = z.object({
         .regex(/^[A-Za-z0-9_-]+$/, 'GEO_ARTIFACT_TOKEN: only [A-Za-z0-9_-], it is a path segment')
         .optional(),
     ),
+  // The sing-box executable the panel itself runs: the dry-run of a sing-box
+  // template and the compiler of `.srs` rule-sets for clients (milestone 10.5).
+  // The image sets it. Unset (or blank): the usual install paths are tried, and
+  // with none the panel works without: the template check says "not checked" and
+  // no `.srs` is served. Read from the environment where it is used
+  // (lib/util/singbox-bin.ts), so a path set after start is honoured by tests.
+  SINGBOX_BIN: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v.trim() === '' ? undefined : v.trim())),
   // Downloads of those files per minute per address, 404s included (that is
   // what holds back a guess at the token). A client takes two or three files
   // per refresh.

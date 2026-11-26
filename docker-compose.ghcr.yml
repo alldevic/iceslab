@@ -133,6 +133,9 @@ services:
       GEO_SELF_HOST: ${GEO_SELF_HOST:-false}
       GEO_ARTIFACT_TOKEN: ${GEO_ARTIFACT_TOKEN:-}
       RATE_LIMIT_GEO_PER_MIN: ${RATE_LIMIT_GEO_PER_MIN:-60}
+      # The sing-box inside the panel image, which compiles the .srs rule-sets for
+      # clients; see .env.production.example.
+      SINGBOX_BIN: ${SINGBOX_BIN:-/usr/local/bin/sing-box}
       # Remnawave facade switch; see .env.production.example.
       REMNAWAVE_COMPAT_ENABLED: ${REMNAWAVE_COMPAT_ENABLED:-false}
       REMNAWAVE_COMPAT_PREFIX: ${REMNAWAVE_COMPAT_PREFIX:-rw}

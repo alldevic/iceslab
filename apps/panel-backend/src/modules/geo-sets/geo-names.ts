@@ -12,6 +12,13 @@ export function nodeFileName(s: { name: string; sourceType: string }): string {
   return s.sourceType === 'builtin' ? `${s.name}.dat` : `iceslab-${s.name}.dat`;
 }
 
+/** The name a set's tag has as a compiled rule-set for clients (GEO_SRS_NAME):
+ *  the built-in sets as sing-geosite / sing-geoip spell it, so it is the
+ *  rule-set's tag with `.srs`; any other set under its `iceslab-<set>.` name. */
+export function srsFileName(s: { name: string; sourceType: string }, tag: string): string {
+  return s.sourceType === 'builtin' ? `${s.name}-${tag}.srs` : `iceslab-${s.name}.${tag}.srs`;
+}
+
 /**
  * The chain's rule-set for one tag of one set (phase 9.3): a stable name per
  * (set, tag), so a new version of the set replaces the file under the same

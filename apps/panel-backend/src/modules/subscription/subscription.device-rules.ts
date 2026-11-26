@@ -1,5 +1,8 @@
 import { isIP } from 'node:net';
+import { GEO_SRS_NAME } from '@iceslab/shared';
 import type { DeviceRouteRule } from '../routing-presets/routing-presets.builtins.js';
+import type { SelfHostedGeo } from '../geo-sets/geo-self-host.js';
+import { parseGeoRef } from '../geo-sets/geo-names.js';
 
 /**
  * A-229 part 4: a device routing preset's rules, as each client format writes
@@ -150,6 +153,27 @@ export function clashNeedsGeo(rules: readonly DeviceRouteRule[]): boolean {
   return rules.some((r) => r.match.some((m) => (m.startsWith('geosite:') || m.startsWith('geoip:')) && m !== 'geoip:private'));
 }
 
+/**
+ * Whether mihomo can take its geo databases from the panel (milestone 10.5): both
+ * built-in sets are served, and every `geosite:` / `geoip:` tag the rules name is
+ * in them. The databases are two files for the whole config, so a tag the panel's
+ * set (v2fly's) lacks and the base's (MetaCubeX's) has leaves the base addresses
+ * as they are, entirely. `geoip:private` is spelled out as ranges and needs none.
+ */
+export function clashCanUsePanelGeo(rules: readonly DeviceRouteRule[], geo: SelfHostedGeo | null | undefined): geo is SelfHostedGeo {
+  if (!geo?.tags.geosite || !geo.tags.geoip) return false;
+  for (const r of rules) {
+    for (const m of r.match) {
+      if (m === 'geoip:private') continue;
+      const kind = m.startsWith('geosite:') ? 'geosite' : m.startsWith('geoip:') ? 'geoip' : null;
+      if (!kind) continue;
+      const ref = parseGeoRef(m, kind === 'geoip' ? 'ip' : 'domain');
+      if (!ref || !geo.tags[kind]!.has(ref.baseTag)) return false;
+    }
+  }
+  return true;
+}
+
 // ---------------------------------------------------------------- sing-box
 
 /**
@@ -157,13 +181,18 @@ export function clashNeedsGeo(rules: readonly DeviceRouteRule[]): boolean {
  * rule-set from the SagerNet repositories, the source the built-in presets
  * have always used, under the name pattern of those repositories.
  */
-function singboxRuleSet(m: string): Record<string, unknown> {
-  if (m.startsWith('geosite:')) {
-    const tag = `geosite-${m.slice(8).toLowerCase()}`;
-    return { type: 'remote', tag, format: 'binary', url: `https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/${tag}.srs` };
+function singboxRuleSet(m: string, geo?: SelfHostedGeo | null): Record<string, unknown> {
+  const kind = m.startsWith('geosite:') ? 'geosite' : 'geoip';
+  const tag = `${kind}-${m.slice(kind.length + 1).toLowerCase()}`;
+  // Milestone 10.5: the panel's own `.srs` when it can compile and serve this
+  // tag; the base's address otherwise. A client does not start with a rule-set
+  // it cannot download, so a tag the panel's set lacks is never pointed at it.
+  const ref = parseGeoRef(m, kind === 'geoip' ? 'ip' : 'domain');
+  if (geo?.srs && ref && geo.tags[kind]?.has(ref.baseTag) && GEO_SRS_NAME.test(`${tag}.srs`)) {
+    return { type: 'remote', tag, format: 'binary', url: `${geo.baseUrl}/${tag}.srs` };
   }
-  const tag = `geoip-${m.slice(6).toLowerCase()}`;
-  return { type: 'remote', tag, format: 'binary', url: `https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/${tag}.srs` };
+  const repo = kind === 'geosite' ? 'sing-geosite' : 'sing-geoip';
+  return { type: 'remote', tag, format: 'binary', url: `https://raw.githubusercontent.com/SagerNet/${repo}/rule-set/${tag}.srs` };
 }
 
 /**
@@ -177,6 +206,7 @@ function singboxRuleSet(m: string): Record<string, unknown> {
 export function singboxDeviceRoute(
   rules: readonly DeviceRouteRule[],
   proxyOutbound: string | null,
+  selfHosted?: SelfHostedGeo | null,
 ): { rules: Record<string, unknown>[]; ruleSets: Record<string, unknown>[] } {
   const groups: { action: DeviceRouteRule['action']; match: string[] }[] = [];
   for (const r of rules) {
@@ -206,7 +236,7 @@ export function singboxDeviceRoute(
     for (const m of g.match) {
       if (m === 'geoip:private') isPrivate = true;
       else if (m.startsWith('geosite:') || m.startsWith('geoip:')) {
-        const rs = singboxRuleSet(m);
+        const rs = singboxRuleSet(m, selfHosted);
         sets.set(rs.tag as string, rs);
         if (!geo.includes(rs.tag as string)) geo.push(rs.tag as string);
       } else if (m.startsWith('full:')) inline.domain.push(m.slice(5));

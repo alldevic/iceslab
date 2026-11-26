@@ -181,6 +181,28 @@ check_core_arches() {
   ok "image cores: $n executables, each the ELF machine its architecture says; sing-box has with_v2ray_api (run only when the image's arch is this machine's: image $image_arch, here ${host_arch:-?})"
 }
 
+# ── the panel's own sing-box (milestone 10.5) ───────────────────────────────
+# SINGBOX_BIN is set, names an executable the default user may run, `version`
+# answers (alpine's musl: the Go build must not need a libc it lacks), and it
+# compiles a rule-set source into a non-empty `.srs`, which is what the panel
+# serves sing-box clients from /geo/.
+check_singbox() {
+  local out
+  out=$(docker run --rm --entrypoint sh "$IMAGE" -c '
+    set -e
+    [ -n "${SINGBOX_BIN:-}" ] || { echo "SINGBOX_BIN is not set in the image"; exit 1; }
+    [ -x "$SINGBOX_BIN" ] || { echo "SINGBOX_BIN=$SINGBOX_BIN is not an executable file"; exit 1; }
+    "$SINGBOX_BIN" version | head -n 1
+    d=$(mktemp -d)
+    printf "%s" "{\"version\":2,\"rules\":[{\"domain_suffix\":[\".example.com\"]}]}" > "$d/r.json"
+    "$SINGBOX_BIN" rule-set compile -o "$d/r.srs" "$d/r.json"
+    [ -s "$d/r.srs" ] || { echo "rule-set compile wrote no file"; exit 1; }
+    echo compiled
+  ' 2>&1) || fail "the image's sing-box does not work: $out"
+  [[ "$out" == sing-box\ version\ * && "$out" == *compiled ]] || fail "the image's sing-box answered oddly: $out"
+  ok "image sing-box: SINGBOX_BIN is executable, answers \`version\` and compiles a rule-set (${out%%$'\n'*})"
+}
+
 # ── meta: user and start command ────────────────────────────────────────────
 check_meta() {
   local user uid cmd last
@@ -333,6 +355,7 @@ all() {
   check_content
   check_cores
   check_core_arches
+  check_singbox
   check_meta
   check_migrate
   do_boot

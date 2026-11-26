@@ -123,4 +123,18 @@ describe('the geo files path (/geo/) and its settings', () => {
     expect(backend).toMatch(/^\s+GEO_ARTIFACT_TOKEN:\s*\$\{GEO_ARTIFACT_TOKEN:-\}\s*$/m);
     expect(backend).toMatch(/^\s+RATE_LIMIT_GEO_PER_MIN:\s*\$\{RATE_LIMIT_GEO_PER_MIN:-60\}\s*$/m);
   });
+
+  // Milestone 10.5. A blank default here would override the image's own ENV and
+  // leave the panel with no sing-box, so the default is the image's path.
+  it.each(COMPOSE_FILES)('%s passes SINGBOX_BIN with the image\'s own path as the default', (file) => {
+    expect(services(read(file))['backend']!).toMatch(/^\s+SINGBOX_BIN:\s*\$\{SINGBOX_BIN:-\/usr\/local\/bin\/sing-box\}\s*$/m);
+  });
+
+  it('the panel Dockerfile installs sing-box there and sets SINGBOX_BIN to it', () => {
+    const d = read('apps/panel-backend/Dockerfile');
+    expect(d).toMatch(/^COPY --from=cores \/singbox\/sing-box \/usr\/local\/bin\/sing-box$/m);
+    expect(d).toMatch(/^ENV SINGBOX_BIN=\/usr\/local\/bin\/sing-box$/m);
+    // From the archive the cores stage has checked, of the pinned release.
+    expect(d).toContain('CORE_VERSIONS.singbox.pinned');
+  });
 });

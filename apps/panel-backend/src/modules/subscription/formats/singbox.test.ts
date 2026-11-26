@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildSingboxJson } from './singbox.js';
 import type { SubscriptionEndpoint } from '../subscription.formats.js';
 import { readFrame } from '../subscription.frames.js';
+import type { SelfHostedGeo } from '../../geo-sets/geo-self-host.js';
 
 const hysteriaEp: SubscriptionEndpoint = {
   protocol: 'hysteria',
@@ -550,6 +551,73 @@ describe('buildSingboxJson', () => {
       expect(buildSingboxJson([xrayEp], { routingPreset: 'ru-split' })).not.toBe(
         buildSingboxJson([xrayEp], { routingPreset: 'cn-split' }),
       );
+    });
+  });
+  // Milestone 10.5: rule-sets from the panel itself (GEO_SELF_HOST).
+  describe('the panel serves the rule-sets (GEO_SELF_HOST)', () => {
+    const geo = (over: Partial<SelfHostedGeo> = {}): SelfHostedGeo => ({
+      baseUrl: 'https://panel.example.com/geo/tok',
+      tags: { geosite: new Set(['category-ads-all', 'category-ru', 'category-gov-ru']), geoip: new Set(['ru']) },
+      srs: true,
+      ...over,
+    });
+    const urls = (out: string) => Object.fromEntries(parse(out).route.rule_set!.map((r) => [r.tag as string, r.url as string]));
+    const base = buildSingboxJson([xrayEp], { routingPreset: 'ru-split' });
+
+    it('no geo (the flag off): the output is the base, byte for byte', () => {
+      expect(buildSingboxJson([xrayEp], { routingPreset: 'ru-split', geo: null })).toBe(base);
+      expect(buildSingboxJson([xrayEp], { routingPreset: 'ru-split', geo: undefined })).toBe(base);
+    });
+
+    it('every tag the panel has is its address, a remote binary rule-set as before', () => {
+      const out = buildSingboxJson([xrayEp], { routingPreset: 'ru-split', geo: geo() });
+      expect(urls(out)).toEqual({
+        'geosite-category-ads-all': 'https://panel.example.com/geo/tok/geosite-category-ads-all.srs',
+        'geosite-category-ru': 'https://panel.example.com/geo/tok/geosite-category-ru.srs',
+        'geosite-category-gov-ru': 'https://panel.example.com/geo/tok/geosite-category-gov-ru.srs',
+        'geoip-ru': 'https://panel.example.com/geo/tok/geoip-ru.srs',
+      });
+      for (const r of parse(out).route.rule_set!) expect(r).toMatchObject({ type: 'remote', format: 'binary' });
+      // Rules and DNS are the base's: only the addresses moved.
+      expect(out.replaceAll('https://panel.example.com/geo/tok/', 'X')).toBe(base.replace(/https:\/\/raw\.githubusercontent\.com\/SagerNet\/sing-geo(site|ip)\/rule-set\//g, 'X'));
+    });
+
+    it('a tag the panel set lacks stays on the base address, the others move', () => {
+      const out = buildSingboxJson([xrayEp], {
+        routingPreset: 'ru-split',
+        geo: geo({ tags: { geosite: new Set(['category-ads-all', 'category-ru']), geoip: new Set(['ru']) } }),
+      });
+      const u = urls(out);
+      expect(u['geosite-category-gov-ru']).toBe('https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-gov-ru.srs');
+      expect(u['geosite-category-ru']).toBe('https://panel.example.com/geo/tok/geosite-category-ru.srs');
+      expect(u['geoip-ru']).toBe('https://panel.example.com/geo/tok/geoip-ru.srs');
+    });
+
+    it('a set the panel does not serve: the base addresses', () => {
+      expect(buildSingboxJson([xrayEp], { routingPreset: 'ru-split', geo: geo({ tags: { geosite: null, geoip: null } }) })).toBe(base);
+    });
+
+    it('no sing-box on the panel (nothing to compile): the base addresses, whatever the tags', () => {
+      expect(buildSingboxJson([xrayEp], { routingPreset: 'ru-split', geo: geo({ srs: false }) })).toBe(base);
+    });
+
+    it('the tag is matched without case or @attr, as the compiler reads it', () => {
+      const out = buildSingboxJson([xrayEp], {
+        ownPresetRules: [{ action: 'direct', match: ['geosite:Google@CN', 'geoip:CN'] }],
+        geo: geo({ tags: { geosite: new Set(['google']), geoip: new Set(['cn']) } }),
+      });
+      expect(urls(out)).toEqual({
+        'geosite-google@cn': 'https://panel.example.com/geo/tok/geosite-google@cn.srs',
+        'geoip-cn': 'https://panel.example.com/geo/tok/geoip-cn.srs',
+      });
+    });
+
+    it('a tag whose name cannot be a file name of the route stays on the base address', () => {
+      const out = buildSingboxJson([xrayEp], {
+        ownPresetRules: [{ action: 'direct', match: ['geosite:a.b'] }],
+        geo: geo({ tags: { geosite: new Set(['a.b']), geoip: new Set() } }),
+      });
+      expect(urls(out)['geosite-a.b']).toContain('raw.githubusercontent.com');
     });
   });
 });
