@@ -39,6 +39,7 @@ import { geoSetsRoutes } from './modules/geo-sets/geo-sets.routes.js';
 import { routingPresetsRoutes } from './modules/routing-presets/routing-presets.routes.js';
 import { subscriptionTemplatesRoutes } from './modules/subscription-templates/templates.routes.js';
 import { auditRoutes } from './modules/audit/audit.routes.js';
+import { remnawaveCompatRoutes } from './modules/remnawave-compat/remnawave.routes.js';
 import { writeAuditOnSend } from './modules/audit/audit.hook.js';
 import { registerSecurityGate } from './lib/auth/security-gate.js';
 import { registry as metricsRegistry, httpRequestDuration, routeLabel } from './lib/infra/metrics.js';
@@ -343,6 +344,16 @@ export async function buildApp(opts: { log?: { level: string; stream: { write(li
   await app.register(routingPresetsRoutes);
   await app.register(subscriptionTemplatesRoutes);
   await app.register(auditRoutes);
+
+  // Remnawave-compat facade: Remnawave-shaped routes declared as /api/* inside
+  // the plugin and mounted under /<prefix>, so they never meet the native API.
+  // Off (the default): nothing is mounted and the panel is the base. After the
+  // global rate limit, the security gate and the scope hook, like every route;
+  // the scope hook maps its resources (requiredCompatScope). It has no public
+  // route: every one is behind requireAuth.
+  if (config.REMNAWAVE_COMPAT_ENABLED) {
+    await app.register(remnawaveCompatRoutes, { prefix: `/${config.REMNAWAVE_COMPAT_PREFIX}` });
+  }
 
   return app;
 }

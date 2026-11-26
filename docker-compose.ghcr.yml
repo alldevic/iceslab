@@ -126,6 +126,7 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       # Remnawave facade switch; see .env.production.example.
       REMNAWAVE_COMPAT_ENABLED: ${REMNAWAVE_COMPAT_ENABLED:-false}
+      REMNAWAVE_COMPAT_PREFIX: ${REMNAWAVE_COMPAT_PREFIX:-rw}
       # Read by the frontend too, see there.
       SUBSCRIPTION_PATH_PREFIX: ${SUBSCRIPTION_PATH_PREFIX:-/sub}
     depends_on:

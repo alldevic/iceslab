@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { config } from '../../config.js';
 import { redactRepliesOf } from './token-secrets.js';
 
 /**
@@ -30,6 +31,53 @@ export function requiredScopeFor(method: string, url: string | undefined): strin
   if (!resource) return null;
   const verb = method === 'GET' || method === 'HEAD' ? 'read' : 'write';
   return `${resource}:${verb}`;
+}
+
+/**
+ * Remnawave-compat facade routes live at `/<prefix>/api/<resource>/...` under
+ * Remnawave's resource names. Each maps to the NATIVE resource that guards the
+ * same data, so a scoped token is bound on the facade exactly as on `/api/*`
+ * (a token without users:write cannot create a user through the facade either).
+ * A resource missing here is default-deny. scope.routes.test.ts reads the
+ * facade's own route files and fails on a segment that is not listed.
+ */
+export const COMPAT_SCOPE_RESOURCE: Readonly<Record<string, string>> = {
+  users: 'users',
+  'internal-squads': 'squads',
+  'external-squads': 'squads',
+  hwid: 'hwid-devices',
+  nodes: 'nodes',
+  hosts: 'hosts',
+  system: 'system',
+  'bandwidth-stats': 'system',
+  subscriptions: 'sub',
+  'subscription-page-configs': 'sub',
+};
+
+/** The native scope a facade route needs, or null (default-deny). */
+export function requiredCompatScope(method: string, url: string | undefined, prefix: string): string | null {
+  const base = `/${prefix}/api/`;
+  if (!url || !url.startsWith(base)) return null;
+  const rest = url.slice(base.length);
+  const resource = rest.split('/')[0];
+  const native = resource ? COMPAT_SCOPE_RESOURCE[resource] : undefined;
+  if (!native) return null;
+  // Squad bulk actions rewrite USERS' membership, which native guards with
+  // users:write (PUT /api/users/:id), so a squads:write token cannot change
+  // anyone's access through them.
+  if (native === 'squads' && rest.includes('/bulk-actions/')) return 'users:write';
+  if (resource === 'bandwidth-stats') {
+    // Per-user figures name users and their traffic: users:read data.
+    if (rest.includes('/users/') || rest.endsWith('/users')) return 'users:read';
+    return 'dashboard:read';
+  }
+  // Aggregates are the native dashboard overview; what is left of `system` is
+  // the version probe.
+  if (resource === 'system' && rest.startsWith('system/stats')) return 'dashboard:read';
+  // Page-config stubs: read-only, behind the one special scope sub:read.
+  if (native === 'sub') return 'sub:read';
+  const verb = native === 'system' || method === 'GET' || method === 'HEAD' ? 'read' : 'write';
+  return `${native}:${verb}`;
 }
 
 /**
@@ -111,7 +159,12 @@ export async function enforceScopes(
   const scopes = token.scopes;
   if (scopes.length === 0 || scopes.includes('*')) return; // full / legacy token
 
-  const required = requiredScopeFor(request.method, request.routeOptions?.url);
+  const routeUrl = request.routeOptions?.url;
+  const facade =
+    config.REMNAWAVE_COMPAT_ENABLED && !!routeUrl && routeUrl.startsWith(`/${config.REMNAWAVE_COMPAT_PREFIX}/`);
+  const required = facade
+    ? requiredCompatScope(request.method, routeUrl, config.REMNAWAVE_COMPAT_PREFIX)
+    : requiredScopeFor(request.method, routeUrl);
   if (!required || !scopes.includes(required)) {
     return reply.code(403).send({
       error: 'FORBIDDEN',

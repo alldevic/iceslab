@@ -107,12 +107,30 @@ export const ConfigSchema = z.object({
     .string()
     .default('false')
     .transform((s) => s.toLowerCase() === 'true' || s === '1'),
-  // Remnawave facade switch, off by default. Until the facade itself lands it
-  // only picks the squad that takes the users of a deleted squad (squads.service).
+  // Remnawave facade switch, off by default. On, the Remnawave-shaped routes
+  // are mounted under REMNAWAVE_COMPAT_PREFIX (remnawave-compat module) and the
+  // users of a deleted squad are parked in the "No access" squad (squads.service).
   REMNAWAVE_COMPAT_ENABLED: z
     .string()
     .default('false')
     .transform((s) => s.toLowerCase() === 'true' || s === '1'),
+  // The one path segment the facade is mounted under: /<prefix>/api/*. It is
+  // the shop's PANEL_API_URL tail, so it changes together with that. Like
+  // SUBSCRIPTION_PATH_PREFIX it may not take a route the panel owns on the same
+  // origin or a honeypot trap prefix; that it also differs from the
+  // subscription prefix is checked against the whole object (ConfigSchema).
+  REMNAWAVE_COMPAT_PREFIX: z
+    .string()
+    .regex(/^[a-zA-Z0-9_-]+$/, 'Must be one path segment: [a-zA-Z0-9_-], no slashes')
+    .refine((v) => !RESERVED_PATH_PREFIXES.includes(`/${v.toLowerCase()}`), {
+      message: `Taken by the panel itself: ${RESERVED_PATH_PREFIXES.map((p) => p.slice(1)).join(', ')}`,
+    })
+    .refine((v) => collidingHoneypotPrefix(`/${v}`) === null, {
+      error: (iss) =>
+        `Collides with the honeypot trap prefix ${collidingHoneypotPrefix(`/${String(iss.input)}`)}; ` +
+        'the shop would be served a fake 404 and blacklisted',
+    })
+    .default('rw'),
   RATE_LIMIT_BOOTSTRAP_PER_MIN: z.coerce.number().int().min(1).default(10),
   RATE_LIMIT_HEARTBEAT_PER_MIN: z.coerce.number().int().min(1).default(120),
   // Where the image keeps the core artifacts it hands to nodes (the Dockerfile's
@@ -250,6 +268,17 @@ export const ConfigSchema = z.object({
             .filter((s) => s.length >= 8 && s.length <= 128)
         : [],
     ),
+}).superRefine((c, ctx) => {
+  // Two mounts on one first segment: the facade's /<prefix>/api/* would shadow
+  // or be shadowed by the subscription route. The case is folded, as in a URL
+  // the two are one path to every client that normalises it.
+  if (c.REMNAWAVE_COMPAT_PREFIX.toLowerCase() === c.SUBSCRIPTION_PATH_PREFIX.slice(1).toLowerCase()) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['REMNAWAVE_COMPAT_PREFIX'],
+      message: `Same path as SUBSCRIPTION_PATH_PREFIX (${c.SUBSCRIPTION_PATH_PREFIX}); pick another segment`,
+    });
+  }
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
