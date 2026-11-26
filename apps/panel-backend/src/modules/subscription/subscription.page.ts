@@ -29,6 +29,7 @@ import {
   PLATFORM_GLYPH,
   PLATFORM_LABEL,
   PLATFORM_ORDER,
+  appFormat,
   deeplinkHref,
   type AppDef,
   type PlatformId,
@@ -71,6 +72,15 @@ export interface SubscriptionPageData {
    * counts as carried when any of its doors is.
    */
   carriedFormats?: SubscriptionFormat[];
+  /**
+   * The formats a client may be offered for: `carriedFormats`, narrowed to the
+   * ones that would also hand the client a server it can dial (the transport
+   * table), see subscription.usable-formats.ts. An app of the catalog whose
+   * format is not here is left off the tabs: its config would come out empty.
+   * Absent for page data built by hand and for a subscription with no servers
+   * yet (the reference list is then shown whole): no filtering.
+   */
+  usableFormats?: SubscriptionFormat[];
   /**
    * Что оператор написал своими словами для состояний, в которых подключиться
    * нельзя. Пусто, пробелы или отсутствие ключа означают «оставить наш текст»,
@@ -253,18 +263,22 @@ function platformLabel(p: PlatformId, t: Labels): string {
 
 /** Every app this platform can offer THIS subscription, registry order.
  *  An app whose way in is a per-node handout shows only when there is one:
- *  the AmneziaWG files, the Outline keys. */
-function appsFor(
+ *  the AmneziaWG files, the Outline keys. An app with a format shows only when
+ *  that format is usable (`usableFormats`, when it is known); a per-node
+ *  handout and a router recipe have no format and are not filtered by it. */
+export function appsFor(
   platform: PlatformId,
   userProtocols: ProtocolName[],
   hasAwg: boolean,
   hasOutline: boolean,
+  usable?: readonly SubscriptionFormat[],
 ): AppDef[] {
   const protoSet = new Set(userProtocols);
   return APPS.filter(
     (a) =>
       a.platforms.includes(platform) &&
       a.protocols.some((p) => protoSet.has(p)) &&
+      (usable === undefined || appFormat(a) === undefined || usable.includes(appFormat(a)!)) &&
       (a.action.kind === 'deeplink' || a.action.kind === 'manual'
         ? true
         : a.action.kind === 'outline'
@@ -325,7 +339,14 @@ function splitApps(apps: AppDef[]): { row: AppDef[]; rest: AppDef[] } {
  * читает и подставляет один обработчик, и добавление клиента не требует
  * трогать скрипт.
  */
-function renderAppCard(a: AppDef, subUrl: string, icons: GlyphSheet, on = false): string {
+function renderAppCard(
+  a: AppDef,
+  subUrl: string,
+  icons: GlyphSheet,
+  on = false,
+  platform?: PlatformId,
+  t?: Labels,
+): string {
   let href: string;
   let glyphKey: GlyphKey;
   switch (a.action.kind) {
@@ -358,7 +379,18 @@ function renderAppCard(a: AppDef, subUrl: string, icons: GlyphSheet, on = false)
   const mark = markKey
     ? `<span class="app-card__mark">${icons.draw(markKey, { cls: 'mrk-big' })}</span>`
     : '';
-  const dot = a.recommended ? '<span class="app-card__dot"></span>' : '';
+  // What the store says about this app on THIS platform (the catalog's
+  // availability fields). A recommendation we cannot back with a link the
+  // reader's store opens is not made: no dot where the app is not there.
+  const gap = platform ? a.storeGap?.[platform] : undefined;
+  const price = platform ? a.storePrice?.[platform] : undefined;
+  const dot = a.recommended && !gap ? '<span class="app-card__dot"></span>' : '';
+  const flag =
+    t && gap
+      ? `<span class="app-card__flag app-card__flag--nostore">${esc(t.storeGap)}</span>`
+      : t && price
+        ? `<span class="app-card__flag app-card__flag--paid">${esc(`${t.storePaid} · ${price}`)}</span>`
+        : '';
   // Знак и значок действия занимают ОДИН угол, и когда стоят оба, кубик
   // sing-box лежит под стрелкой, а знак AmneziaVPN под кодом: читается как
   // грязь, а не как две вещи. В макете на карточке с маркой значка нет вовсе,
@@ -372,7 +404,7 @@ function renderAppCard(a: AppDef, subUrl: string, icons: GlyphSheet, on = false)
     ` data-app-add="${esc(href)}" data-app-kind="${a.action.kind}"` +
     (a.site ? ` data-app-site="${esc(a.site)}"` : '') +
     `${ink !== undefined ? ` style="--mark-o:${ink}"` : ''}>` +
-    `${dot}<span class="app-card__name">${esc(a.name)}</span>${glyph}${mark}</button>`
+    `${dot}<span class="app-card__name">${esc(a.name)}</span>${glyph}${mark}${flag}</button>`
   );
 }
 
@@ -427,13 +459,16 @@ function cardRows(
   per: number = ROW_SIZE,
   /** Имя клиента, чья карточка уже выбрана. */
   selected?: string,
+  /** Платформа и тексты: без них карточка рисуется без отметок магазина. */
+  platform?: PlatformId,
+  t?: Labels,
 ): string {
   const rows: string[] = [];
   for (let i = 0; i < apps.length; i += per) {
     const chunk = apps.slice(i, i + per);
     const pad = '<span class="spacer"></span>'.repeat(per - chunk.length);
     rows.push(
-      `<div class="${cls}">${chunk.map((a) => renderAppCard(a, subUrl, icons, a.name === selected)).join('')}${pad}</div>`,
+      `<div class="${cls}">${chunk.map((a) => renderAppCard(a, subUrl, icons, a.name === selected, platform, t)).join('')}${pad}</div>`,
     );
   }
   return rows.join('');
@@ -471,7 +506,7 @@ function renderAllApps(
         // Второй уровень идёт по ТРИ в ряд, а не по четыре, как ряд над ним:
       // карточек тут вдвое больше, имена длиннее («AmneziaVPN», «Quantumult X»),
       // и на четвёртой колонке они обрезались многоточием. В макете ровно так же.
-      cardRows(list, subUrl, icons, 'all-apps__row', ALL_ROW_SIZE) +
+      cardRows(list, subUrl, icons, 'all-apps__row', ALL_ROW_SIZE, undefined, platform, t) +
         `</div>`;
   return `<div class="all-apps" data-all-apps>
       <div class="all-apps__top">
@@ -597,11 +632,11 @@ function renderPanel(
   icons: GlyphSheet,
   hasOutline = false,
 ): string {
-  const apps = appsFor(platform, data.protocols, hasAwg, hasOutline);
+  const apps = appsFor(platform, data.protocols, hasAwg, hasOutline, data.usableFormats);
   if (apps.length === 0) return '';
   const { row, rest } = splitApps(apps);
   return (
-    `<div class="apps">${cardRows(row, data.subUrl, icons, 'apps__row', ROW_SIZE, row[0]?.name)}` +
+    `<div class="apps">${cardRows(row, data.subUrl, icons, 'apps__row', ROW_SIZE, row[0]?.name, platform, t)}` +
     renderTelegramRow(platform, data.protocols, t, icons) +
     `</div>` +
     renderAllApps(platform, apps, rest, data.subUrl, t, icons) +
@@ -1099,7 +1134,9 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   const noServers = data.protocols.length === 0;
   // The reference list of an empty subscription stays what it was: plain WireGuard
   // is offered where the subscription has a wireguard node.
-  const appData = noServers ? { ...data, protocols: PROTOCOL_NAMES.filter((p) => p !== 'wireguard') } : data;
+  const appData = noServers
+    ? { ...data, protocols: PROTOCOL_NAMES.filter((p) => p !== 'wireguard'), usableFormats: undefined }
+    : data;
 
   // Rendered ONCE per platform and kept. The previous shape rendered every
   // platform a second time just to ask whether its panel would be empty, which

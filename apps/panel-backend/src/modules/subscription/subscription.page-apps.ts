@@ -17,15 +17,39 @@
  * Комментарии про платформы у записей ниже это проверки, по которым
  * платформы в каталоге такие, какие есть.
  */
-import { CLIENTS, type ClientDef, type ClientId, type PlatformId, type ProtocolName } from '@iceslab/shared';
+import {
+  CLIENTS,
+  type ClientDef,
+  type ClientId,
+  type PlatformId,
+  type ProtocolName,
+  type SubscriptionFormat,
+} from '@iceslab/shared';
 import type { GlyphKey } from './subscription.page-icons.js';
 
 export type { PlatformId } from '@iceslab/shared';
 
-/** The catalog's half of an app entry: who it is, where it runs, where to get it. */
-function fromCatalog(id: ClientId): Pick<AppDef, 'name' | 'platforms' | 'site'> {
+/** The catalog's half of an app entry: who it is, where it runs, where to get it,
+ *  and what the store says about it (the availability fields). */
+function fromCatalog(
+  id: ClientId,
+): Pick<AppDef, 'client' | 'name' | 'platforms' | 'site' | 'storeGap' | 'storePrice' | 'storeNameAlike'> {
   const c: ClientDef = CLIENTS[id];
-  return { name: c.name, platforms: [...c.platforms], ...(c.site ? { site: c.site } : {}) };
+  return {
+    client: id,
+    name: c.name,
+    platforms: [...c.platforms],
+    ...(c.site ? { site: c.site } : {}),
+    ...(c.storeGap ? { storeGap: c.storeGap } : {}),
+    ...(c.storePrice ? { storePrice: c.storePrice } : {}),
+    ...(c.storeNameAlike ? { storeNameAlike: c.storeNameAlike } : {}),
+  };
+}
+
+/** The format a page entry's client is handed when it asks without `?format=`.
+ *  Absent for the entries that are a per-node handout or a router recipe. */
+export function appFormat(a: Pick<AppDef, 'client'>): SubscriptionFormat | undefined {
+  return a.client ? (CLIENTS[a.client] as ClientDef).format : undefined;
 }
 
 /** Which glyph stands for a platform in the selector.
@@ -98,6 +122,10 @@ export type AppAction =
   | { kind: 'manual' }; // paste the subscription link
 
 export interface AppDef {
+  /** The catalog entry this one is made from (CLIENTS), which is where its
+   *  format comes from. Every entry is made by `fromCatalog`, so it is always
+   *  there; the format is what is absent for a per-node handout. */
+  client?: ClientId;
   name: string;
   platforms: PlatformId[];
   protocols: ProtocolName[];
@@ -125,6 +153,10 @@ export interface AppDef {
    * человека в никуда хуже, чем не отправить никуда.
    */
   site?: string;
+  /** Store availability, copied from the catalog (see ClientDef.storeGap). */
+  storeGap?: ClientDef['storeGap'];
+  storePrice?: ClientDef['storePrice'];
+  storeNameAlike?: ClientDef['storeNameAlike'];
 }
 
 export const APPS: AppDef[] = [
@@ -137,7 +169,7 @@ export const APPS: AppDef[] = [
     // Windows 10 (1809)+/11, macOS 13+, Linux, "Android TV 5.0+" and
     // "Apple TV (tvOS 15+)". Linux was missing here and is theirs.
     ...fromCatalog('happ'),
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls'],
     action: { kind: 'deeplink', scheme: 'happ' },
     recommended: true,
   },
@@ -151,7 +183,7 @@ export const APPS: AppDef[] = [
     // stranger's binary. Google Play still serves com.v2raytun.android.
     // If it comes back, the fix is to put the platforms back on this line.
     ...fromCatalog('v2raytun'),
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls'],
     action: { kind: 'deeplink', scheme: 'v2raytun' },
     recommended: true,
   },
@@ -161,7 +193,7 @@ export const APPS: AppDef[] = [
     // remote cannot reach part of the screen (hiddify-app #1246, #969). The apk
     // installs on a TV, which is not the same as being usable with a remote.
     ...fromCatalog('hiddify'),
-    protocols: ['amneziawg', 'xray', 'shadowsocks', 'hysteria'],
+    protocols: ['amneziawg', 'xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls'],
     action: { kind: 'deeplink', scheme: 'hiddify' },
     recommended: true,
   },
@@ -169,7 +201,7 @@ export const APPS: AppDef[] = [
     // sing-box.sagernet.org/clients lists the Apple client as
     // "iOS/macOS/Apple tvOS", so tvOS was simply missing here.
     ...fromCatalog('singbox'),
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls'],
     action: { kind: 'deeplink', scheme: 'singbox' },
   },
   {
@@ -178,7 +210,7 @@ export const APPS: AppDef[] = [
     // "Android TV Stable Version (armeabi-v7a)", Windows, macOS, Linux.
     // No deep link is documented, so the honest action is the link.
     ...fromCatalog('karing'),
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls'],
     action: { kind: 'manual' },
     recommended: true,
   },
@@ -187,7 +219,7 @@ export const APPS: AppDef[] = [
     // No Apple TV, so the appletv that stood here offered tvOS owners an app
     // they cannot install.
     ...fromCatalog('streisand'),
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls'],
     action: { kind: 'deeplink', scheme: 'streisand' },
     recommended: true,
   },
@@ -197,7 +229,7 @@ export const APPS: AppDef[] = [
     // (Catalina, so a real Mac build rather than an iOS app on Apple silicon).
     // Both are the vendor's own claims on the store page.
     ...fromCatalog('shadowrocket'),
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls'],
     action: { kind: 'deeplink', scheme: 'shadowrocket' },
   },
   {
@@ -205,19 +237,21 @@ export const APPS: AppDef[] = [
     // app does not appear in a TV's app list at all (v2rayNG #1848, unanswered).
     // That is why a separate Android-TV fork exists.
     ...fromCatalog('v2rayng'),
-    protocols: ['xray', 'shadowsocks'],
+    // xray only: the xrayjson/xkeen answer does not carry Shadowsocks (FORMAT_DOORS).
+    protocols: ['xray'],
     action: { kind: 'deeplink', scheme: 'v2rayng' },
     recommended: true,
   },
   {
     ...fromCatalog('nekobox'),
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls', 'mieru'],
     action: { kind: 'manual' },
     advanced: true,
   },
   {
     ...fromCatalog('v2rayn'),
-    protocols: ['xray', 'shadowsocks'],
+    // xray only: the xrayjson/xkeen answer does not carry Shadowsocks (FORMAT_DOORS).
+    protocols: ['xray'],
     action: { kind: 'manual' },
     advanced: true,
   },
@@ -228,19 +262,19 @@ export const APPS: AppDef[] = [
     // Windows/Linux/macOS out of the box. We were pointing readers at an
     // archive.
     ...fromCatalog('throne'),
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls'],
     action: { kind: 'manual' },
     advanced: true,
   },
   {
     ...fromCatalog('clashVerge'),
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls', 'mieru'],
     action: { kind: 'deeplink', scheme: 'clash' },
     advanced: true,
   },
   {
     ...fromCatalog('flclash'),
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls', 'mieru'],
     action: { kind: 'deeplink', scheme: 'clash' },
   },
   {
@@ -256,6 +290,20 @@ export const APPS: AppDef[] = [
     protocols: ['xray', 'shadowsocks', 'hysteria'],
     action: { kind: 'manual' },
   },
+  {
+    // iOS only, as in the fork (the listing says "Designed for iPad. Not verified
+    // for macOS", the publisher has no Android build). The catalog keeps macos and
+    // android for recognising the client by its User-Agent. No deep link is
+    // documented anywhere by the publisher, so the way in is the link. TUIC and
+    // AnyTLS are not named in the publisher's feature list (Shadowsocks, VLESS/
+    // VMess/Trojan with Reality and Vision, Hysteria2), so they are not claimed:
+    // under-declaring hides a line from a card, over-declaring promises a channel
+    // the buyer cannot find.
+    ...fromCatalog('v2box'),
+    platforms: ['ios'],
+    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    action: { kind: 'manual' },
+  },
   // AmneziaWG-specific.
   {
     // No androidtv: their own download page offers Windows, macOS, iOS,
@@ -266,6 +314,13 @@ export const APPS: AppDef[] = [
     protocols: ['amneziawg'],
     action: { kind: 'awg-vpn' },
     recommended: true,
+  },
+  {
+    // The vpn:// key AmneziaVPN takes, in the store that carries this one (see
+    // CLIENTS.defaultvpn); the .conf entry below is the way for a refused key.
+    ...fromCatalog('defaultvpn'),
+    protocols: ['amneziawg'],
+    action: { kind: 'awg-vpn' },
   },
   {
     ...fromCatalog('amneziawg'),
@@ -292,6 +347,14 @@ export const APPS: AppDef[] = [
     recommended: true,
   },
   {
+    // Adds split tunnelling and auto-connect on trusted networks to what the
+    // official app does. Reads a stock wg-quick file and rejects an AmneziaWG
+    // one, like every non-AWG client here. Same handout as WireGuard above.
+    ...fromCatalog('wgtunnel'),
+    protocols: ['wireguard'],
+    action: { kind: 'wg-conf' },
+  },
+  {
     ...fromCatalog('wiresock'),
     protocols: ['wireguard'],
     action: { kind: 'download' },
@@ -311,7 +374,8 @@ export const APPS: AppDef[] = [
     // /opt/etc/xray. Separate from the Keenetic row above because that one is
     // the AmneziaWG .conf download and this one is a link to paste.
     ...fromCatalog('xkeen'),
-    protocols: ['xray', 'shadowsocks'],
+    // xray only: the xrayjson/xkeen answer does not carry Shadowsocks (FORMAT_DOORS).
+    protocols: ['xray'],
     action: { kind: 'manual' },
   },
   {

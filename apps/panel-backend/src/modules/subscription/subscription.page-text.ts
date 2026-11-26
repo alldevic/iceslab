@@ -40,6 +40,9 @@ export interface Labels {
   allApps: string;
   allAppsNote: string;
   wholeList: string;
+  /** The marks on an app card (the catalog's availability fields). */
+  storeGap: string;
+  storePaid: string;
   showAll: string;
   hideAll: string;
   groupPlain: string;
@@ -152,6 +155,8 @@ export const L: Record<'ru' | 'en', Labels> = {
     allApps: 'All apps for {p}',
     allAppsNote: 'The ones above are enough. This is everything else that works.',
     wholeList: 'This is the whole list for {p}, not a selection.',
+    storeGap: 'Not in the RU App Store',
+    storePaid: 'Paid',
     showAll: 'Show',
     hideAll: 'Hide',
     groupPlain: 'INSTALL AND IT WORKS',
@@ -335,6 +340,8 @@ export const L: Record<'ru' | 'en', Labels> = {
     allApps: 'Все приложения для {p}',
     allAppsNote: 'Тех, что выше, достаточно. Здесь всё остальное, что тоже работает.',
     wholeList: 'Это весь список для {p}, а не выборка.',
+    storeGap: 'Нет в российском App Store',
+    storePaid: 'Платное',
     showAll: 'Показать',
     hideAll: 'Скрыть',
     groupPlain: 'ПОСТАВИЛ И РАБОТАЕТ',

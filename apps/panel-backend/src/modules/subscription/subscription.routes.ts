@@ -23,6 +23,7 @@ import { buildQuantumultXConf } from './formats/quantumultx.js';
 import { buildLoonConf } from './formats/loon.js';
 import { buildSubscriptionPage } from './subscription.page.js';
 import { subscriptionUrl } from './subscription.link.js';
+import { carriedFormats, usableFormats } from './subscription.usable-formats.js';
 import { linkWithDescription } from './subscription.description.js';
 import {
   endpointsForFormat,
@@ -884,13 +885,10 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
             // A download row is offered exactly when its file would carry
             // something: the same gate and the same host switches the file
             // itself goes through.
-            carriedFormats: FORMAT_NAMES.filter(
-              (f) =>
-                endpointsForFormat(
-                  f,
-                  result.endpoints.filter((e) => !formatDisabledForHost(e.disableForFormats, f)),
-                ).length > 0,
-            ),
+            carriedFormats: carriedFormats(result.endpoints),
+            // A client is offered when its format would also hand it a server it
+            // can dial: on an all-XHTTP fleet sing-box gets nothing.
+            usableFormats: usableFormats(result.endpoints),
             awgNodes,
             wgNodes,
             mtprotoNodes,

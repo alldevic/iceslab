@@ -212,6 +212,12 @@ export const PAGE_CSS = String.raw`
   .app-card.is-on .app-card__name{color:var(--cyan);}
   .app-card.is-on .app-card__mark{color:var(--cyan);}
   .app-card.is-on .app-card__glyph{color:var(--cyan);}
+  /* Отметка магазина: узкая строка у нижнего края. Имя стоит по центру высоты
+     карточки и до неё не доходит; у карточки без отметки разметки нет вовсе. */
+  .app-card__flag{position:absolute; left:14px; right:14px; bottom:3px; z-index:1; font-size:9px;
+    line-height:11px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .app-card__flag--nostore{color:var(--warn);}
+  .app-card__flag--paid{color:var(--mist);}
   .app-card__dot{width:6px; height:6px; flex-shrink:0; border-radius:999px; background:var(--warn);}
   .app-card__name{font-size:14px; font-weight:600; line-height:18px; color:var(--snow);
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}

@@ -594,3 +594,107 @@ describe('the refusal page', () => {
     expect(html).not.toContain('The link does not change');
   });
 });
+describe('the apps the page offers against what the formats give', () => {
+  const names = (html: string, platform: string) => {
+    const panel = html.slice(html.indexOf(`data-platform="${platform}"`));
+    const body = panel.slice(0, panel.indexOf('</section>'));
+    return [...body.matchAll(/class="app-card__name">([^<]+)</g)].map((m) => m[1]);
+  };
+
+  it('hides the sing-box clients on an XHTTP-only fleet and keeps the others', () => {
+    const all = ['plain', 'singbox', 'mihomo', 'xrayjson'] as const;
+    const withBoth = buildSubscriptionPage(base({ protocols: ['xray'], usableFormats: [...all] }));
+    const xhttp = buildSubscriptionPage(base({ protocols: ['xray'], usableFormats: ['plain', 'mihomo', 'xrayjson'] }));
+    for (const n of ['Hiddify', 'sing-box', 'Karing']) {
+      expect(names(withBoth, 'ios'), n).toContain(n);
+      expect(names(xhttp, 'ios'), n).not.toContain(n);
+    }
+    expect(names(xhttp, 'ios')).toContain('Happ');
+    expect(names(xhttp, 'android')).toContain('v2rayNG');
+    expect(xhttp).not.toContain('sing-box://import-remote-profile');
+    expect(xhttp).not.toContain('hiddify://import/');
+  });
+
+  it('does not break on no usable format: only the apps without a format are left', () => {
+    const html = buildSubscriptionPage(base({ protocols: ['xray', 'amneziawg'], awgNodes: [{ nodeName: 'awg' }], usableFormats: [] }));
+    expect(html).toContain('<!DOCTYPE html>');
+    expect([...names(html, 'ios')].sort()).toEqual(['AmneziaVPN', 'AmneziaWG', 'DefaultVPN', 'INCY']);
+  });
+
+  it('takes the first client of the steps from the filtered list', () => {
+    // Hiddify is the first of its tab by registry order; the "get" button of
+    // the steps must name the first one that is still offered.
+    const html = buildSubscriptionPage(base({ protocols: ['xray'], usableFormats: ['plain'] }));
+    const steps = html.slice(html.indexOf('data-app-get'));
+    expect(steps.slice(0, 600)).not.toContain('Hiddify');
+  });
+
+  it('does not filter when the data carries no usable list', () => {
+    expect(names(buildSubscriptionPage(base({ protocols: ['xray'] })), 'ios')).toContain('Hiddify');
+  });
+
+  it('shows V2Box and DefaultVPN on iOS, and WG Tunnel on Android for plain WireGuard', () => {
+    const ios = buildSubscriptionPage(
+      base({ protocols: ['xray', 'amneziawg'], awgNodes: [{ nodeName: 'awg' }] }),
+    );
+    expect(names(ios, 'ios')).toEqual(expect.arrayContaining(['V2Box', 'DefaultVPN']));
+    expect(names(ios, 'android')).not.toContain('V2Box');
+    expect(names(ios, 'macos')).not.toContain('V2Box');
+
+    const wg = buildSubscriptionPage(
+      base({ protocols: ['wireguard'], wgNodes: [{ nodeName: 'wg', id: 'wg1', device: 1, file: 'x.conf', conf: '[Interface]' } as never] }),
+    );
+    expect(names(wg, 'android')).toEqual(expect.arrayContaining(['WireGuard', 'WG Tunnel']));
+    expect(names(wg, 'ios')).not.toContain('WG Tunnel');
+    expect(names(buildSubscriptionPage(base({ protocols: ['xray'] })), 'android')).not.toContain('WG Tunnel');
+  });
+});
+
+describe('the store marks on the cards', () => {
+  const card = (html: string, platform: string, name: string) => {
+    const panel = html.slice(html.indexOf(`data-platform="${platform}"`));
+    const body = panel.slice(0, panel.indexOf('</section>'));
+    const i = body.indexOf(`data-app="${name}"`);
+    return i < 0 ? '' : body.slice(i, body.indexOf('</button>', i));
+  };
+  const page = buildSubscriptionPage(base({ protocols: ['xray', 'shadowsocks', 'hysteria'] }));
+
+  it('marks an app the Russian store does not carry, on the platform where that is so', () => {
+    expect(card(page, 'ios', 'V2Box')).toContain('app-card__flag--nostore');
+    expect(card(page, 'ios', 'V2Box')).toContain('Not in the RU App Store');
+    expect(card(page, 'ios', 'Streisand')).toContain('app-card__flag--nostore');
+    // The macOS listing is one id with the iOS one.
+    expect(card(page, 'macos', 'Streisand')).toContain('app-card__flag--nostore');
+  });
+
+  it('marks a paid app with its price, on both Apple platforms it is sold on', () => {
+    expect(card(page, 'ios', 'Shadowrocket')).toContain('app-card__flag--paid');
+    expect(card(page, 'ios', 'Shadowrocket')).toContain('Paid · 249 ₽');
+    expect(card(page, 'appletv', 'Shadowrocket')).toContain('249 ₽');
+    expect(card(page, 'macos', 'Shadowrocket')).not.toContain('app-card__flag');
+  });
+
+  it('marks nothing off the Apple platforms and nothing on an app without the field', () => {
+    for (const p of ['android', 'windows', 'linux', 'androidtv']) {
+      const panel = page.slice(page.indexOf(`data-platform="${p}"`));
+      expect(panel.slice(0, panel.indexOf('</section>')), p).not.toContain('app-card__flag');
+    }
+    // Happ is out of the store on iOS and macOS, not on Apple TV or Android.
+    expect(card(page, 'appletv', 'Happ')).not.toContain('app-card__flag');
+    expect(card(page, 'android', 'Happ')).not.toContain('app-card__flag');
+    // A card without a field is the card the base drew.
+    expect(card(page, 'ios', 'Karing')).toMatch(/^data-app="Karing"[^>]*><span class="app-card__dot"><\/span><span class="app-card__name">Karing<\/span>/);
+  });
+
+  it('draws no recommendation dot where the app is not in the store, and keeps it elsewhere', () => {
+    expect(card(page, 'ios', 'Happ')).not.toContain('app-card__dot');
+    expect(card(page, 'appletv', 'Happ')).toContain('app-card__dot');
+    expect(card(page, 'android', 'Happ')).toContain('app-card__dot');
+  });
+
+  it('says it in Russian too', () => {
+    const ru = buildSubscriptionPage(base({ lang: 'ru', protocols: ['xray'] }));
+    expect(card(ru, 'ios', 'V2Box')).toContain('Нет в российском App Store');
+    expect(card(ru, 'ios', 'Shadowrocket')).toContain('Платное · 249 ₽');
+  });
+});

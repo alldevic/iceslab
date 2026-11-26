@@ -902,3 +902,53 @@ describe('the download flag', () => {
     expect(res.headers['content-disposition']).toBe('attachment; filename="dl-4-xkeen.json"');
   });
 });
+
+describe('the page offers only the clients whose format gives them a server', () => {
+  const browser = {
+    accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+  };
+  const REALITY = {
+    security: 'reality',
+    realityDest: 'www.microsoft.com:443',
+    realityServerNames: ['www.microsoft.com'],
+    realityPrivateKey: 'k'.repeat(43),
+    realityPublicKey: 'p'.repeat(43),
+    realityShortIds: ['0123abcd'],
+    subprotocol: 'vless',
+    path: '/xh',
+  };
+
+  async function xrayFleet(network: string, username: string): Promise<string> {
+    const node = await app.inject({
+      method: 'POST', url: '/api/nodes', headers: { authorization: `Bearer ${token}` },
+      payload: { name: `usable-${network}`, address: `usable-${network}.test`, protocol: 'xray' },
+    });
+    const profile = await app.inject({
+      method: 'POST', url: '/api/profiles', headers: { authorization: `Bearer ${token}` },
+      payload: { name: `usable-p-${network}`, protocol: 'xray', config: { ...REALITY, network } },
+    });
+    expect(profile.statusCode, profile.body).toBe(201);
+    const binding = await app.inject({
+      method: 'POST', url: '/api/bindings', headers: { authorization: `Bearer ${token}` },
+      payload: { profileId: JSON.parse(profile.body).id, nodeId: JSON.parse(node.body).id, port: 443 },
+    });
+    expect(binding.statusCode, binding.body).toBe(201);
+    return (await createUser(username)).subscriptionToken;
+  }
+
+  it('hides sing-box clients on an all-XHTTP fleet, and shows them on a raw one', async () => {
+    const xhttp = await app.inject({ method: 'GET', url: `/sub/${await xrayFleet('xhttp', 'u-xhttp')}`, headers: browser });
+    expect(xhttp.statusCode, xhttp.body).toBe(200);
+    expect(xhttp.body).toContain('happ://add/');
+    expect(xhttp.body).not.toContain('sing-box://import-remote-profile');
+    expect(xhttp.body).not.toContain('hiddify://import/');
+
+    await cleanDatabase();
+    token = await registerAndLogin(app);
+    const raw = await app.inject({ method: 'GET', url: `/sub/${await xrayFleet('raw', 'u-raw')}`, headers: browser });
+    expect(raw.statusCode, raw.body).toBe(200);
+    expect(raw.body).toContain('sing-box://import-remote-profile');
+    expect(raw.body).toContain('hiddify://import/');
+  });
+});

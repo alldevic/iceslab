@@ -61,10 +61,36 @@ export interface ClientDef {
    * CLIENT, not of the format (FORMAT_DOORS answers for the format).
    */
   limits?: string[];
+  /**
+   * Platforms where the store cannot hand this buyer the app, and why:
+   * `ru-storefront` the listing exists and the RUSSIAN storefront does not
+   * carry it, `delisted` it is gone from every storefront. Measured with
+   * `itunes.apple.com/lookup?id=<id>&country=ru` (0 results = absent), against
+   * controls on both sides; the date of the measurement is in the comment of
+   * each entry. Per platform, because one Apple listing serves several tabs
+   * and the same client comes from GitHub or the vendor elsewhere. Only the
+   * Apple platforms: Google Play has no such gate here.
+   *
+   * The store document (milestone 14.7) reads this from here, not its own copy.
+   */
+  storeGap?: Partial<Record<PlatformId, 'ru-storefront' | 'delisted'>>;
+  /** Platforms where the store carries the app for money, with the price as the
+   *  Russian storefront quotes it. Dated in the entry's comment: a price drifts. */
+  storePrice?: Partial<Record<PlatformId, string>>;
+  /** The Russian storefront carries OTHER apps under this name (a search for it
+   *  finds somebody else's client). Dated in the entry's comment. */
+  storeNameAlike?: true;
 }
 
 export const CLIENTS = {
   happ: {
+    // Store marks measured 2026-09-16 (fork catalog, carried over; re-measure:
+    // MANUAL-CHECKS.md). iOS and macOS are one listing (6504287215), missing
+    // from the Russian storefront; the TV build is a different listing and is
+    // there. Four look-alikes by other publishers in the search (Happ VPN, Happ
+    // VPN Official, Happ VPN ++, Happ Lite).
+    storeGap: { ios: 'ru-storefront', macos: 'ru-storefront' },
+    storeNameAlike: true,
     name: 'Happ',
     site: 'https://happ.su',
     platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'androidtv', 'appletv'],
@@ -81,6 +107,9 @@ export const CLIENTS = {
     uaUnknown: 'closed source, no documented User-Agent',
   },
   hiddify: {
+    // Measured 2026-09-16 (fork catalog, carried over): the iOS listing is not
+    // in the Russian storefront; the desktop and Android builds are not gated.
+    storeGap: { ios: 'ru-storefront' },
     name: 'Hiddify',
     site: 'https://hiddify.com',
     platforms: ['ios', 'macos', 'windows', 'linux', 'android'],
@@ -98,6 +127,12 @@ export const CLIENTS = {
     ],
   },
   singbox: {
+    // Measured 2026-09-05 and 2026-09-16 (fork catalog, carried over): listing
+    // 6673731168 answers 0 results in every storefront, the project says it is
+    // temporarily unable to update on the App Store. Third-party "sing-box MT"
+    // and similar are in the search and are not this client.
+    storeGap: { ios: 'delisted' },
+    storeNameAlike: true,
     name: 'sing-box',
     site: 'https://github.com/SagerNet/sing-box/releases',
     platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'appletv'],
@@ -132,6 +167,9 @@ export const CLIENTS = {
       'lib/screens/add_profile_by_link_or_content_screen.dart:80, 502-504); HttpUtils is not in the public repo',
   },
   streisand: {
+    // Measured 2026-09-16 (fork catalog, carried over): one Apple listing, absent
+    // from the Russian storefront on every platform it is on here.
+    storeGap: { ios: 'ru-storefront', macos: 'ru-storefront' },
     name: 'Streisand',
     site: 'https://apps.apple.com/app/id6450534064',
     platforms: ['ios', 'macos'],
@@ -140,6 +178,10 @@ export const CLIENTS = {
     uaUnknown: 'closed source, no documented User-Agent',
   },
   shadowrocket: {
+    // Measured 2026-09-16 (fork catalog, carried over): 249 ₽ in the Russian
+    // storefront ($2.99 in the US), the only paid client of the catalog there.
+    // The listing also carries in-app purchases, so no "one-off" wording.
+    storePrice: { ios: '249 ₽', appletv: '249 ₽' },
     name: 'Shadowrocket',
     site: 'https://apps.apple.com/app/id932747118',
     platforms: ['ios', 'macos', 'appletv'],
@@ -302,7 +344,15 @@ export const CLIENTS = {
     uaUnknown: 'closed source, no documented User-Agent',
   },
   v2box: {
+    // Measured 2026-09-16 (fork catalog, carried over): listing 6446814690 gives 0
+    // results under country=ru and 1 under country=us. The Russian storefront
+    // DOES carry an app named "V2Box" (6773664716, Hunan Bofan Network
+    // Technology): another app by other people, check trackName AND publisher.
+    storeGap: { ios: 'ru-storefront' },
+    storeNameAlike: true,
     name: 'V2Box',
+    // The listing id is the fork's (6446814690, "V2Box - V2ray Client").
+    site: 'https://apps.apple.com/app/id6446814690',
     platforms: ['ios', 'macos', 'android'],
     format: 'plain',
     uaSamples: [],
@@ -316,12 +366,28 @@ export const CLIENTS = {
     uaUnknown: 'not researched yet',
   },
   amneziavpn: {
+    // Measured 2026-09-05 and 2026-09-16 (fork catalog, carried over): the iOS
+    // listing is not in the Russian storefront, desktop comes off amnezia.org.
+    // "Amnezia VPN - супер впн 2026" (another publisher) is in the search.
+    storeGap: { ios: 'ru-storefront' },
+    storeNameAlike: true,
     name: 'AmneziaVPN',
     site: 'https://amnezia.org',
     platforms: ['ios', 'macos', 'windows', 'linux', 'android'],
     // Imports a vpn:// key or a file; never fetches a subscription by link
     // (amnezia-client@94b51df core/controllers/selfhosted/importController.cpp:176-259).
     uaSamples: [],
+  },
+  // AmneziaVPN's sibling from the same publisher: present in the Russian App
+  // Store when AmneziaVPN is not (fork, measured 2026-09-05). Takes the `vpn://`
+  // key we already build; accepting it is inferred from the listing's own words
+  // ("a VPN configuration in the form of a key"), not put on a device.
+  defaultvpn: {
+    name: 'DefaultVPN',
+    site: 'https://apps.apple.com/app/id6744725017',
+    platforms: ['ios'],
+    uaSamples: [],
+    uaUnknown: 'imports a vpn:// key; does not fetch a subscription by link',
   },
   amneziawg: {
     name: 'AmneziaWG',
@@ -338,6 +404,16 @@ export const CLIENTS = {
     platforms: ['ios', 'android', 'windows', 'macos', 'linux'],
     uaSamples: [],
     uaUnknown: 'imports a .conf file or QR; does not fetch a subscription by link',
+  },
+  // The Android client that adds split tunnelling and auto-connect on trusted
+  // networks (Google Play, "WG Tunnel" by Zane Schepke, live 2026-09-03 in the
+  // fork). It reads a stock wg-quick file and rejects an AmneziaWG one.
+  wgtunnel: {
+    name: 'WG Tunnel',
+    site: 'https://play.google.com/store/apps/details?id=com.zaneschepke.wireguardautotunnel',
+    platforms: ['android'],
+    uaSamples: [],
+    uaUnknown: 'the fork saw `wgtunnel/5.5.0 (Android)` fetching a config; not a documented string, so no sample',
   },
   wiresock: {
     name: 'WireSock',
