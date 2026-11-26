@@ -30,6 +30,12 @@ export interface DomainEventMap {
   // their peers on the nodes follow (users.events re-adds the user). Internal:
   // not forwarded to external webhooks (webhook.events.ts lists what leaves).
   'wg-devices.changed':   { userId: string; reason: 'issued' | 'revoked' };
+  // wg-devices.first-used → a device's counters moved for the first time
+  // (lastSeenAt null → set), claimed in the accounting statement itself so two
+  // nodes reporting one device announce it once. Emitted after that statement
+  // has committed. Forwarded to the shop only as user_hwid_devices.added
+  // (remnawave.webhook.events.ts).
+  'wg-devices.first-used': { userId: string; deviceId: string };
   // node.created → backfill all active users to this node. Required because
   // an empty new node otherwise stays empty until each existing user is
   // mutated again. Caught live during slice-23 VPS test 2026-05-06.

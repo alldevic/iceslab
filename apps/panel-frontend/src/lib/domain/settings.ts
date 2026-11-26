@@ -54,6 +54,8 @@ export interface AdminSettings extends PublicSettings {
   subscriptionWgDns?: string[] | null;
   /** Take `::/0` out of AllowedIPs in every wg config. */
   subscriptionWgDropIpv6?: boolean;
+  /** List never-used wg tunnels among a buyer's devices (facade). */
+  wgShowUnusedTunnels?: boolean;
   /** R3-b - raw custom xray routing rules. */
   subscriptionCustomRoutingRules?: Record<string, unknown>[] | null;
   /** R3 - operator-defined custom domain lists (direct/proxy/block). */
@@ -158,6 +160,7 @@ export interface UpdateSettingsInput {
   subscriptionTlsFragment?: boolean;
   subscriptionWgDns?: string[] | null;
   subscriptionWgDropIpv6?: boolean;
+  wgShowUnusedTunnels?: boolean;
   subscriptionCustomRoutingRules?: Record<string, unknown>[] | null;
   subscriptionCustomDomainLists?: {
     direct?: string[];

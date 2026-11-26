@@ -77,6 +77,7 @@ interface Draft {
   /** One field, comma- or space-separated: what an operator pastes. */
   wgDns: string;
   wgDropIpv6: boolean;
+  wgShowUnusedTunnels: boolean;
 }
 
 export function SubscriptionMetadataPage() {
@@ -115,6 +116,7 @@ export function SubscriptionMetadataPage() {
         subscriptionTlsFragment: draft.tlsFragment,
         subscriptionWgDns: wgDnsList(draft.wgDns),
         subscriptionWgDropIpv6: draft.wgDropIpv6,
+        wgShowUnusedTunnels: draft.wgShowUnusedTunnels,
       });
     },
     onSuccess: async () => {
@@ -447,6 +449,17 @@ export function SubscriptionMetadataPage() {
             <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: MIST }}>
               {t('metadata.wgDropIpv6Hint')}
             </Text>
+            <Box style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+              <FieldLabel>{t('metadata.wgShowUnusedTunnels')}</FieldLabel>
+              <Box style={{ flex: 1, minWidth: 0 }} />
+              <Switch
+                checked={draft.wgShowUnusedTunnels}
+                onChange={(e) => patch({ wgShowUnusedTunnels: e.currentTarget.checked })}
+              />
+            </Box>
+            <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: MIST }}>
+              {t('metadata.wgShowUnusedTunnelsHint')}
+            </Text>
           </Stack>
         </Box>
       </Box>
@@ -467,6 +480,7 @@ function toDraft(s: AdminSettings): Draft {
     tlsFragment: s.subscriptionTlsFragment ?? false,
     wgDns: (s.subscriptionWgDns ?? []).join(', '),
     wgDropIpv6: s.subscriptionWgDropIpv6 ?? false,
+    wgShowUnusedTunnels: s.wgShowUnusedTunnels ?? false,
   };
 }
 

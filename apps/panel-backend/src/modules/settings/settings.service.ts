@@ -98,6 +98,10 @@ export interface SubscriptionSettings {
   wgDns: string[];
   /** Take `::/0` out of `AllowedIPs` in every wg config. Off by default. */
   wgDropIpv6: boolean;
+  /** List wg tunnels nobody has used yet among a buyer's devices in the
+   *  Remnawave-compatible API. Off by default: tunnels are issued up front, so
+   *  an untouched one is a slot rather than a device. */
+  wgShowUnusedTunnels: boolean;
 }
 
 // B5 - in-process cache for the subscription settings. `/sub/:token` is hit on
@@ -259,6 +263,8 @@ export async function getSubscriptionSettings(): Promise<SubscriptionSettings> {
     wgDns,
     // Only the literal boolean, like tlsFragment: garbage keeps `::/0`.
     wgDropIpv6: map.get('subscriptionWgDropIpv6') === true,
+    // Only the literal boolean, like tlsFragment.
+    wgShowUnusedTunnels: map.get('wgShowUnusedTunnels') === true,
   };
   settingsCache = { value, expiresAt: Date.now() + SETTINGS_CACHE_TTL_MS };
   return value;

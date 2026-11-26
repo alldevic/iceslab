@@ -1,5 +1,6 @@
 import { prisma } from '../../prisma.js';
 import { Prisma } from '../../generated/prisma/client.js';
+import { eventBus } from '../../lib/infra/event-bus.js';
 import type { StatsUserEntry } from '../stats/stats.compute.js';
 
 /**
@@ -23,6 +24,12 @@ import type { StatsUserEntry } from '../stats/stats.compute.js';
  * moves forward (a poll that finds no handshake, such as after the interface
  * was recreated, leaves it), and never past `now`. A revoked device is not
  * credited.
+ *
+ * The first use of a device is lastSeenAt going from null to a time. It is
+ * claimed in the same statement as the credit: the old value is read under a
+ * row lock, so two polls folding the same device at once (it lives on every
+ * WireGuard node) cannot both see null. wg-devices.first-used is emitted once
+ * the statement has committed, one per device.
  */
 export async function creditDeviceTraffic(entries: StatsUserEntry[], now: Date): Promise<number> {
   const byKey = new Map<string, { in: number; out: number; seen: number }>();
@@ -46,12 +53,23 @@ export async function creditDeviceTraffic(entries: StatsUserEntry[], now: Date):
     ([pk, v]) =>
       Prisma.sql`(${pk}, ${BigInt(v.in)}::bigint, ${BigInt(v.out)}::bigint, ${v.seen > 0 ? new Date(v.seen * 1000) : null}::timestamptz)`,
   );
-  return prisma.$executeRaw(Prisma.sql`
+  const credited = await prisma.$queryRaw<{ id: string; user_id: string; first: boolean }[]>(Prisma.sql`
+    WITH v(pk, bin, bout, seen) AS (VALUES ${Prisma.join(rows)}),
+    old AS (
+      SELECT d.id, d.last_seen_at FROM wg_devices d JOIN v ON d.public_key = v.pk
+      WHERE d.revoked_at IS NULL
+      ORDER BY d.public_key
+      FOR UPDATE OF d
+    )
     UPDATE wg_devices d
     SET bytes_in = d.bytes_in + v.bin,
         bytes_out = d.bytes_out + v.bout,
         last_seen_at = GREATEST(d.last_seen_at, v.seen)
-    FROM (VALUES ${Prisma.join(rows)}) AS v(pk, bin, bout, seen)
-    WHERE d.public_key = v.pk AND d.revoked_at IS NULL
+    FROM v, old
+    WHERE d.public_key = v.pk AND old.id = d.id
+    RETURNING d.id::text AS id, d.user_id::text AS user_id,
+              (old.last_seen_at IS NULL AND d.last_seen_at IS NOT NULL) AS first
   `);
+  for (const r of credited) if (r.first) eventBus.emit('wg-devices.first-used', { userId: r.user_id, deviceId: r.id });
+  return credited.length;
 }

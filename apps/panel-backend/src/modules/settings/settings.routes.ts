@@ -103,6 +103,9 @@ async function peerCertificateExpiry(url: string): Promise<string | null> {
  *                                                   Empty/NULL: no line (default).
  *   - `subscriptionWgDropIpv6` (boolean)          - take `::/0` out of `AllowedIPs`
  *                                                   in every wg config. Default false.
+ *   - `wgShowUnusedTunnels` (boolean)             - list never-used wg tunnels among the
+ *                                                   devices of the Remnawave-compatible
+ *                                                   API. Default false.
  *
  * Future keys land in the same table; flip `isPublic` per key.
  */
@@ -197,6 +200,13 @@ const UpsertInput = z.object({
     .nullable()
     .optional(),
   subscriptionWgDropIpv6: z.boolean().optional(),
+  // Whether a wg tunnel nobody has used yet is listed among a buyer's devices
+  // in the Remnawave-compatible API. Tunnels are issued up front, one per
+  // device the limit allows, so an untouched one is a slot, not a device: off
+  // by default. On, the slots show too (the support case "I downloaded the
+  // config and nothing appeared"). Stored under this name, not subscription*:
+  // it is read by the facade, not by a subscription render.
+  wgShowUnusedTunnels: z.boolean().optional(),
   subscriptionPublicHost: z
     .string()
     .max(253)

@@ -63,6 +63,7 @@ const WRITABLE = [
   'subscriptionPublicHost',
   'subscriptionWgDns',
   'subscriptionWgDropIpv6',
+  'wgShowUnusedTunnels',
 ];
 
 describe('the settings response', () => {

@@ -385,6 +385,9 @@ export const common = {
     wgDropIpv6: 'Leave IPv6 out of the tunnel',
     wgDropIpv6Hint:
       'Removes ::/0 from AllowedIPs in every WireGuard and AmneziaWG config. Turn it on when the tunnel carries no IPv6: otherwise the client keeps sending IPv6 into a tunnel that cannot take it, and with this on its IPv6 goes outside the tunnel. Off: ::/0 stays, as before.',
+    wgShowUnusedTunnels: 'Show unused tunnels',
+    wgShowUnusedTunnelsHint:
+      'WireGuard tunnels are issued up front, one per device the limit allows, so a tunnel nobody has connected is a slot, not a device. Off: the buyer\'s device list in the shop shows used tunnels only. On: every unrevoked tunnel shows, for the case where a buyer says "I downloaded the config and the list is empty".',
   },
   // One label per subscription format name, ONE for the whole panel: the host
   // screen, the "default format" setting and the delivery rule all read it.

@@ -76,6 +76,7 @@ const INTERNAL = [
   'geo.rolledOut',
   'wg-devices.changed',
   'hwid.device-added',
+  'wg-devices.first-used',
 ];
 
 /**

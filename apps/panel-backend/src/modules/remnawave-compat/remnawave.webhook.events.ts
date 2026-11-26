@@ -1,4 +1,7 @@
 import { eventBus } from '../../lib/infra/event-bus.js';
+import { getLogger } from '../../lib/infra/logger.js';
+import { prisma } from '../../prisma.js';
+import { describeWgTunnel, servedProfileIds } from '../wg-devices/wg-devices.presentation.js';
 import { emitRemnaWebhookForUser, isRemnaWebhookConfigured } from './remnawave.webhook.js';
 
 /**
@@ -49,5 +52,29 @@ export function registerRemnawaveWebhookEmitter(): void {
         },
       },
     );
+  });
+
+  // A WireGuard device is announced the same way, once, at its first use: an
+  // issued key nobody has imported is a slot, not a device the buyer added.
+  // Named as in the device list. The wg-devices module only emits the event;
+  // it knows nothing of this sender.
+  eventBus.on('wg-devices.first-used', async ({ userId, deviceId }) => {
+    if (!isRemnaWebhookConfigured()) return;
+    try {
+      const [device, served] = await Promise.all([
+        prisma.wgDevice.findUnique({
+          where: { id: deviceId },
+          include: { peers: { select: { ip: true, profileId: true }, orderBy: { ip: 'asc' } } },
+        }),
+        servedProfileIds(userId),
+      ]);
+      // Revoked between the first use and now: nothing to announce.
+      if (!device || device.revokedAt) return;
+      emitRemnaWebhookForUser('user_hwid_devices.added', userId, {}, {
+        hwidUserDevice: { ...describeWgTunnel(device, served), osVersion: null },
+      });
+    } catch (err) {
+      getLogger().warn(`[remnawave] first use of WireGuard device ${deviceId} not announced: ${err instanceof Error ? err.message : String(err)}`);
+    }
   });
 }
