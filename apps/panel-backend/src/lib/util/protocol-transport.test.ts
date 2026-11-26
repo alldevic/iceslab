@@ -50,7 +50,7 @@ describe('every protocol says what it occupies', () => {
     // Pinned by name rather than derived, so that a careless edit to the table
     // fails here instead of quietly letting two listeners onto one socket.
     const udp = PROTOCOL_NAMES.filter((p) => PROTOCOL_TRANSPORT[p] === 'udp').sort();
-    expect(udp).toEqual(['amneziawg', 'hysteria', 'tuic']);
+    expect(udp).toEqual(['amneziawg', 'hysteria', 'tuic', 'wireguard']);
   });
 
   it('knows that xray on kcp is not on tcp', () => {

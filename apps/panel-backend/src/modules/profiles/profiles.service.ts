@@ -740,19 +740,21 @@ export async function updateProfile(
   // t07-6 (ARCH 26.09): a new subnet, or a move to the other generation, is
   // the same question as binding the profile anew, asked of every node it is
   // on: does it now overlap the other generation's interface there.
-  if (existing.protocol === 'amneziawg') {
+  if (existing.protocol === 'amneziawg' || existing.protocol === 'wireguard') {
     const subnetOf = (c: unknown) => ((c ?? {}) as { subnet?: string }).subnet;
-    const nextAwg = input.awgProtocol !== undefined ? input.awgProtocol : existing.awgProtocol;
+    // Plain WireGuard has no generation: its awgProtocol is always null.
+    const nextAwg =
+      existing.protocol !== 'amneziawg' ? null : input.awgProtocol !== undefined ? input.awgProtocol : existing.awgProtocol;
     const moved =
       subnetOf(nextConfig) !== subnetOf(existing.config) ||
-      profileAwgProtocol({ protocol: 'amneziawg', awgProtocol: nextAwg }) !== profileAwgProtocol(existing);
+      profileAwgProtocol({ protocol: existing.protocol, awgProtocol: nextAwg }) !== profileAwgProtocol(existing);
     if (moved) {
       const deployed = await prisma.profileNodeBinding.findMany({
         where: { profileId: id, node: { deletedAt: null } },
         select: { node: { select: { id: true, name: true } } },
       });
       for (const b of deployed) {
-        await assertAwgSubnetFree(b.node, { id, protocol: 'amneziawg', awgProtocol: nextAwg, config: nextConfig });
+        await assertAwgSubnetFree(b.node, { id, protocol: existing.protocol, awgProtocol: nextAwg, config: nextConfig });
       }
     }
   }

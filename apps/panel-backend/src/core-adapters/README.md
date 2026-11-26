@@ -8,7 +8,8 @@ Per-protocol modules that build client-facing subscription wire formats (URIs an
 |---|---|
 | [`hysteria/`](./hysteria/) | `hysteria2://...` URI |
 | [`xray/`](./xray/) | `vless://...` (VLESS + REALITY + Vision); transports raw / xhttp / ws / gRPC / httpupgrade / kcp; Trojan over REALITY |
-| [`amneziawg/`](./amneziawg/) | wg-quick `[Interface]+[Peer]` text |
+| [`amneziawg/`](./amneziawg/) | wg-quick `[Interface]+[Peer]` text, with the Jc/S/H obfuscation block |
+| [`wireguard/`](./wireguard/) | the same text without it, for stock WireGuard clients |
 | [`naive/`](./naive/) | `naive+https://user:pass@host:port?padding=true#name` URI |
 | [`shadowsocks/`](./shadowsocks/) | SIP002 `ss://...` URI |
 | [`mtproto/`](./mtproto/) | `tg://proxy?...` + `https://t.me/proxy?...` |

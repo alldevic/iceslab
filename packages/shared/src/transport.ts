@@ -25,6 +25,7 @@ export const PROTOCOL_NAMES = [
   'hysteria',
   'xray',
   'amneziawg',
+  'wireguard',
   'naive',
   'shadowsocks',
   'mtproto',
@@ -202,6 +203,7 @@ export const DOORS = [
   'naive',
   'mtproto',
   'amneziawg',
+  'wireguard',
 ] as const;
 export type Door = (typeof DOORS)[number];
 
@@ -283,6 +285,7 @@ const LINK_DOORS = formatTable({
   mtproto: YES,
   shadowtls: NO_URI,
   amneziawg: NO_URI,
+  wireguard: NO_URI,
 });
 
 /**
@@ -343,7 +346,7 @@ export const FORMAT_DOORS: Record<SubscriptionFormat, Record<Door, FormatDoor>> 
     // sing-box.sagernet.org/configuration/outbound/naive/
     naive: NOT_YET,
   }),
-  wgconf: formatTable({ amneziawg: YES }),
+  wgconf: formatTable({ amneziawg: YES, wireguard: YES }),
   amneziavpn: formatTable({ amneziawg: YES }),
   // Only the array form builds hysteria (buildXrayJsonArray); the single
   // config and xkeen take xray endpoints only, although xray-core has the
@@ -506,6 +509,8 @@ export const PROTOCOL_TRANSPORT: Record<ProtocolName, Transport> = {
   tuic: 'udp',
   // WireGuard, in its own obfuscated dialect.
   amneziawg: 'udp',
+  // Plain WireGuard, no obfuscation.
+  wireguard: 'udp',
   // TCP by default; see transportOf for the kcp exception.
   xray: 'tcp',
   // TLS-shaped things, all of them TCP listeners.
@@ -590,7 +595,7 @@ export interface ProtocolCredentials {
    * Plain WireGuard (milestone 9.1): the same public key as amneziawgPublicKey
    * (one WG keypair per user) under a name of its own, and the user's address
    * from the plain profile's subnet, which is not the AmneziaWG one. Not sent
-   * by the panel until 9.2; the agent already reads them.
+   * only for a binding of a `wireguard` profile; the agent reads them.
    */
   wireguardPublicKey?: string;
   wireguardAllowedIp?: string;
@@ -689,6 +694,7 @@ export interface InboundDto {
     | XrayInboundCfg
     | HysteriaInboundCfg
     | AmneziawgInboundCfg
+    | WireguardInboundCfg
     | NaiveInboundCfg
     | ShadowsocksInboundCfg
     | MtprotoInboundCfg
@@ -990,6 +996,25 @@ export interface AmneziawgInboundCfg {
   /** t07-6: the node's 3.1 geometry, on a 3.1 inbound only. It replaces the
    *  profile's jc..h4 on that interface. */
   geometry3?: AwgGeometry3;
+}
+
+/**
+ * The plain WireGuard inbound on the wire (9.2): the profile config as stored
+ * plus the binding's port. The agent's plain mode reads the same keys as
+ * AmneziaWG's without `obfuscation` and refuses one (9.1). The stored part is
+ * held equal to WireguardConfigSchema at compile time in inbounds.schemas.ts.
+ */
+export interface WireguardInboundCfg {
+  /** Subnet in CIDR notation; server takes .1, peers .2..N. */
+  subnet: string;
+  /** Server WG private key (base64-standard, like `wg genkey`). */
+  serverPrivateKey: string;
+  /** Its public half; clients get it in their config. */
+  serverPublicKey: string;
+  /** The binding's port, injected on every push. */
+  listenPort: number;
+  /** Which binding this is (the binding id), as for AmneziaWG. */
+  inboundId?: string;
 }
 
 /**

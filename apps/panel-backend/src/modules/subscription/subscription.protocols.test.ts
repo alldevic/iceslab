@@ -13,6 +13,7 @@ import { parseProtocolsParam, withProtocols } from './subscription.protocols.js'
 import { buildSubscriptionPage, type SubscriptionPageData } from './subscription.page.js';
 import { emptyNarrowingWords } from './subscription.routes.js';
 import { REALITY_TEST_PRIVATE_KEY, REALITY_TEST_PUBLIC_KEY } from '../../../tests/helpers/reality-keys.js';
+import { WG_TEST_PRIVATE_KEY, WG_TEST_PUBLIC_KEY } from '../../../tests/helpers/wg-keys.js';
 
 /**
  * `?protocols=`: a subscription that hands out one protocol or a few, on every
@@ -112,6 +113,101 @@ afterEach(async () => {
 afterAll(async () => {
   await prisma.$disconnect();
   await closeRedis();
+});
+
+describe('?format=wgconf with plain WireGuard (9.2)', () => {
+  const AWG = (subnet: string) => ({
+    subnet,
+    serverPrivateKey: WG_TEST_PRIVATE_KEY,
+    serverPublicKey: WG_TEST_PUBLIC_KEY,
+    obfuscation: {},
+  });
+  const WG = (subnet: string) => ({ subnet, serverPrivateKey: WG_TEST_PRIVATE_KEY, serverPublicKey: WG_TEST_PUBLIC_KEY });
+  const AWG_LINES = /^(Jc|Jmin|Jmax|S[1-4]|H[1-4]|I[1-5]) = /m;
+
+  /** One node with an AmneziaWG and a plain WireGuard tunnel, and a person who has both. */
+  async function both() {
+    const node = await post('/api/nodes', { name: 'eu-1', address: '10.0.0.1:8443' });
+    await bind('amneziawg', AWG('10.66.66.0/24'), node, 51820);
+    await bind('wireguard', WG('10.77.77.0/24'), node, 51830);
+    const res = await app.inject({ method: 'POST', url: '/api/users', headers: auth(), payload: { username: 'alice' } });
+    const id = JSON.parse(res.body).id as string;
+    const u = await prisma.user.findUniqueOrThrow({ where: { id }, select: { subscriptionToken: true } });
+    return { node, token: u.subscriptionToken };
+  }
+
+  it('?protocols=wireguard gives a config with [Interface]/[Peer] and no Jc/S/H/I line', async () => {
+    const s = await both();
+    const res = await get(`/sub/${s.token}?format=wgconf&protocols=wireguard`);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.body).toContain('[Interface]');
+    expect(res.body).toContain('[Peer]');
+    expect(res.body).toMatch(/^Address = 10\.77\.77\./m);
+    expect(res.body).toContain(`PublicKey = ${WG_TEST_PUBLIC_KEY}`);
+    expect(res.body).toContain(':51830');
+    expect(res.body).not.toMatch(AWG_LINES);
+    expect(res.headers['content-disposition']).toContain('alice-wireguard.conf');
+  });
+
+  it('with both tunnels and no ?protocols= it answers as the base: the AmneziaWG config; ?protocols=amneziawg the same', async () => {
+    const s = await both();
+    const bare = await get(`/sub/${s.token}?format=wgconf`);
+    expect(bare.statusCode).toBe(200);
+    expect(bare.body).toMatch(/^Address = 10\.66\.66\./m);
+    expect(bare.body).toMatch(/^Jc = /m);
+    expect(bare.headers['content-disposition']).toContain('alice.conf');
+    expect(bare.headers['content-disposition']).not.toContain('wireguard');
+    const awg = await get(`/sub/${s.token}?format=wgconf&protocols=amneziawg`);
+    expect(awg.body).toBe(bare.body);
+  });
+
+  it('node= picks either tunnel when the node has both, by endpoint id', async () => {
+    const s = await both();
+    const json = JSON.parse((await get(`/sub/${s.token}?format=json`)).body) as {
+      endpoints: { protocol: string; nodeName: string; key?: string }[];
+    };
+    const wgEp = json.endpoints.find((e) => e.protocol === 'wireguard')!;
+    expect(wgEp).toBeDefined();
+    expect(json.endpoints.some((e) => e.protocol === 'amneziawg')).toBe(true);
+    const { endpointId } = await import('./endpoint-identity.js');
+    const res = await get(`/sub/${s.token}?format=wgconf&node=${endpointId(wgEp as never)}`);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.body).toMatch(/^Address = 10\.77\.77\./m);
+    expect(res.body).not.toMatch(AWG_LINES);
+  });
+
+  it('no proxy format and no link carries the plain endpoint', async () => {
+    const s = await both();
+    // The peer is allocated by the first request that needs it.
+    expect((await get(`/sub/${s.token}?format=wgconf&protocols=wireguard`)).statusCode).toBe(200);
+    const wgPeer = await prisma.amneziawgPeer.findFirstOrThrow({ where: { profile: { protocol: 'wireguard' } } });
+    const ip = wgPeer.ip;
+    for (const format of FORMAT_NAMES.filter((f) => f !== 'wgconf' && f !== 'json')) {
+      const res = await get(`/sub/${s.token}?format=${format}`);
+      expect([200, 204, 404], format).toContain(res.statusCode);
+      expect(text(format, res.body), format).not.toContain(ip);
+    }
+    // And a format that carries nothing of it says so, in words.
+    const res = await get(`/sub/${s.token}?format=singbox&protocols=wireguard`);
+    expect(res.statusCode).toBe(404);
+    expect(JSON.parse(res.body).message).toContain('does not carry wireguard');
+  });
+
+  it('?protocols=wireguard on a subscription without it is a refusal in words, and the contract of the bare link is kept', async () => {
+    const s = await subscriber();
+    const res = await get(`/sub/${s.subscriptionToken}?format=wgconf&protocols=wireguard`);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatch(/^# this subscription has no hosts of wireguard/);
+    const bare = await get(`/sub/${s.subscriptionToken}?format=wgconf`);
+    expect(bare.body).toBe('');
+  });
+
+  it('the page lists a plain WireGuard node with its own conf and download', async () => {
+    const s = await both();
+    const res = await get(`/sub/${s.token}`, { accept: 'text/html' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('wireguard-eu-1.conf');
+  });
 });
 
 describe('?protocols= on the subscription', () => {

@@ -7,7 +7,7 @@ import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword } fro
 import { getLogger } from '../../lib/infra/logger.js';
 import { reachOfUsers } from './user-reach.js';
 import { enqueueNodePush } from '../inbounds/inbounds.queue.js';
-import { allocateAwgAddresses, awgBindingsOfNode } from '../amneziawg/awg-addresses.js';
+import { allocateAwgAddresses, awgBindingsOfNode, wireguardBindingOfNode } from '../amneziawg/awg-addresses.js';
 
 // ───── Job data shapes ─────
 
@@ -169,6 +169,8 @@ export async function syncAddUser(userId: string): Promise<void> {
       const awg = await awgBindingsOfNode(node.id);
       const one = awg.one && inboundIds.includes(awg.one) ? (await allocateAwgAddresses(awg.one, [user])).get(user.id) : undefined;
       const three = awg.three && inboundIds.includes(awg.three) ? (await allocateAwgAddresses(awg.three, [user])).get(user.id) : undefined;
+      const wgBinding = await wireguardBindingOfNode(node.id);
+      const wg = wgBinding && inboundIds.includes(wgBinding) ? (await allocateAwgAddresses(wgBinding, [user])).get(user.id) : undefined;
       await transport.addUser({
         ...base,
         inboundIds,
@@ -176,6 +178,7 @@ export async function syncAddUser(userId: string): Promise<void> {
           ...base.credentials,
           ...(one ? { amneziawgAllowedIp: one } : {}),
           ...(three ? { amneziawgAllowedIp3: three } : {}),
+          ...(wg ? { wireguardPublicKey: user.amneziawgPublicKey, wireguardAllowedIp: wg } : {}),
         },
       });
     },

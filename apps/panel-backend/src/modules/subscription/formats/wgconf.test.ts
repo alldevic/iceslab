@@ -24,6 +24,17 @@ const awgEp: SubscriptionEndpoint = {
   uri: '',
 };
 
+const wgEp: SubscriptionEndpoint = {
+  protocol: 'wireguard',
+  nodeName: 'eu-2',
+  host: 'n2.example.com',
+  port: 51821,
+  privateKey: 'cliPriv64',
+  allowedIp: '10.77.77.42/32',
+  serverPublicKey: 'wgSrvPub64',
+  uri: '',
+};
+
 const hysteriaEp: SubscriptionEndpoint = {
   protocol: 'hysteria',
   nodeName: 'eu-1',
@@ -96,5 +107,39 @@ describe('buildWgQuickConf', () => {
 
   it('output is byte-deterministic for the same input', () => {
     expect(buildWgQuickConf([awgEp])).toBe(buildWgQuickConf([awgEp]));
+  });
+
+  describe('plain WireGuard (9.2)', () => {
+    const awgDirectives = /^(Jc|Jmin|Jmax|S[1-4]|H[1-4]|I[1-5]|MTU|HeaderProtectionKey) = /m;
+
+    it('is built by its own builder: [Interface]/[Peer] and no Jc/S/H/I line', () => {
+      const out = buildWgQuickConf([wgEp]);
+      expect(out).toContain('[Interface]');
+      expect(out).toContain('[Peer]');
+      expect(out).toContain('PrivateKey = cliPriv64');
+      expect(out).toContain('Address = 10.77.77.42/32');
+      expect(out).toContain('PublicKey = wgSrvPub64');
+      expect(out).toContain('Endpoint = n2.example.com:51821');
+      // The base's default: a full tunnel, no DNS line.
+      expect(out).toContain('AllowedIPs = 0.0.0.0/0, ::/0');
+      expect(out).not.toContain('DNS');
+      expect(out).not.toMatch(awgDirectives);
+    });
+
+    it('with both tunnels and no node, answers as the base did: the AmneziaWG one', () => {
+      const out = buildWgQuickConf([wgEp, awgEp]);
+      expect(out).toBe(buildWgQuickConf([awgEp]));
+      expect(out).toContain('Jc = 4');
+    });
+
+    it('with only a plain tunnel and no node, answers with it', () => {
+      expect(buildWgQuickConf([hysteriaEp, wgEp])).toContain('Address = 10.77.77.42/32');
+    });
+
+    it('node= picks either tunnel, by label or id, and each keeps its own shape', () => {
+      expect(buildWgQuickConf([awgEp, wgEp], 'eu-2')).toBe(buildWgQuickConf([wgEp]));
+      expect(buildWgQuickConf([awgEp, wgEp], 'eu-1')).toBe(buildWgQuickConf([awgEp]));
+      expect(buildWgQuickConf([awgEp, wgEp], 'eu-2')).not.toMatch(awgDirectives);
+    });
   });
 });

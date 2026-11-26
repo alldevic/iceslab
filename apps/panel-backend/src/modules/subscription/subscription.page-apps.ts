@@ -92,6 +92,7 @@ export type AppAction =
     }
   | { kind: 'awg-vpn' } // scan the AmneziaVPN vpn:// QR below
   | { kind: 'awg-conf' } // scan the AmneziaWG .conf QR below
+  | { kind: 'wg-conf' } // scan the plain WireGuard .conf QR below
   | { kind: 'download' } // grab the per-node .conf below
   | { kind: 'outline' } // the per-node ssconf:// key below
   | { kind: 'manual' }; // paste the subscription link
@@ -273,12 +274,26 @@ export const APPS: AppDef[] = [
   },
   {
     ...fromCatalog('wgQuick'),
-    protocols: ['amneziawg'],
+    protocols: ['amneziawg', 'wireguard'],
     action: { kind: 'download' },
   },
   {
     ...fromCatalog('keenetic'),
-    protocols: ['amneziawg'],
+    protocols: ['amneziawg', 'wireguard'],
+    action: { kind: 'download' },
+  },
+  // Plain WireGuard. A separate list from AmneziaWG on purpose: an AWG config
+  // carries Jc/S/H directives these clients refuse outright, and an
+  // AWG-aware client is exactly what this protocol exists to avoid needing.
+  {
+    ...fromCatalog('wireguard'),
+    protocols: ['wireguard'],
+    action: { kind: 'wg-conf' },
+    recommended: true,
+  },
+  {
+    ...fromCatalog('wiresock'),
+    protocols: ['wireguard'],
     action: { kind: 'download' },
   },
   {

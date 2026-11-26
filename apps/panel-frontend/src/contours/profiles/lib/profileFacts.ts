@@ -59,6 +59,7 @@ function hostOf(v: string): string {
 
 const FACTS: Record<ProtocolName, Spec[]> = {
   amneziawg: [key('subnet', 'subnet'), key('jc', 'obfuscation', 'jc'), key('s1', 'obfuscation', 's1')],
+  wireguard: [key('subnet', 'subnet')],
   hysteria: [
     // The password itself never reaches the card: only that there is one.
     {

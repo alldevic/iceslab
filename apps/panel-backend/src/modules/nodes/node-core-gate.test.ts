@@ -415,6 +415,78 @@ describe('the AmneziaWG generation gate (t07-1)', () => {
   });
 });
 
+describe('plain WireGuard beside AmneziaWG on one node (9.2)', () => {
+  const WG = { subnet: '10.77.77.0/24', serverPrivateKey: WG_TEST_PRIVATE_KEY, serverPublicKey: WG_TEST_PUBLIC_KEY };
+
+  it('a wireguard profile is created, and binds to a node (the gates take its engine as the protocol name)', async () => {
+    const nodeId = await makeNode();
+    const wg = await makeProfile('wireguard', WG);
+    const res = await bind(wg, nodeId, 51830);
+    expect(res.statusCode, res.body).toBe(201);
+  });
+
+  it('refuses a wireguard subnet that overlaps an AmneziaWG profile of the same node, either way round', async () => {
+    const nodeId = await makeNode();
+    const awg = await makeProfile('amneziawg', AWG);
+    const wgOverlap = await makeProfile('wireguard', { ...WG, subnet: '10.66.66.0/25' });
+    expect((await bind(awg, nodeId, 51820)).statusCode).toBe(201);
+    const refused = await bind(wgOverlap, nodeId, 51830);
+    expect(refused.statusCode, refused.body).toBe(409);
+    expect(JSON.parse(refused.body)).toMatchObject({
+      error: 'AWG_SUBNET_OVERLAP',
+      subnet: '10.66.66.0/25',
+      otherSubnet: '10.66.66.0/24',
+    });
+
+    // The other way round: AmneziaWG onto a node that already has the plain one.
+    const other = await makeNode();
+    const wg = await makeProfile('wireguard', WG);
+    const awgOver = await makeProfile('amneziawg', { ...AWG, subnet: '10.77.77.128/25' });
+    expect((await bind(wg, other, 51830)).statusCode).toBe(201);
+    const back = await bind(awgOver, other, 51820);
+    expect(back.statusCode, back.body).toBe(409);
+    expect(JSON.parse(back.body)).toMatchObject({ error: 'AWG_SUBNET_OVERLAP', otherSubnet: '10.77.77.0/24' });
+  });
+
+  it('lets disjoint subnets share a node, each on its own adapter slot', async () => {
+    const nodeId = await makeNode();
+    const awg = await makeProfile('amneziawg', AWG);
+    const wg = await makeProfile('wireguard', WG);
+    expect((await bind(awg, nodeId, 51820)).statusCode).toBe(201);
+    expect((await bind(wg, nodeId, 51830)).statusCode).toBe(201);
+    // A second plain profile takes the one slot the first holds.
+    const wg2 = await makeProfile('wireguard', { ...WG, subnet: '10.88.88.0/24' });
+    const taken = await bind(wg2, nodeId, 51831);
+    expect(taken.statusCode, taken.body).toBe(409);
+    expect(JSON.parse(taken.body)).toMatchObject({ error: 'ADAPTER_SLOT_TAKEN' });
+  });
+
+  it('a PUT that moves a deployed wireguard subnet onto an AmneziaWG one is refused as the binding would be', async () => {
+    const nodeId = await makeNode();
+    const awg = await makeProfile('amneziawg', AWG);
+    const wg = await makeProfile('wireguard', WG);
+    expect((await bind(awg, nodeId, 51820)).statusCode).toBe(201);
+    expect((await bind(wg, nodeId, 51830)).statusCode).toBe(201);
+    const put = (payload: object) =>
+      app.inject({ method: 'PUT', url: `/api/profiles/${wg}`, headers: auth(), payload });
+    const onto = await put({ config: { ...WG, subnet: '10.66.66.0/24' } });
+    expect(onto.statusCode, onto.body).toBe(409);
+    expect(JSON.parse(onto.body)).toMatchObject({ error: 'AWG_SUBNET_OVERLAP' });
+    expect((await put({ config: { ...WG, subnet: '10.99.99.0/24' } })).statusCode).toBe(200);
+  });
+
+  it('refuses an obfuscation block and a wrong-shaped key on the profile, with nothing stored', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/profiles',
+      headers: auth(),
+      payload: { name: 'wg-bad', protocol: 'wireguard', config: { ...WG, serverPrivateKey: 'PRIV' } },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(await prisma.profile.count({ where: { protocol: 'wireguard' } })).toBe(0);
+  });
+});
+
 describe('neededBy on the node response', () => {
   it('counts enabled hosts per core row, zero for an unneeded core, one query for the list', async () => {
     const nodeId = await makeNode();

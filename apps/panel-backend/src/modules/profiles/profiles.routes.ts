@@ -25,7 +25,7 @@ import { prisma } from '../../prisma.js';
 import { withStoredSecrets } from '../auth/token-secrets.js';
 
 const KeypairQuery = z.object({
-  protocol: z.enum(['xray', 'amneziawg']).default('amneziawg'),
+  protocol: z.enum(['xray', 'amneziawg', 'wireguard']).default('amneziawg'),
 });
 
 const FormatsQuery = z.object({
@@ -36,7 +36,7 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
   // Wave-14 #15: per-route auth (see users.routes.ts header comment).
   const auth = { onRequest: [requireAuth] };
 
-  // curve25519 keypair for REALITY (xray) or AmneziaWG. Same crypto, the
+  // curve25519 keypair for REALITY (xray), AmneziaWG or plain WireGuard. Same crypto, the
   // alphabets differ, REALITY needs base64url, AWG needs standard base64.
   app.post('/api/profiles/generate-keypair', auth, async (req, reply) => {
     const { protocol } = KeypairQuery.parse(req.query);

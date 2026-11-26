@@ -35,7 +35,10 @@ const OPERATOR_INPUT: Partial<FormValues> = {
 
 describe('the new-profile defaults of every kind of the form are accepted by the API', () => {
   it('every protocol of the contract has a kind in the form', () => {
-    expect([...new Set(PROFILE_KINDS.map((k) => k.protocol))].sort()).toEqual([...PROTOCOL_NAMES].sort());
+    // `wireguard` has no kind until the profile form of 9.3; 9.3 drops this filter.
+    expect([...new Set(PROFILE_KINDS.map((k) => k.protocol))].sort()).toEqual(
+      PROTOCOL_NAMES.filter((p) => p !== 'wireguard').sort(),
+    );
   });
 
   it('every protocol has a config schema', () => {

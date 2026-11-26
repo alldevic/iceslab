@@ -12,6 +12,8 @@ import { pushedBindingsWhere } from './pushed-bindings.js';
  * serves one. List from the agent window, read in code 22.10:
  *   - single: hysteria, naive, shadowsocks, mtproto, mieru (native);
  *   - AmneziaWG: one per generation, 1.x and 3.1 apart;
+ *   - wireguard (plain, 9.2): one, its own slot beside both AmneziaWG ones
+ *     (the agent's plain mode is a separate interface);
  *   - sing-box: one per protocol (tuic, anytls, the xray family, hysteria,
  *     shadowsocks, shadowtls);
  *   - many: xray on xray, and mieru since the agent's f8bac16.

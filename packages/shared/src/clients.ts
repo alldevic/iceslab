@@ -330,6 +330,22 @@ export const CLIENTS = {
     uaSamples: [],
     uaUnknown: 'imports a .conf file or QR; whether it fetches by link is not verified',
   },
+  // Plain WireGuard (9.2): the clients a stock .conf imports into; none of them
+  // fetches by link, so no UA rule.
+  wireguard: {
+    name: 'WireGuard',
+    site: 'https://www.wireguard.com/install/',
+    platforms: ['ios', 'android', 'windows', 'macos', 'linux'],
+    uaSamples: [],
+    uaUnknown: 'imports a .conf file or QR; does not fetch a subscription by link',
+  },
+  wiresock: {
+    name: 'WireSock',
+    site: 'https://www.wiresock.net/',
+    platforms: ['windows'],
+    uaSamples: [],
+    uaUnknown: 'imports a .conf file; does not fetch a subscription by link',
+  },
   wgQuick: { name: 'wg-quick / awg', platforms: ['linux', 'router'], uaSamples: [] },
   keenetic: { name: 'Keenetic', platforms: ['router'], uaSamples: [] },
   openwrt: { name: 'OpenWrt', platforms: ['router'], uaSamples: [] },

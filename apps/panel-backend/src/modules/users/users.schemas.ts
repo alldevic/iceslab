@@ -13,6 +13,7 @@ export const ProtocolName = z.enum([
   'hysteria',
   'xray',
   'amneziawg',
+  'wireguard',
   'naive',
   'shadowsocks',
   'mtproto',

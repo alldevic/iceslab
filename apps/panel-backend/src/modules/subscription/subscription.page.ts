@@ -113,6 +113,17 @@ export interface SubscriptionPageData {
     awg3?: boolean;
   }>;
   /**
+   * One entry per plain WireGuard node (9.2). One code each: stock WireGuard
+   * has no vpn:// key form, the .conf is the whole import path.
+   */
+  wgNodes?: Array<{
+    nodeName: string;
+    /** The endpoint's id, what the per-node links carry in `node=`. */
+    id?: string;
+    /** The wg-quick config this node hands out (no obfuscation directives). */
+    conf?: string;
+  }>;
+  /**
    * One entry per MTProto node, with its proxy link already built.
    *
    * MTProto is in no config format at all: not clash, not sing-box, not
@@ -315,6 +326,7 @@ function renderAppCard(a: AppDef, subUrl: string, icons: GlyphSheet, on = false)
       break;
     case 'awg-vpn':
     case 'awg-conf':
+    case 'wg-conf':
       href = '#scan';
       glyphKey = 'qr';
       break;
@@ -522,19 +534,21 @@ function renderSteps(
 
   if (platform === 'router') {
     const s = t.stepsRouter;
-    const confs = (data.awgNodes ?? [])
-      .map(
-        (n) =>
-          `<a class="conf-row" href="${esc(withQuery(data.subUrl, `format=wgconf&node=${encodeURIComponent(n.id ?? n.nodeName)}`))}">` +
-          `<span class="conf-row__name">${esc(n.nodeName)}</span>` +
-          `<span class="conf-row__file">awg-${esc(n.nodeName)}.conf</span></a>`,
-      )
-      .join('');
-    const hasProxy = data.protocols.some((p) => p !== 'amneziawg');
+    const confRow = (n: { id?: string; nodeName: string }, prefix: string) =>
+      `<a class="conf-row" href="${esc(withQuery(data.subUrl, `format=wgconf&node=${encodeURIComponent(n.id ?? n.nodeName)}`))}">` +
+      `<span class="conf-row__name">${esc(n.nodeName)}</span>` +
+      `<span class="conf-row__file">${prefix}-${esc(n.nodeName)}.conf</span></a>`;
+    const confs =
+      (data.awgNodes ?? []).map((n) => confRow(n, 'awg')).join('') +
+      (data.wgNodes ?? []).map((n) => confRow(n, 'wireguard')).join('');
+    const hasProxy = data.protocols.some((p) => p !== 'amneziawg' && p !== 'wireguard');
+    // Not for a subscription whose only tunnels are plain WireGuard.
+    const hasAwgNodes = hasAwg && !((data.wgNodes ?? []).length > 0 && (data.awgNodes ?? []).length === 0);
     return (
       (hasAwg ? step('DownloadIcon', s[0], { body: `<div class="conf-list">${confs}</div>` }) : '') +
       (hasAwg ? step('Plus', s[1]) : '') +
-      (hasAwg ? step('alert', s[2], { box: ' step--warn', tone: ' step__num--warn' }) : '') +
+      // The masking warning is about the Jc/S/H lines: a plain file has none.
+      (hasAwgNodes ? step('alert', s[2], { box: ' step--warn', tone: ' step__num--warn' }) : '') +
       (hasAwg ? step('Check', s[3], { tone: ' step__num--ok' }) : '') +
       (hasProxy ? step('help', s[4], { tone: ' step__num--info' }) : '')
     );
@@ -690,9 +704,17 @@ function renderDownloads(
       q: `&amp;node=${encodeURIComponent(n.id ?? n.nodeName)}`,
       label: n.nodeName,
     }));
+  // Plain WireGuard has the .conf only: no vpn:// key, so no amneziavpn row.
+  const perWgNode = (fmt: string): Row[] =>
+    (data.wgNodes ?? []).map((n) => ({
+      fmt,
+      q: `&amp;node=${encodeURIComponent(n.id ?? n.nodeName)}`,
+      label: `${n.nodeName} · WireGuard`,
+    }));
   const router: Row[] = [
     ...(carries('xkeen') ? [{ fmt: 'xkeen' }] : []),
-    ...(hasAwg ? perNode('wgconf') : []),
+    ...(data.awgNodes?.length ? perNode('wgconf') : []),
+    ...perWgNode('wgconf'),
   ];
   const other: Row[] = [
     ...(hasAwg ? perNode('amneziavpn') : []),
@@ -1029,7 +1051,12 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
 
   const awgNodes = data.awgNodes ?? [];
   const multiAwg = awgNodes.length > 1;
-  const hasAwg = awgNodes.length > 0;
+  const wgNodes = data.wgNodes ?? [];
+  const multiWg = wgNodes.length > 1;
+  // Gates the file-based app cards and rows (scan, download): both tunnels
+  // hand out a .conf, and which protocol a card belongs to is already decided
+  // by its `protocols` list.
+  const hasAwg = awgNodes.length > 0 || wgNodes.length > 0;
 
   // Инструкция по установке НЕ ждёт, пока нода ответит.
   //
@@ -1061,7 +1088,9 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   const dead = u.status !== 'active';
 
   const noServers = data.protocols.length === 0;
-  const appData = noServers ? { ...data, protocols: [...PROTOCOL_NAMES] as ProtocolName[] } : data;
+  // The reference list of an empty subscription stays what it was: plain WireGuard
+  // is offered where the subscription has a wireguard node.
+  const appData = noServers ? { ...data, protocols: PROTOCOL_NAMES.filter((p) => p !== 'wireguard') } : data;
 
   // Rendered ONCE per platform and kept. The previous shape rendered every
   // platform a second time just to ask whether its panel would be empty, which
@@ -1152,6 +1181,9 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   for (const n of awgNodes)
     targets.push({ id: `awg:${n.nodeName}`, label: multiAwg ? `AmneziaWG · ${n.nodeName}` : 'AmneziaWG' });
 
+  for (const n of wgNodes)
+    targets.push({ id: `wg:${n.nodeName}`, label: multiWg ? `WireGuard · ${n.nodeName}` : 'WireGuard' });
+
   const figures: string[] = [];
   awgNodes.forEach((n, ni) => {
     // The first node's vpn:// QR is what the widget opens on.
@@ -1176,6 +1208,17 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
     }
   });
 
+  // No data-app on the plain WireGuard figures: there is a single import path
+  // (the script treats a figure without one as shown for either app).
+  wgNodes.forEach((n, ni) => {
+    if (!n.conf) return;
+    figures.push(
+      `<figure class="qrf${awgNodes.length === 0 && ni === 0 ? ' on' : ''}" data-target="wg:${esc(n.nodeName)}">` +
+        qrBox({ text: n.conf, fallback: n.conf, note: t.qrNeedsJs, esc }) +
+        `<figcaption>WireGuard</figcaption></figure>`,
+    );
+  });
+
   // Server chooser. Same control as the platform one in "Set up", down to the
   // classes: two selectors that behave differently on one page is a cost the
   // reader pays, not us. Only when there is more than one server to choose.
@@ -1198,7 +1241,7 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   // AmneziaVPN against AmneziaWG is one thing in two forms, not two actions,
   // so it is a segmented block like the pair in the header, not two buttons
   // standing apart.
-  const appSel = hasAwg
+  const appSel = awgNodes.length > 0
     ? `<div class="seg-group" role="tablist">
       <button class="seg-btn is-on" type="button" role="tab" aria-selected="true" data-app="vpn">AmneziaVPN</button>
       <button class="seg-btn" type="button" role="tab" aria-selected="false" data-app="conf">AmneziaWG</button>
@@ -1211,7 +1254,7 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
       <h2 class="install__title">${esc(t.scanTitle)}</h2>
       ${targetSel}
     </div>
-    <div class="note-strip">${icons.draw('AlertCircle', { cls: 'ic' })}<div class="note-strip__text">${esc(multiAwg ? t.oneTunnelMany : t.oneTunnel)}</div></div>
+    <div class="note-strip">${icons.draw('AlertCircle', { cls: 'ic' })}<div class="note-strip__text">${esc(multiAwg || multiWg || (awgNodes.length > 0 && wgNodes.length > 0) ? t.oneTunnelMany : t.oneTunnel)}</div></div>
     ${appSel}
     <div class="qrview">${figures.join('')}</div>
   </section>`

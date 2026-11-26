@@ -211,23 +211,37 @@ export function subnetsOverlap(a: string, b: string): boolean {
 const AWG_DEFAULT_SUBNET = '10.66.66.0/24';
 
 /**
- * Refuses an AmneziaWG profile onto a node where a profile of the OTHER
- * generation already has an overlapping subnet. Same generation is not asked:
- * the node carries one interface per generation, and that is its own question.
+ * Which kernel interface a profile's subnet lands on: AmneziaWG 1.x, 3.1, or
+ * plain WireGuard (9.2). The three are separate interfaces on a node; null for
+ * a protocol that has no WireGuard subnet.
+ */
+function tunnelInterface(profile: { protocol: string; awgProtocol?: number | null }): string | null {
+  if (profile.protocol === 'wireguard') return 'wireguard';
+  const g = profileAwgProtocol(profile);
+  return g === null ? null : `awg${g}`;
+}
+
+/**
+ * Refuses a tunnel profile (AmneziaWG or plain WireGuard) onto a node where a
+ * profile of ANOTHER interface already has an overlapping subnet. The same
+ * interface is not asked: the node carries one of each, and that is the
+ * adapter slot's question. The default subnets differ in kind only by what the
+ * operator typed, so plain WireGuard against an AWG profile is as ordinary a
+ * collision as 1.x against 3.1.
  */
 export async function assertAwgSubnetFree(
   node: { id: string; name: string },
   profile: { id: string; protocol: string; awgProtocol?: number | null; config: unknown },
 ): Promise<void> {
-  const mine = profileAwgProtocol(profile);
+  const mine = tunnelInterface(profile);
   if (mine === null) return;
   const subnet = ((profile.config ?? {}) as { subnet?: string }).subnet ?? AWG_DEFAULT_SUBNET;
   const others = await prisma.profileNodeBinding.findMany({
-    where: { nodeId: node.id, profile: { protocol: 'amneziawg', id: { not: profile.id } } },
+    where: { nodeId: node.id, profile: { protocol: { in: ['amneziawg', 'wireguard'] }, id: { not: profile.id } } },
     select: { profile: { select: { name: true, protocol: true, awgProtocol: true, config: true } } },
   });
   for (const o of others) {
-    if (profileAwgProtocol(o.profile) === mine) continue;
+    if (tunnelInterface(o.profile) === mine) continue;
     const theirs = ((o.profile.config ?? {}) as { subnet?: string }).subnet ?? AWG_DEFAULT_SUBNET;
     if (subnetsOverlap(subnet, theirs)) throw new AwgSubnetOverlapError(node.name, subnet, o.profile.name, theirs);
   }

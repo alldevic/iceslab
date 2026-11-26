@@ -351,6 +351,21 @@ export interface AmneziawgSubscriptionEndpoint extends SubscriptionEndpointBase 
   geometry3?: AwgGeometry3;
 }
 
+/**
+ * Plain WireGuard (9.2): the user's tunnel to a `wireguard` profile. Only the
+ * wgconf format carries it (the proxy formats emit no entry for it); there is
+ * no obfuscation block, which is the point of the protocol.
+ */
+export interface WireguardSubscriptionEndpoint extends SubscriptionEndpointBase {
+  protocol: 'wireguard';
+  /** User's WireGuard private key (the one keypair every tunnel uses). */
+  privateKey: string;
+  /** IP allocated to this user inside the plain profile's subnet, CIDR /32. */
+  allowedIp: string;
+  /** Server's WireGuard public key (the inbound's interface PublicKey). */
+  serverPublicKey: string;
+}
+
 export interface NaiveSubscriptionEndpoint extends SubscriptionEndpointBase {
   protocol: 'naive';
   username: string;
@@ -424,6 +439,7 @@ export type SubscriptionEndpoint =
   | XraySubscriptionEndpoint
   | XrayPlainSubscriptionEndpoint
   | AmneziawgSubscriptionEndpoint
+  | WireguardSubscriptionEndpoint
   | NaiveSubscriptionEndpoint
   | ShadowsocksSubscriptionEndpoint
   | MtprotoSubscriptionEndpoint

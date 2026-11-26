@@ -29,7 +29,21 @@ export async function awgBindingsOfNode(nodeId: string): Promise<{ one?: string;
 }
 
 /**
- * Each user's address in the subnet of the profile behind `bindingId`, or an
+ * The plain WireGuard binding of a node the agent ends up serving (9.2): the
+ * last by port, as for AmneziaWG (the agent keeps one plain inbound).
+ */
+export async function wireguardBindingOfNode(nodeId: string): Promise<string | undefined> {
+  const rows = await prisma.profileNodeBinding.findMany({
+    where: { nodeId, enabled: true, profile: { enabled: true, protocol: 'wireguard' } },
+    orderBy: { port: 'asc' },
+    select: { id: true },
+  });
+  return rows.at(-1)?.id;
+}
+
+/**
+ * Each user's address in the subnet of the profile behind `bindingId` (an
+ * AmneziaWG or a plain WireGuard one: both keep their peers in one table), or an
  * empty map when there is no such binding.
  *
  * Allocated serially (allocatePeer is racy under concurrency, IP slots aren't

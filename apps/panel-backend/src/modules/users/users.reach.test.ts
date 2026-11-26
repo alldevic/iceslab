@@ -283,3 +283,75 @@ function registerInboundEventHandlersOnce(): void {
   handlersOn = true;
   registerInboundEventHandlers();
 }
+describe('plain WireGuard credentials (9.2)', () => {
+  const wg = (subnet: string) => ({ serverPrivateKey: WG_TEST_PRIVATE_KEY, serverPublicKey: WG_TEST_PUBLIC_KEY, subnet });
+
+  it('the push carries wireguardPublicKey/wireguardAllowedIp only for a user reaching a wireguard binding, and its inbound with the port', async () => {
+    const n = await node();
+    const w = await profile('wireguard', wg('10.77.77.0/24'));
+    const x = await profile('xray', VLESS);
+    const onW = await host(w, n, 51830);
+    await host(x, n, 443);
+    const withWg = await post('/api/squads', { name: 'wg', profileIds: [w] });
+    const withoutWg = await post('/api/squads', { name: 'no-wg', profileIds: [x] });
+    const a = await user('wg_user', [withWg.id]);
+    const b = await user('xray_user', [withoutWg.id]);
+    const sent: { inbounds?: { protocol: string; config: Record<string, unknown> }[] }[] = [];
+    vi.spyOn(NodeTransport.prototype, 'applyInbounds').mockImplementation(async (req) => {
+      sent.push(req as never);
+      return { ok: true, applied: 2, skipped: 0 };
+    });
+    const { added } = capture();
+    await applyInboundsForNode(n);
+
+    const byUser = new Map(added.map((r) => [r.req.userId, r.req.credentials]));
+    const key = (await prisma.user.findUniqueOrThrow({ where: { id: a }, select: { amneziawgPublicKey: true } }))
+      .amneziawgPublicKey;
+    expect(byUser.get(a)).toMatchObject({ wireguardPublicKey: key });
+    expect(byUser.get(a)!.wireguardAllowedIp).toMatch(/^10\.77\.77\./);
+    // The AmneziaWG address is not the plain one, and there is none here.
+    expect(byUser.get(a)!.amneziawgAllowedIp).toBeUndefined();
+    expect(byUser.get(b)!.wireguardPublicKey).toBeUndefined();
+    expect(byUser.get(b)!.wireguardAllowedIp).toBeUndefined();
+    expect(JSON.stringify(byUser.get(b))).not.toContain('wireguard');
+
+    // The pushed inbound: the binding's port and id injected, no obfuscation.
+    const ib = sent[0]!.inbounds!.find((i) => i.protocol === 'wireguard')!;
+    expect(ib.config).toEqual({
+      ...wg('10.77.77.0/24'),
+      listenPort: 51830,
+      inboundId: onW.bindingId,
+    });
+  });
+
+  it('a user rolled out without a push (syncAddUser) gets the plain address too, beside the AmneziaWG one', async () => {
+    const n = await node();
+    const w = await profile('wireguard', wg('10.77.77.0/24'));
+    const one = await profile('amneziawg', awg('10.66.66.0/24'));
+    await host(w, n, 51830);
+    await host(one, n, 51820);
+    const sq = await post('/api/squads', { name: 'both', profileIds: [w, one] });
+    const u = await user('both_user', [sq.id]);
+    const { added } = capture();
+    await syncAddUser(u);
+    expect(added).toHaveLength(1);
+    const c = added[0]!.req.credentials;
+    expect(c.wireguardAllowedIp).toMatch(/^10\.77\.77\./);
+    expect(c.amneziawgAllowedIp).toMatch(/^10\.66\.66\./);
+    expect(c.wireguardPublicKey).toBe(c.amneziawgPublicKey);
+    // The same address on every node of the profile: it is keyed on the profile.
+    const peers = await prisma.amneziawgPeer.findMany({ where: { profileId: w, userId: u } });
+    expect(peers.map((p) => p.ip)).toEqual([c.wireguardAllowedIp]);
+  });
+
+  it('a node without a wireguard binding gets a user request equal to the base: no wireguard key at all', async () => {
+    const n = await node();
+    const one = await profile('amneziawg', awg('10.66.66.0/24'));
+    await host(one, n, 51820);
+    const sq = await post('/api/squads', { name: 'awg-only', profileIds: [one] });
+    const u = await user('awg_only', [sq.id]);
+    const { added } = capture();
+    await syncAddUser(u);
+    expect(Object.keys(added[0]!.req.credentials).filter((k) => k.startsWith('wireguard'))).toEqual([]);
+  });
+});

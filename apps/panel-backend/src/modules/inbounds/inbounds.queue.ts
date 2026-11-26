@@ -292,6 +292,15 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
     // Without this, the wgconf subscription advertises Endpoint=:443 but
     // the server actually listens on 51820, handshake never completes.
     // Caught live awg-VPS cycle #6 2026-05-12.
+    // Plain WireGuard (9.2): the same port injection, no generation and no
+    // geometry (it has no obfuscation to hand over).
+    if (b.profile.protocol === 'wireguard') {
+      config = {
+        ...(config as Record<string, unknown>),
+        listenPort: b.port,
+        inboundId: b.id,
+      } as InboundDto['config'];
+    }
     if (b.profile.protocol === 'amneziawg') {
       config = {
         ...(config as Record<string, unknown>),
@@ -767,6 +776,10 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
   const awgBinding = inbounds.filter((i) => i.protocol === 'amneziawg' && !is3(i)).at(-1);
   const awg3Binding = inbounds.filter((i) => i.protocol === 'amneziawg' && is3(i)).at(-1);
 
+  // 9.2: the plain WireGuard binding, a third one with its own subnet. Its
+  // peers are keyed on its profile like the AWG ones.
+  const wgBinding = inbounds.filter((i) => i.protocol === 'wireguard').at(-1);
+
   const users = await fetchActiveUsers();
   getLogger().info(
     `[worker:inbound-sync] pushing ${users.length} user(s) to ${node.name}`,
@@ -789,6 +802,10 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
     awg3Binding?.id,
     users.filter((u) => awg3Binding && inboundIdsOf(u.id).includes(awg3Binding.id)),
   );
+  const wgIpByUser = await allocateAwgAddresses(
+    wgBinding?.id,
+    users.filter((u) => wgBinding && inboundIdsOf(u.id).includes(wgBinding.id)),
+  );
 
   const requests: AddUserRequest[] = users.map((u) => ({
     userId: u.id,
@@ -801,6 +818,11 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
       amneziawgPublicKey: u.amneziawgPublicKey,
       amneziawgAllowedIp: awgIpByUser.get(u.id),
       amneziawgAllowedIp3: awg3IpByUser.get(u.id),
+      // Only for a user with an address on the plain binding: the one WG
+      // keypair under the plain name, and the address of its own subnet.
+      ...(wgIpByUser.has(u.id)
+        ? { wireguardPublicKey: u.amneziawgPublicKey, wireguardAllowedIp: wgIpByUser.get(u.id) }
+        : {}),
       naivePassword: u.naivePassword,
       tuicUuid: u.xrayUuid,
       tuicPassword: deriveTuicPassword(u.xrayUuid),

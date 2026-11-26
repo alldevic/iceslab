@@ -79,6 +79,7 @@ export const SEEDED: Record<ProtocolName, Record<string, unknown>[]> = {
       },
     },
   ],
+  wireguard: [{ subnet: '10.77.77.0/24', serverPrivateKey: 'priv', serverPublicKey: 'pub' }],
   naive: [{ hostname: 'naive.example.com', tlsEmail: 'ops@example.com', masqueradeRoot: '/srv/www' }],
   shadowsocks: [{ method: '2022-blake3-aes-128-gcm' }],
   mtproto: [{ domain: 'www.google.com' }],

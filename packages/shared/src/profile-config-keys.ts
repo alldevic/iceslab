@@ -74,6 +74,11 @@ export const PROFILE_CONFIG_KEYS: Record<ProtocolName, ProfileConfigKeys> = {
     keptByServer: [],
     setByPush: [],
   },
+  wireguard: {
+    form: ['subnet', 'serverPrivateKey', 'serverPublicKey'],
+    keptByServer: [],
+    setByPush: [],
+  },
   naive: {
     form: ['hostname', 'tlsEmail', 'masqueradeRoot'],
     keptByServer: [],

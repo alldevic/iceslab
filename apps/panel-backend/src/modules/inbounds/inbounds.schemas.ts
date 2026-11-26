@@ -4,6 +4,7 @@ import {
   XRAY_PLAIN_SUBPROTOCOLS,
   XRAY_SUBPROTOCOLS,
   type AmneziawgInboundCfg,
+  type WireguardInboundCfg,
 } from '@iceslab/shared';
 
 const NameSchema = z
@@ -419,6 +420,32 @@ const awgWireIsStored: Same<
 > = true;
 void awgWireIsStored;
 
+/**
+ * Plain WireGuard (9.2): the interface the amneziawg adapter manages in its
+ * plain mode, minus every obfuscation knob. There is deliberately no
+ * `obfuscation` member, and not an all-zero one: Zod strips unknown keys, so
+ * an obfuscation block offered to a wireguard profile would vanish silently and
+ * the operator would believe the tunnel is obfuscated. The agent's validator
+ * refusing the same input is the other half (9.1).
+ */
+export const WireguardConfigSchema = z.object({
+  /** Subnet handed to peers, e.g. "10.77.77.0/24". Kept clear of the
+   *  AmneziaWG profile's subnet on a node that serves both
+   *  (assertAwgSubnetFree). */
+  subnet: z.string().regex(/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/),
+  serverPrivateKey: WgKeySchema,
+  /** Public key paired with privateKey, emitted in the client config. */
+  serverPublicKey: WgKeySchema,
+});
+
+/** The keys the push adds to a stored plain WireGuard config. */
+export const WIREGUARD_PUSH_INJECTED_KEYS = ['listenPort', 'inboundId'] as const;
+const wireguardWireIsStored: Same<
+  Omit<WireguardInboundCfg, (typeof WIREGUARD_PUSH_INJECTED_KEYS)[number]>,
+  z.output<typeof WireguardConfigSchema>
+> = true;
+void wireguardWireIsStored;
+
 export const NaiveConfigSchema = z.object({
   hostname: z
     .string()
@@ -551,6 +578,7 @@ export const InboundConfigByProtocol = z.discriminatedUnion('protocol', [
   z.object({ protocol: z.literal('hysteria'), config: HysteriaConfigSchema }),
   z.object({ protocol: z.literal('xray'), config: XrayConfigSchema }),
   z.object({ protocol: z.literal('amneziawg'), config: AmneziawgConfigSchema }),
+  z.object({ protocol: z.literal('wireguard'), config: WireguardConfigSchema }),
   z.object({ protocol: z.literal('naive'), config: NaiveConfigSchema }),
   z.object({ protocol: z.literal('shadowsocks'), config: ShadowsocksConfigSchema }),
   z.object({ protocol: z.literal('mtproto'), config: MtprotoConfigSchema }),
@@ -611,6 +639,7 @@ export const PROTOCOL_CONFIG_SCHEMAS = {
   hysteria: HysteriaConfigSchema,
   xray: XrayConfigSchema,
   amneziawg: AmneziawgConfigSchema,
+  wireguard: WireguardConfigSchema,
   naive: NaiveConfigSchema,
   shadowsocks: ShadowsocksConfigSchema,
   mtproto: MtprotoConfigSchema,
@@ -622,7 +651,7 @@ export const PROTOCOL_CONFIG_SCHEMAS = {
 
 export const ListInboundsQuerySchema = z.object({
   nodeId: z.uuid().optional(),
-  protocol: z.enum(['hysteria', 'xray', 'amneziawg', 'naive', 'shadowsocks', 'mtproto', 'mieru', 'tuic', 'anytls', 'shadowtls']).optional(),
+  protocol: z.enum(['hysteria', 'xray', 'amneziawg', 'wireguard', 'naive', 'shadowsocks', 'mtproto', 'mieru', 'tuic', 'anytls', 'shadowtls']).optional(),
 });
 export type ListInboundsQuery = z.infer<typeof ListInboundsQuerySchema>;
 

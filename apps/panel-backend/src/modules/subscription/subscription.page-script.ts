@@ -168,7 +168,7 @@ export function pageScript(o: PageScriptOpts): string {
         figs.forEach(function (f) {
           f.classList.toggle(
             'on',
-            f.getAttribute('data-target') === curTarget && f.getAttribute('data-app') === curApp
+            f.getAttribute('data-target') === curTarget && (!f.getAttribute('data-app') || f.getAttribute('data-app') === curApp)
           );
         });
         nodeItems.forEach(function (it) {

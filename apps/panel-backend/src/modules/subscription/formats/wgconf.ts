@@ -1,12 +1,31 @@
 import { buildAmneziawgClientConfig } from '../../../core-adapters/amneziawg/index.js';
+import { buildWireguardClientConfig } from '../../../core-adapters/wireguard/index.js';
 import type {
   SubscriptionEndpoint,
   AmneziawgSubscriptionEndpoint,
+  WireguardSubscriptionEndpoint,
 } from '../subscription.formats.js';
 import { pickServer } from '../endpoint-identity.js';
 
+export type WgconfEndpoint = AmneziawgSubscriptionEndpoint | WireguardSubscriptionEndpoint;
+
+/** The tunnel a wgconf answer is built from, or undefined when there is none. */
+export function pickWgconfEndpoint(
+  endpoints: SubscriptionEndpoint[],
+  node?: string,
+): WgconfEndpoint | undefined {
+  const awg = endpoints.filter((e): e is AmneziawgSubscriptionEndpoint => e.protocol === 'amneziawg');
+  const wg = endpoints.filter((e): e is WireguardSubscriptionEndpoint => e.protocol === 'wireguard');
+  // `node` selects which tunnel, by its id or its label; absent = first
+  // (legacy whole-sub link), the AmneziaWG one while there is one. See pickServer.
+  if (!node) return pickServer(awg) ?? pickServer(wg);
+  return pickServer<WgconfEndpoint>([...awg, ...wg], node);
+}
+
 /**
- * wg-quick / awg-quick `.conf` subscription formatter (AmneziaWG-only).
+ * wg-quick / awg-quick `.conf` subscription formatter (AmneziaWG, and plain
+ * WireGuard since 9.2: each has its own builder, chosen by the protocol of the
+ * endpoint, so no AmneziaWG directive can reach a stock WireGuard client).
  *
  * Targets the AmneziaVPN-app, the AmneziaWG mobile clients, and stock
  * `wg-quick` for users on AmneziaWG-aware kernels. Output is the textual
@@ -24,6 +43,10 @@ import { pickServer } from '../endpoint-identity.js';
  *     The client picked this format because their app speaks wg-quick; other
  *     protocols don't translate to it.
  *
+ * Without `node` the AmneziaWG tunnel is the answer when the subscription has
+ * both (what the format always gave); `?protocols=wireguard` narrows the
+ * endpoints to the plain one before this runs.
+ *
  * Returns an empty string when no matching AmneziaWG endpoint is available, the
  * route handler turns that into a 204-style empty body, telling the client
  * "no AmneziaWG inbound configured for you".
@@ -32,14 +55,18 @@ export function buildWgQuickConf(
   endpoints: SubscriptionEndpoint[],
   node?: string,
 ): string {
-  const awgEndpoints = endpoints.filter(
-    (e): e is AmneziawgSubscriptionEndpoint => e.protocol === 'amneziawg',
-  );
-  // `node` selects which tunnel, by its id or its label; absent = first
-  // (legacy whole-sub link). See pickServer.
-  const awg = pickServer(awgEndpoints, node);
-  if (!awg) return '';
-
+  const picked = pickWgconfEndpoint(endpoints, node);
+  if (!picked) return '';
+  if (picked.protocol === 'wireguard') {
+    return buildWireguardClientConfig({
+      privateKey: picked.privateKey,
+      allowedIp: picked.allowedIp,
+      serverPublicKey: picked.serverPublicKey,
+      host: picked.host,
+      port: picked.port,
+    });
+  }
+  const awg = picked;
   return buildAmneziawgClientConfig({
     privateKey: awg.privateKey,
     allowedIp: awg.allowedIp,

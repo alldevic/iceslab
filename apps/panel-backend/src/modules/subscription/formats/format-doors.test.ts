@@ -149,6 +149,16 @@ const SAMPLES: SubscriptionEndpoint[] = [
     jc: 4, jmin: 40, jmax: 70, s1: 0, s2: 0, s3: 0, s4: 0, h1: 1, h2: 2, h3: 3, h4: 4,
     i1: '', i2: '', i3: '', i4: '', i5: '',
   },
+  {
+    ...base,
+    protocol: 'wireguard',
+    nodeName: 'wg',
+    host: host('wireguard'),
+    uri: '',
+    privateKey: 'cHJpdmF0ZQ==',
+    allowedIp: '10.77.77.2/32',
+    serverPublicKey: 'cHVibGlj',
+  },
 ];
 
 const BUILD: Record<SubscriptionFormat, (eps: SubscriptionEndpoint[]) => string> = {

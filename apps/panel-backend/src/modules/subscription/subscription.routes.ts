@@ -14,7 +14,7 @@ import { parseProtocolsParam, protocolsOf, withProtocols } from './subscription.
 import * as service from './subscription.service.js';
 import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson } from './formats/singbox.js';
-import { buildWgQuickConf } from './formats/wgconf.js';
+import { buildWgQuickConf, pickWgconfEndpoint } from './formats/wgconf.js';
 import { buildAwgVpnLink } from './formats/amneziavpn.js';
 import { buildXrayJson, buildXrayJsonArray } from './formats/xrayjson.js';
 import { buildOutlineJson, outlineAccessKey } from './formats/outline.js';
@@ -124,10 +124,11 @@ const COMMENTED_FORMATS: ReadonlySet<Format> = new Set<Format>([
 ]);
 
 /** Formats that carry ONE server, picked by `?node=`, and the protocol it is. */
-const SINGLE_SERVER_FORMATS: Partial<Record<Format, string>> = {
-  wgconf: 'amneziawg',
-  amneziavpn: 'amneziawg',
-  outline: 'shadowsocks',
+const SINGLE_SERVER_FORMATS: Partial<Record<Format, readonly string[]>> = {
+  // 9.2: either tunnel; a node with both is told apart by ?node= or ?protocols=.
+  wgconf: ['amneziawg', 'wireguard'],
+  amneziavpn: ['amneziawg'],
+  outline: ['shadowsocks'],
 };
 
 /**
@@ -760,6 +761,16 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               ...((e as { geometry3?: unknown }).geometry3 ? { awg3: true } : {}),
             };
           });
+        // Plain WireGuard (9.2): one conf per node, from the same builder as
+        // the file (so the QR is what the download gives).
+        const wgSeen = new Set<string>();
+        const wgNodes = filtered
+          .filter((e) => e.protocol === 'wireguard')
+          .filter((e) => !wgSeen.has(e.nodeName) && !!wgSeen.add(e.nodeName))
+          .map((e) => {
+            const id = endpointId(e);
+            return { nodeName: e.nodeName, id, conf: buildWgQuickConf(filtered, id) || undefined };
+          });
         /**
          * One row per MTProto node, with the link already built.
          *
@@ -837,6 +848,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
                 ).length > 0,
             ),
             awgNodes,
+            wgNodes,
             mtprotoNodes,
             telegramProxies,
             outlineNodes,
@@ -899,8 +911,8 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // writing the header after this.
       // The one server a single-server file is for, by id or label (A-107),
       // and the label it is saved under: an id in a file name reads as noise.
-      const singleServerProtocol = SINGLE_SERVER_FORMATS[format];
-      const singleServers = singleServerProtocol ? served.filter((e) => e.protocol === singleServerProtocol) : [];
+      const singleServerProtocols = SINGLE_SERVER_FORMATS[format];
+      const singleServers = singleServerProtocols ? served.filter((e) => singleServerProtocols.includes(e.protocol)) : [];
       const nodeLabel = query.node ? (pickServer(singleServers, query.node)?.nodeName ?? query.node) : undefined;
       if (query.dl === '1' && format !== 'plain') {
         reply.header(
@@ -960,19 +972,23 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
        * A-107: `node=` is the endpoint's id in the links the panel hands out;
        * a label is still taken, and the refusal names the labels.
        */
-      if (query.node && singleServerProtocol) {
+      if (query.node && singleServerProtocols) {
         const names = [...new Set(singleServers.map((e) => e.nodeName))];
         if (!pickServer(singleServers, query.node)) {
           reply.removeHeader('Content-Disposition');
           // The server may exist and be one this format cannot read (an
           // SS2022 cipher for Outline): that is a different sentence.
-          const exists = !!pickServer(filtered.filter((e) => e.protocol === singleServerProtocol), query.node);
+          const exists = !!pickServer(filtered.filter((e) => singleServerProtocols.includes(e.protocol)), query.node);
+          // The tunnels it does have of the kinds this format takes, else the
+          // format's first (what the sentence always named).
+          const present = singleServerProtocols.filter((p) => filtered.some((e) => e.protocol === p));
+          const asked = (present.length > 0 ? present : singleServerProtocols.slice(0, 1)).join('/');
           const has = names.length > 0 ? `it has: ${names.map((n) => JSON.stringify(n)).join(', ')}` : 'it has none';
           return reply.code(404).send({
             error: 'SUBSCRIPTION_NODE_UNKNOWN',
             message: exists
               ? `the ${format} format cannot carry the server ${JSON.stringify(query.node)}; for this format ${has}`
-              : `this subscription has no ${singleServerProtocol} server named ${JSON.stringify(query.node)}; for the ${format} format ${has}`,
+              : `this subscription has no ${asked} server named ${JSON.stringify(query.node)}; for the ${format} format ${has}`,
             node: query.node,
             nodes: names,
           });
@@ -1023,8 +1039,11 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // saves test.conf, test(1).conf, ...). The .conf suffix matters: the
           // AmneziaWG / wg-quick / Hiddify file-pickers filter by *.conf, so an
           // extensionless name fails the picker on Windows / macOS.
+          // 9.2: a plain WireGuard file says so, `<username>[-<node>]-wireguard.conf`;
+          // the AmneziaWG one keeps the name it always had.
           const nodePart = nodeLabel ? `-${sanitizeFilename(nodeLabel)}` : '';
-          const fname = `${sanitizeFilename(result.json.user.username)}${nodePart}.conf`;
+          const kindPart = pickWgconfEndpoint(served, query.node)?.protocol === 'wireguard' ? '-wireguard' : '';
+          const fname = `${sanitizeFilename(result.json.user.username)}${nodePart}${kindPart}.conf`;
           return reply
             .type('text/plain; charset=utf-8')
             .header('Content-Disposition', `attachment; filename="${fname}"`)

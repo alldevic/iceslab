@@ -1,7 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { AmneziawgConfigSchema, REALITY_TRANSPORTS, XrayConfigSchema } from './inbounds.schemas.js';
+import {
+  AmneziawgConfigSchema,
+  InboundConfigByProtocol,
+  PROTOCOL_CONFIG_SCHEMAS,
+  REALITY_TRANSPORTS,
+  WireguardConfigSchema,
+  XrayConfigSchema,
+} from './inbounds.schemas.js';
 import { WG_TEST_PRIVATE_KEY, WG_TEST_PUBLIC_KEY } from '../../../tests/helpers/wg-keys.js';
 
 const base = {
@@ -157,5 +164,41 @@ describe('XrayConfigSchema REALITY carries only the transports xray will load', 
 
   it('the legacy "tcp" spelling is normalised before the rule reads it', () => {
     expect(XrayConfigSchema.safeParse(cfg('reality', 'tcp')).success).toBe(true);
+  });
+});
+
+describe('WireguardConfigSchema (plain WireGuard, 9.2)', () => {
+  const wg = { subnet: '10.77.77.0/24', serverPrivateKey: WG_TEST_PRIVATE_KEY, serverPublicKey: WG_TEST_PUBLIC_KEY };
+
+  it('takes a subnet and the server key pair', () => {
+    expect(WireguardConfigSchema.parse(wg)).toEqual(wg);
+    expect(InboundConfigByProtocol.safeParse({ protocol: 'wireguard', config: wg }).success).toBe(true);
+    expect(PROTOCOL_CONFIG_SCHEMAS.wireguard).toBe(WireguardConfigSchema);
+  });
+
+  it.each([
+    ['without the padding', 'a'.repeat(44)],
+    ['too short', 'a'.repeat(42) + '='],
+    ['a placeholder', 'PRIV'],
+    ['empty', ''],
+  ])('refuses a key %s, on the field (the AmneziaWG rule, WgKeySchema)', (_name, key) => {
+    const priv = WireguardConfigSchema.safeParse({ ...wg, serverPrivateKey: key });
+    expect(priv.success).toBe(false);
+    if (!priv.success) expect(priv.error.issues[0]?.path).toEqual(['serverPrivateKey']);
+    const pub = WireguardConfigSchema.safeParse({ ...wg, serverPublicKey: key });
+    expect(pub.success).toBe(false);
+    if (!pub.success) expect(pub.error.issues[0]?.path).toEqual(['serverPublicKey']);
+  });
+
+  it('has no obfuscation member: a block offered to it does not come back as if it were kept', () => {
+    // Zod strips unknown keys; what the schema outputs is what is stored, and
+    // it must not be an obfuscation block the operator believes is applied.
+    const out = WireguardConfigSchema.parse({ ...wg, obfuscation: { jc: 5 } });
+    expect('obfuscation' in out).toBe(false);
+  });
+
+  it('refuses a subnet that is not a v4 CIDR', () => {
+    expect(WireguardConfigSchema.safeParse({ ...wg, subnet: 'fd00::/64' }).success).toBe(false);
+    expect(WireguardConfigSchema.safeParse({ ...wg, subnet: '10.77.77.0' }).success).toBe(false);
   });
 });

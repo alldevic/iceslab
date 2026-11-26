@@ -4,6 +4,7 @@ import {
   transportServed,
   type NodeCores,
   type RoutingPresetId,
+  type WireguardInboundCfg,
 } from '@iceslab/shared';
 import {
   PRESET_COLUMNS_SELECT,
@@ -1374,6 +1375,31 @@ export async function generateSubscription(
         i5: obf.i5 ?? '',
         ...(geometry3 ? { geometry3 } : {}),
         // No standardised URI format for AmneziaWG; clients fetch ?format=wgconf.
+        uri: '',
+      });
+    } else if (ib.protocol === 'wireguard' && user.amneziawgPrivateKey) {
+      const cfg = ib.config as unknown as Partial<WireguardInboundCfg>;
+      if (!cfg.subnet || !cfg.serverPublicKey) {
+        warnBrokenProfileOnce(
+          ib.profileId,
+          `[subscription] profile ${ib.profileId} (wireguard) has no ` +
+            `${!cfg.subnet ? 'subnet' : 'serverPublicKey'} in its stored config; ` +
+            `skipping this endpoint. Re-save the profile in the panel to repair it.`,
+        );
+        continue;
+      }
+      // Peer keyed on profileId, as AmneziaWG's: one address per profile.
+      const peer = await allocatePeer(ib.profileId, user.id, cfg.subnet);
+      endpoints.push({
+        protocol: 'wireguard',
+        nodeName,
+        host,
+        port,
+        ...hostMeta,
+        privateKey: user.amneziawgPrivateKey,
+        allowedIp: `${peer.ip}/32`,
+        serverPublicKey: cfg.serverPublicKey,
+        // No share-link standard for WireGuard; clients fetch ?format=wgconf.
         uri: '',
       });
     } else if (ib.protocol === 'mtproto') {
