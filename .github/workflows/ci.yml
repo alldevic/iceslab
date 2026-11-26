@@ -55,6 +55,7 @@ jobs:
       backend: ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.backend }}
       frontend: ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.frontend }}
       node: ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.node }}
+      ops: ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.ops }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -94,6 +95,12 @@ jobs:
               - 'packages/shared/**'
               # the Go tests read scripts/install-iceslab*.sh and scripts/ops/*.
               - 'scripts/**'
+            # The self-tests of the ops scripts (scripts/ops/*-selftest.sh). Its
+            # own output rather than `node`: they are minutes of docker, and an
+            # agent-only change has nothing in them to check.
+            ops:
+              - *common
+              - 'scripts/**'
 
       - name: Summary
         if: always()
@@ -106,6 +113,7 @@ jobs:
             echo "| backend | ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.backend }} |"
             echo "| frontend | ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.frontend }} |"
             echo "| node-agent | ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.node }} |"
+            echo "| ops-selftests | ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.ops }} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ───────────────────────────────────────────────────────────────────────
@@ -1184,6 +1192,42 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ───────────────────────────────────────────────────────────────────────
+  # Self-tests of the ops scripts (scripts/ops/*-selftest.sh): deploy, logs,
+  # cleanup, backup and restore, and the library under them, run for real
+  # against stubs, a throwaway git clone, a dind daemon and a throwaway
+  # Postgres + Redis stack. One runner, scripts/ops/selftest.sh, so the same
+  # command is what a developer runs by hand; a red here is a change to
+  # scripts/ that broke what the script promises, found before a live panel
+  # finds it. Runs when scripts/** (or this file) changed.
+  #
+  # The hosted runner has docker, allows `--privileged` (cleanup's dind) and has
+  # none of the iceslab-prod-* container names the backup test must use.
+  # ───────────────────────────────────────────────────────────────────────
+  ops-selftests:
+    name: ops script self-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [changes]
+    if: needs.changes.outputs.ops == 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Self-tests
+        run: ./scripts/ops/selftest.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### ops script self-tests"
+            echo ""
+            echo "- lib, deploy, logs: stubs and a throwaway git clone"
+            echo "- cleanup: a privileged docker:27-dind of its own"
+            echo "- backup-restore: a throwaway Postgres + Redis stack under the production container names"
+            echo "- locally: \`./scripts/ops/selftest.sh\` (\`--light\` for the three without docker)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ───────────────────────────────────────────────────────────────────────
   # Smoke: does the BUILT IMAGE actually come up?
   #
   # The suite exercises source; the image is a different execution path with
@@ -1490,7 +1534,7 @@ jobs:
     timeout-minutes: 5
     if: always()
     needs:
-      [changes, audit, secrets-scan, backend, backend-files, frontend, node-agent, go-lint, docker, smoke, frontend-proxy]
+      [changes, audit, secrets-scan, backend, backend-files, frontend, node-agent, go-lint, ops-selftests, docker, smoke, frontend-proxy]
     steps:
       - name: Every check accounted for
         env:
@@ -1498,6 +1542,7 @@ jobs:
           RUNS_BACKEND: ${{ needs.changes.outputs.backend }}
           RUNS_FRONTEND: ${{ needs.changes.outputs.frontend }}
           RUNS_NODE: ${{ needs.changes.outputs.node }}
+          RUNS_OPS: ${{ needs.changes.outputs.ops }}
           EVENT: ${{ github.event_name }}
           SAME_REPO: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           REF: ${{ github.ref }}
@@ -1534,6 +1579,7 @@ jobs:
           check frontend "$([ "$RUNS_FRONTEND" = "true" ] && echo no || echo yes)"
           check node-agent "$([ "$RUNS_NODE" = "true" ] && echo no || echo yes)"
           check go-lint "$([ "$RUNS_NODE" = "true" ] && echo no || echo yes)"
+          check ops-selftests "$([ "$RUNS_OPS" = "true" ] && echo no || echo yes)"
 
           # docker builds on a same-repo pull request and on the branches that
           # something pulls. A fork PR gets no image build at all, by design, so
