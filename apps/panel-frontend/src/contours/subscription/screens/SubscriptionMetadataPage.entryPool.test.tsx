@@ -76,20 +76,20 @@ describe('SubscriptionMetadataPage: число входов', () => {
   it('показывает сохранённое значение', async () => {
     getSettings.mockResolvedValue({ subscriptionEntryPoolSize: 3 });
     renderPage();
-    await waitFor(async () => expect((await field()).value).toBe('3'));
+    await waitFor(async () => expect((await field()).value).toBe('3'), FIRST_RENDER);
   });
 
   it('без сохранённого значения показывает 0: все входы', async () => {
     getSettings.mockResolvedValue({});
     renderPage();
-    await waitFor(async () => expect((await field()).value).toBe('0'));
+    await waitFor(async () => expect((await field()).value).toBe('0'), FIRST_RENDER);
   });
 
   it('отправляет новое значение в запросе сохранения', async () => {
     getSettings.mockResolvedValue({ subscriptionEntryPoolSize: 3 });
     renderPage();
     const input = await field();
-    await waitFor(() => expect(input.value).toBe('3'));
+    await waitFor(() => expect(input.value).toBe('3'), FIRST_RENDER);
     fireEvent.change(input, { target: { value: '5' } });
     fireEvent.click(await screen.findByRole('button', { name: at('common.save') }));
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
@@ -100,7 +100,7 @@ describe('SubscriptionMetadataPage: число входов', () => {
     getSettings.mockResolvedValue({ subscriptionEntryPoolSize: 3 });
     renderPage();
     const input = await field();
-    await waitFor(() => expect(input.value).toBe('3'));
+    await waitFor(() => expect(input.value).toBe('3'), FIRST_RENDER);
     fireEvent.change(input, { target: { value: '' } });
     fireEvent.click(await screen.findByRole('button', { name: at('common.save') }));
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
