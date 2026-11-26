@@ -639,6 +639,9 @@ do_uninstall() {
 PROTOCOL_PORTS="443/tcp 443/udp 80/tcp 1234/udp"
 UFW_DEFAULT_FILE=/etc/default/ufw
 PROC_ROOT=/proc
+# Where the fail2ban block writes; a variable only so a test can run it in a
+# temporary directory (the uninstall names /etc/fail2ban itself).
+FAIL2BAN_DIR=/etc/fail2ban
 
 # find_ssh_connection: SSH_CONNECTION of the ssh session this run belongs to,
 # for when the environment lost it (`sudo bash ...` resets it, which is the usual
@@ -1686,6 +1689,7 @@ if [[ "${SKIP_FIREWALL:-0}" != "1" ]]; then
     log "Restricting :${NODE_PORT}/tcp to PANEL_IP=$PANEL_IP (use comma-list for multiple)"
     IFS=',' read -ra _PANEL_IPS <<< "$PANEL_IP"
     for ip in "${_PANEL_IPS[@]}"; do
+      [[ -z "${ip// /}" ]] && continue
       ufw allow from "${ip// /}" to any port "$NODE_PORT" proto tcp >/dev/null 2>&1 || true
     done
     unset _PANEL_IPS
@@ -1779,8 +1783,8 @@ if [[ "$FAIL2BAN" == "1" ]]; then
   # produces: {"...","msg":"hysteria auth rejected","addr":"<ip>:<port>"}.
   # fail2ban's systemd backend hands the filter the MESSAGE field (the JSON
   # blob), so failregex matches the addr field and <HOST> captures the IP.
-  install -d -m 755 /etc/fail2ban/filter.d
-  cat > /etc/fail2ban/filter.d/iceslab-hysteria.conf <<'EOF'
+  install -d -m 755 "${FAIL2BAN_DIR}/filter.d"
+  cat > "${FAIL2BAN_DIR}/filter.d/iceslab-hysteria.conf" <<'EOF'
 [Definition]
 # Matches the agent's structured reject line; <HOST> is the offending IP.
 # addr is "ip:port"; the optional :port is consumed by (?::\d+)?.
@@ -1792,8 +1796,8 @@ EOF
   # sshd uses the distro-shipped sshd filter; hysteria uses ours. Both read
   # journald (systemd backend) so no log files need to exist (default on
   # minimal Ubuntu 24.04, which has no rsyslog/auth.log).
-  install -d -m 755 /etc/fail2ban/jail.d
-  cat > /etc/fail2ban/jail.d/iceslab.local <<EOF
+  install -d -m 755 "${FAIL2BAN_DIR}/jail.d"
+  cat > "${FAIL2BAN_DIR}/jail.d/iceslab.local" <<EOF
 [DEFAULT]
 backend  = systemd
 bantime  = 1h

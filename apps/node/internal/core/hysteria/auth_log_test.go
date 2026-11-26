@@ -55,7 +55,7 @@ func TestAnAcceptedHysteriaLoginLeavesNoAddressAndNoUser(t *testing.T) {
 func fail2banHysteriaRegex(t *testing.T) *regexp.Regexp {
 	t.Helper()
 	script := readScript(t, "..", "..", "..", "..", "..", "scripts", "install-iceslab-node.sh")
-	start := strings.Index(script, "/etc/fail2ban/filter.d/iceslab-hysteria.conf <<'EOF'")
+	start := strings.Index(script, "${FAIL2BAN_DIR}/filter.d/iceslab-hysteria.conf\" <<'EOF'")
 	if start < 0 {
 		t.Fatal("install-iceslab-node.sh writes no iceslab-hysteria.conf")
 	}

@@ -437,24 +437,21 @@ func readInstaller(t *testing.T) string {
 }
 
 // The jail watches the port the firewall opens: --ssh-port, 22 by default, the
-// text of the base's jail otherwise untouched.
+// text of the base's jail otherwise untouched. Run in installer_hardening_test.go
+// for 2222; here 22.
 func TestTheJailFollowsSshPort(t *testing.T) {
-	s := readInstaller(t)
-	m := regexp.MustCompile("(?s)cat > /etc/fail2ban/jail\\.d/iceslab\\.local <<EOF\n(.*?)\nEOF\n").FindStringSubmatch(s)
-	if m == nil {
-		t.Fatal("the jail is not where this test looks")
+	r := runFail2ban(t, "1", "22", nil)
+	jail, err := os.ReadFile(filepath.Join(r.root, "jail.d", "iceslab.local"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, c := range []struct{ port, want string }{{"22", "port     = 22\n"}, {"2222", "port     = 2222\n"}} {
-		out, err := exec.Command(needBash(t), "-c", "SSH_PORT="+c.port+"\ncat <<EOF\n"+m[1]+"\nEOF\n").CombinedOutput()
-		if err != nil {
-			t.Fatalf("%v\n%s", err, out)
-		}
-		if !strings.Contains(string(out), "[sshd]\nenabled  = true\n"+c.want) {
-			t.Errorf("SSH_PORT=%s: the jail\n%s", c.port, out)
-		}
-		if c.port != "22" && regexp.MustCompile(`\b22\b`).Match(out) {
-			t.Errorf("SSH_PORT=%s: the jail still names 22:\n%s", c.port, out)
-		}
+	if !strings.Contains(string(jail), "[sshd]\nenabled  = true\nport     = 22\n") {
+		t.Errorf("the jail\n%s", jail)
+	}
+	r = runFail2ban(t, "1", "2222", nil)
+	jail, _ = os.ReadFile(filepath.Join(r.root, "jail.d", "iceslab.local"))
+	if regexp.MustCompile(`\b22\b`).Match(jail) {
+		t.Errorf("--ssh-port 2222: the jail still names 22:\n%s", jail)
 	}
 }
 
