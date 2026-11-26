@@ -327,8 +327,11 @@ export function buildSingboxJson(
         method: e.ssMethod,
         password: e.ssPassword,
         detour: stlsTag,
-        network: 'tcp',
-        udp_over_tcp: false,
+        // ShadowTLS carries TCP and only TCP, so UDP-over-TCP is the whole of
+        // this channel's UDP; without it QUIC, calls and games vanish while TCP
+        // keeps working. `network` is left unset: pinning it to 'tcp' makes
+        // the flag moot.
+        udp_over_tcp: true,
       });
       outbounds.push({
         type: 'shadowtls',

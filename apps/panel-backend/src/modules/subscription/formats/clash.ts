@@ -464,6 +464,11 @@ export function buildClashYaml(
           `      password: ${yamlString(e.shadowtlsPassword)}`,
           `      version: 3`,
           `    udp: true`,
+          // `udp: true` alone is a promise nothing can keep here: ShadowTLS
+          // carries TCP, so mihomo's native UDP relay has no port to reach.
+          // Measured on mihomo only; clash and stash are not known to take the
+          // key, so they do not get it.
+          ...(dialect === 'mihomo' ? [`    udp-over-tcp: true`] : []),
         ].join('\n'),
       );
     } else if (e.protocol === 'mieru') {

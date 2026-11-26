@@ -1117,9 +1117,9 @@ export async function generateSubscription(
         : undefined;
       // E30a: native hysteria on a node addressed by IP serves the panel's
       // self-signed certificate, and every client pins it. Only while the node
-      // has no FQDN (then ACME, no pin) and only on the native core (sing-box
-      // brings its own certificate).
-      const tlsPin = hysteriaPinFor(ib.engine, b.node.address, b.node.hysteriaTls);
+      // has no FQDN (then ACME, no pin). sing-box serves the certificate its
+      // bootstrap generated, pinned from what the agent reports of it.
+      const tlsPin = hysteriaPinFor(ib.engine, b.node);
       // A-154: the client's claim is the profile's bandwidth turned over, or none.
       const claim = clientBandwidthClaim(hyCfg);
       // Port hopping only where the node confirmed it (servedPortHopping).

@@ -213,6 +213,16 @@ describe('buildSingboxJson', () => {
     expect(stls.tls.server_name).toBe('www.microsoft.com');
   });
 
+  // ShadowTLS carries TCP by construction, so UDP-over-TCP is the only UDP the
+  // channel has. `network: 'tcp'` would pin the outbound to TCP and make the
+  // flag moot, so both halves are asserted.
+  it('lets UDP through the shadowtls channel: the ss outbound speaks UoT', () => {
+    const cfg = parse(buildSingboxJson([shadowtlsEp]));
+    const ss = cfg.outbounds.find((o: { type: string; tag: string }) => o.type === 'shadowsocks' && o.tag === 'eu-1-shadowtls');
+    expect(ss.udp_over_tcp).toBe(true);
+    expect(ss.network).toBeUndefined();
+  });
+
   // ───── Slice 24c part 3a: Trojan subprotocol ─────
 
   it('emits a trojan outbound when subprotocol=trojan; UUID becomes password', () => {

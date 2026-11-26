@@ -295,6 +295,21 @@ describe('buildClashYaml', () => {
     expect(out).not.toContain('network: raw');
   });
 
+  // ShadowTLS carries TCP, so mihomo's native UDP relay (`udp: true`) has no
+  // port to reach: UDP needs UoT declared. Only mihomo is known to take the key
+  // (stash and legacy clash do not get it).
+  it('lets UDP through the shadowtls proxy on mihomo: udp-over-tcp, not just udp: true', () => {
+    const out = buildClashYaml([shadowtlsEp]);
+    expect(out).toContain('    udp: true');
+    expect(out).toContain('    udp-over-tcp: true');
+  });
+
+  it('leaves udp-over-tcp out of the stash and legacy clash dialects', () => {
+    for (const dialect of ['stash', 'clash-legacy'] as const) {
+      expect(buildClashYaml([shadowtlsEp], { dialect }), dialect).not.toContain('udp-over-tcp');
+    }
+  });
+
   // ───── Routing Templates (R1c) ─────
 
   describe('routingPreset', () => {

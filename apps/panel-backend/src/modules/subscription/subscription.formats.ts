@@ -233,9 +233,10 @@ export interface HysteriaSubscriptionEndpoint extends SubscriptionEndpointBase {
   portHoppingStart?: number;
   portHoppingEnd?: number;
   /**
-   * E30a: the self-signed certificate native hysteria serves on a node
-   * addressed by IP, which every format pins in its own field (see each
-   * formatter). Absent = the certificate is ACME's and needs no pin.
+   * E30a: the self-signed certificate the endpoint serves, which every format
+   * pins in its own field (see each formatter): the panel's on native hysteria
+   * on a node addressed by IP, the one the agent reported on sing-box. Absent =
+   * the certificate is ACME's and needs no pin, or sing-box's was not reported.
    */
   tlsPin?: HysteriaTlsPin;
 }
