@@ -127,6 +127,10 @@ services:
       # Remnawave facade switch; see .env.production.example.
       REMNAWAVE_COMPAT_ENABLED: ${REMNAWAVE_COMPAT_ENABLED:-false}
       REMNAWAVE_COMPAT_PREFIX: ${REMNAWAVE_COMPAT_PREFIX:-rw}
+      # Outbound webhooks to the storefront; see .env.production.example.
+      REMNAWAVE_COMPAT_WEBHOOK_URL: ${REMNAWAVE_COMPAT_WEBHOOK_URL:-}
+      REMNAWAVE_COMPAT_WEBHOOK_SECRET: ${REMNAWAVE_COMPAT_WEBHOOK_SECRET:-}
+      REMNAWAVE_COMPAT_WEBHOOK_CONCURRENCY: ${REMNAWAVE_COMPAT_WEBHOOK_CONCURRENCY:-32}
       # Read by the frontend too, see there.
       SUBSCRIPTION_PATH_PREFIX: ${SUBSCRIPTION_PATH_PREFIX:-/sub}
     depends_on:

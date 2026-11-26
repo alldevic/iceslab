@@ -16,6 +16,8 @@ import { DELETED_USER_RETENTION_DAYS, HWID_DEVICE_RETENTION_DAYS, pruneHistory }
 import { queueDueUrlFetches } from '../geo-sets/geo-sets.queue.js';
 import { checkNodeDrawings } from '../inbounds/inbounds.queue.js';
 import { getLogger } from '../../lib/infra/logger.js';
+import { config } from '../../config.js';
+import { scanRemnaExpiryNotifications } from '../remnawave-compat/remnawave.webhook.js';
 
 // ───── Queue ─────
 
@@ -53,6 +55,13 @@ const CRON_JOBS: CronJobSpec[] = [
   { name: 'geo-url-refresh',                pattern: '*/10 * * * *' },   // каждые 10 минут - Ф9.4: гео-наборы по URL, у которых вышел refreshHours
   { name: 'node-cert-renew',                pattern: '20 * * * *' },     // каждый час в :20 - A-124: сертификат ноды за 30 дней до конца
   { name: 'node-drawing-check',             pattern: '40 * * * *' },     // каждый час в :40 - нода, чей рисунок сменился без события (новая панель, правка базы), получает пуш
+  // Фасад Remnawave: user.expires_in_{72,48,24}_hours витрине. Событие 24 ч - её
+  // единственный сигнал автопродления, поэтому такт короткий: срок короче часа
+  // при часовом такте остался бы без сигнала. Задача есть в списке только при
+  // включённом фасаде: при выключенном расписание очереди такое же, как в базе.
+  ...(config.REMNAWAVE_COMPAT_ENABLED
+    ? [{ name: 'remnawave-expiry-notify', pattern: '*/10 * * * *' }]
+    : []),
 ];
 
 // ───── Регистрация (вызывается один раз при бутстрапе) ─────
@@ -170,6 +179,11 @@ export function startCronTasksWorker(): Worker {
         case 'node-drawing-check': {
           const n = await checkNodeDrawings();
           if (n > 0) getLogger().info(`[cron] node-drawing-check - queued ${n} node push(es) whose drawing changed`);
+          break;
+        }
+        case 'remnawave-expiry-notify': {
+          const n = await scanRemnaExpiryNotifications();
+          if (n > 0) getLogger().info(`[cron] remnawave-expiry-notify - sent ${n} expiry webhook(s)`);
           break;
         }
         case 'prune-history': {

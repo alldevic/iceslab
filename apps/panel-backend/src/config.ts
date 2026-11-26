@@ -149,6 +149,25 @@ export const ConfigSchema = z.object({
         'the shop would be served a fake 404 and blacklisted',
     })
     .default('rw'),
+  // The shop's webhook endpoint and the secret it checks X-Remnawave-Signature
+  // with. Either empty = no Remnawave-format webhooks (the K2 bus, WEBHOOK_URLS
+  // above, is separate and unaffected). Blank reads as unset: compose passes
+  // `${KEY:-}`.
+  REMNAWAVE_COMPAT_WEBHOOK_URL: z
+    .string()
+    .optional()
+    .transform((v) => (v === '' ? undefined : v)),
+  REMNAWAVE_COMPAT_WEBHOOK_SECRET: z
+    .string()
+    .optional()
+    .transform((v) => (v === '' ? undefined : v)),
+  // Deliveries in flight at once. A single expiry tick can flip thousands of
+  // users; the bound protects the shop and this process's sockets (the row is
+  // read before the POST, so the database pool is never held for a delivery).
+  // 32: the shop handles 50 webhooks at once, sending more only queues there,
+  // and far fewer makes the drain long when the shop is down (5000 users at the
+  // 5 s timeout: 52 min at 8, under 7 at 32).
+  REMNAWAVE_COMPAT_WEBHOOK_CONCURRENCY: z.coerce.number().int().min(1).max(256).default(32),
   RATE_LIMIT_BOOTSTRAP_PER_MIN: z.coerce.number().int().min(1).default(10),
   RATE_LIMIT_HEARTBEAT_PER_MIN: z.coerce.number().int().min(1).default(120),
   // Where the image keeps the core artifacts it hands to nodes (the Dockerfile's

@@ -70,6 +70,7 @@ const INTERNAL = [
   'cascade.changed',
   'geo.rolledOut',
   'wg-devices.changed',
+  'hwid.device-added',
 ];
 
 /**

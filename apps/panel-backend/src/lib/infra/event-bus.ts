@@ -13,6 +13,19 @@ export interface DomainEventMap {
   'user.status-changed':  { userId: string; from: string; to: string };
   'user.deleted':         { userId: string };
   'user.traffic-reset':   { userId: string; previousUsedBytes: bigint };
+  // hwid.device-added → a /sub request brought a device the user had not had,
+  // and it was admitted (a new row, not a lastSeenAt touch). Emitted after the
+  // insert has committed. Internal: not forwarded to external webhooks.
+  'hwid.device-added':    {
+    userId: string;
+    deviceId: string;
+    hwid: string;
+    firstSeenAt: Date;
+    // What the client said about itself on that fetch, null where nothing.
+    platform?: string | null;
+    osVersion?: string | null;
+    deviceModel?: string | null;
+  };
   // wg-devices.changed → a user's WireGuard devices changed (issued, revoked):
   // their peers on the nodes follow (users.events re-adds the user). Internal:
   // not forwarded to external webhooks (webhook.events.ts lists what leaves).
