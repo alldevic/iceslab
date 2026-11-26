@@ -4,7 +4,8 @@
 # Pulls latest, applies pending migrations, rebuilds + restarts backend.
 # Frontend stays untouched. --no-cache is on by default: costs ~20s extra
 # rebuild so what you see is what shipped. Pass --cache to use the Docker
-# layer cache when you trust the diff.
+# layer cache when you trust the diff. Last, it waits up to 150 s for the
+# backend to be healthy: exit 1 if it is not (nothing is rolled back).
 #
 # Usage:
 #   ./scripts/deploy-backend.sh           # default --no-cache
@@ -30,7 +31,7 @@ for arg in "$@"; do
         --no-cache|--fresh) NO_CACHE=1 ;;
         --cache)            NO_CACHE=0 ;;
         -h|--help)
-            sed -n '2,11p' "$0" | sed 's/^# \?//'
+            sed -n '2,13p' "$0" | sed 's/^# \?//'
             exit 0
             ;;
         *)
@@ -102,13 +103,25 @@ done
 step_done
 
 # ───── Step 4: restart backend + status ─────
-step 4 "restart backend + status"
+step 4 "restart backend + verify"
 "${DC[@]}" up -d --build backend
 echo
 "${DC[@]}" ps backend
 echo
 log_info "backend tail (last 40 lines):"
 "${DC[@]}" logs --tail=40 backend || true
+echo
+# See deploy.sh step 6: a printed log tail is not a check, and the last line of
+# this script claims the new commit is being served.
+if wait_container_healthy "$("${DC[@]}" ps -q backend 2>/dev/null || true)" 150; then
+    log_ok "backend is healthy"
+else
+    log_err "backend did not come up; this deploy is NOT complete"
+    log_err "  the tail above is where the reason usually is. Nothing was rolled"
+    log_err "  back: the previous image was replaced, so the way out is a fix"
+    log_err "  forward, or ICESLAB_REF=<previous tag> ./scripts/ops/deploy-backend.sh"
+    exit 1
+fi
 step_done
 
 echo

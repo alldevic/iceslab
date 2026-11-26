@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # deploy-frontend.sh: fast path for SPA-only changes.
 #
+# Waits up to 60 s for the container to be running, exit 1 if it is not.
 # Skips Prisma migrate + backend rebuild. Use when you only edited files
 # under apps/panel-frontend/. --no-cache is ON by default: the Vite bundle
 # is content-hashed, but the COPY layer occasionally gets a Docker cache hit
@@ -33,7 +34,7 @@ for arg in "$@"; do
         --no-cache|--fresh) NO_CACHE=1 ;;
         --cache)            NO_CACHE=0 ;;
         -h|--help)
-            sed -n '2,15p' "$0" | sed 's/^# \?//'
+            sed -n '2,16p' "$0" | sed 's/^# \?//'
             exit 0
             ;;
         *)
@@ -84,8 +85,21 @@ fi
 step_done
 
 # ───── Step 3: status ─────
-step 3 "status"
+step 3 "verify + status"
 "${DC[@]}" ps frontend
+echo
+# The frontend declares no healthcheck, so `running` is the most that can be
+# known, which is still more than the printed table proved: a bad nginx.conf
+# exits on start and `restart: unless-stopped` turns that into a loop.
+if wait_container_healthy "$("${DC[@]}" ps -q frontend 2>/dev/null || true)" 60; then
+    log_ok "frontend is up"
+else
+    log_err "frontend did not come up; this deploy is NOT complete"
+    "${DC[@]}" logs --tail=40 frontend || true
+    log_err "  Nothing was rolled back: the previous image was replaced, so the way"
+    log_err "  out is a fix forward, or ICESLAB_REF=<previous tag> ./scripts/ops/deploy-frontend.sh"
+    exit 1
+fi
 step_done
 
 echo

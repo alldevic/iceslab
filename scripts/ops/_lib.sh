@@ -12,6 +12,8 @@
 #   - log_info / log_ok / log_warn / log_err  (consistent prefix + colors)
 #   - elapsed_total / fmt_duration  (wall-clock since script start)
 #   - step / step_done  (numbered "[N/M] doing X" headers with timing)
+#   - retry  (n attempts with backoff, returns the last exit code)
+#   - wait_container_healthy  (deploy gate: container healthy / running)
 #   - on_err trap installer  (prints which line + command failed)
 #   - require_compose_root  (ensures we're in /opt/iceslab or equivalent)
 #   - git_short_sha  (current HEAD hash, "no-git" if not a repo)
@@ -104,6 +106,12 @@ step_done() {
 # prisma image + engine pulls) where a transient ECONNRESET / ETIMEDOUT should
 # not sink the whole deploy. Returns the last exit code if every attempt fails,
 # so the caller's `set -e` + ERR trap still fire with a clear message.
+#
+# The status is taken in the else branch: an `if` whose condition fails and
+# which has no else returns 0, so a `rc=$?` placed after it was always 0 and
+# the function reported success after every attempt had failed. Every
+# `docker compose build` of the deploy scripts runs through here, so a build
+# that failed three times let the deploy go on with the old images.
 retry() {
     local max=$1
     shift
@@ -111,8 +119,9 @@ retry() {
     while (( attempt <= max )); do
         if "$@"; then
             return 0
+        else
+            rc=$?
         fi
-        rc=$?
         if (( attempt < max )); then
             log_warn "attempt ${attempt}/${max} failed (exit ${rc}); retry in $((attempt * 5))s"
             sleep $(( attempt * 5 ))
@@ -122,6 +131,47 @@ retry() {
         attempt=$(( attempt + 1 ))
     done
     return "$rc"
+}
+
+# wait_container_healthy <container-id-or-name> [budget-seconds]
+#
+# Block until the container reports docker-health `healthy`; returns 0 then,
+# and also for a container that declares no healthcheck and is `running`.
+# Returns 1 for any other state, or when the budget (default 150 s) runs out.
+# Polls every 3 s: `starting`, `restarting` and `created` are waited out, the
+# rest (`unhealthy`, `exited`, `dead`, an id docker does not know) ends the
+# wait at once.
+#
+# Why a deploy needs it: it used to end with `ps` and a log tail that nothing
+# read, then announce "deploy complete", so a backend crash-looping on a bad
+# migration or a missing variable looked the same as one that came up. The
+# compose healthcheck of the backend asks /health, which answers 503 while
+# Postgres or Redis is unreachable, so the answer exists; this waits for it.
+# 150 s is above what the healthcheck takes to give up by itself (30 s
+# start_period + 4 probes x 15 s).
+wait_container_healthy() {
+    local cid="${1:-}" budget="${2:-150}" waited=0 status=""
+    if [[ -z "$cid" ]]; then
+        log_err "no container is running for that service"
+        return 1
+    fi
+    while (( waited < budget )); do
+        status="$(docker inspect \
+            --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
+            "$cid" 2>/dev/null)" || status="missing"
+        case "$status" in
+            healthy|running) return 0 ;;
+            starting|restarting|created) ;;
+            *)
+                log_err "container is ${status}"
+                return 1
+                ;;
+        esac
+        sleep 3
+        waited=$(( waited + 3 ))
+    done
+    log_err "still ${status:-unknown} after ${budget}s"
+    return 1
 }
 
 # ───── Error context ─────

@@ -7,8 +7,9 @@
 #   - .env.production (host-side, contains JWT_SECRET, POSTGRES_PASSWORD, etc)
 #
 # All three go into one timestamped tar.gz under the chosen path (default
-# `./backups/`). With `--password <pw>` the tarball is AES-256 encrypted via
-# `openssl enc`. The CA private key, JWT secret, user creds and node mTLS
+# `./backups/`), written as `<name>.part` (0600) and renamed when complete, so
+# an interrupted backup leaves no file that looks like a finished one. With
+# `--password <pw>` the tarball is AES-256 encrypted via `openssl enc`. The CA private key, JWT secret, user creds and node mTLS
 # material all sit inside, so encrypt at rest for off-host storage.
 #
 # Usage:
@@ -52,7 +53,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -h|--help)
-            sed -n '2,18p' "$0" | sed 's/^# \?//'
+            sed -n '2,20p' "$0" | sed 's/^# \?//'
             exit 0
             ;;
         *)
@@ -112,11 +113,27 @@ step_done
 
 # ───── Step 2: redis BGSAVE + copy ─────
 step 2 "redis BGSAVE → ${STAGE}/redis.rdb"
-docker exec "$REDIS_CONTAINER" redis-cli BGSAVE >/dev/null
 # BGSAVE is async; wait for LASTSAVE to advance. This loop used to give up
 # after 30s and copy whatever rdb was on disk, shipping a stale snapshot.
 # Now it fails loudly instead.
+#
+# The baseline is read BEFORE the save is asked for. Read after, on a small
+# dataset where BGSAVE finishes between the two commands, it already included
+# the save, nothing could ever advance, and the backup aborted with "backup
+# would be stale" every time: a guard against a stale snapshot that prevented
+# any snapshot at all.
 prev_lastsave="$(docker exec "$REDIS_CONTAINER" redis-cli LASTSAVE)"
+# LASTSAVE counts whole seconds: a save that finished in the same second as the
+# baseline (FLUSHALL's own save, a save just before this backup) leaves it
+# unchanged and the check below would call a good snapshot stale. So wait until
+# Redis's clock is past the baseline second first (at most ~3 s); then any save
+# started now ends in a later second and advances LASTSAVE.
+for _ in $(seq 1 15); do
+    read -r redis_now _ < <(docker exec "$REDIS_CONTAINER" redis-cli TIME)
+    [[ "$redis_now" -gt "$prev_lastsave" ]] && break
+    sleep 0.2
+done
+docker exec "$REDIS_CONTAINER" redis-cli BGSAVE >/dev/null
 bgsave_ok=0
 for _ in $(seq 1 30); do
     sleep 1
@@ -155,22 +172,48 @@ step_done
 # ───── Step 4: tar + optional encryption ─────
 ARCHIVE="${OUT_DIR}/iceslab-backup-${TS}.tar.gz"
 
+# The archive is written under a `.part` name, created 0600 before the first
+# byte, and renamed after the last one (`mv` keeps the mode). A backup that
+# dies halfway (disk full, broken pipe, ^C) otherwise leaves a truncated file
+# under the FINAL name, with nothing in the name to say it is not a backup.
+# The final name never exists incomplete; the `.part` is removed on exit. A
+# rotation glob wants `*.tar.gz` and `*.tar.gz.enc`, not `*.tar.gz*`, which
+# would match the part file of a backup still being written.
+#
+# `trap ... EXIT` REPLACES the handler set above, and that one removes $STAGE
+# (postgres.sql, redis.rdb and a copy of the env file in the clear), so the new
+# one carries both. The ERR trap is a separate signal and stays as set above.
+BACKUP_PART=""
+trap 'rm -f "${BACKUP_PART:-}"; rm -rf "$STAGE"' EXIT
+
 if [[ -n "$PASSWORD" ]]; then
     step 4 "tar + AES-256-CBC encrypt → ${ARCHIVE}.enc"
     ENCRYPTED="${ARCHIVE}.enc"
+    BACKUP_PART="${ENCRYPTED}.part"
+    # 0600 before openssl writes a byte: the file is the whole database. `-out`
+    # opens O_CREAT|O_TRUNC and keeps the mode of a file already there.
+    install -m 0600 /dev/null "$BACKUP_PART"
     tar -C "$STAGE" -czf - postgres.sql redis.rdb env manifest.json \
         | openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 \
                        -pass "pass:${PASSWORD}" \
-                       -out "$ENCRYPTED"
-    chmod 600 "$ENCRYPTED"
+                       -out "$BACKUP_PART"
+    chmod 600 "$BACKUP_PART"
+    mv "$BACKUP_PART" "$ENCRYPTED"
+    BACKUP_PART=""
     SIZE="$(du -h "$ENCRYPTED" | cut -f1)"
     step_done
     echo
     log_ok "backup complete in $(elapsed_total): ${ENCRYPTED} (${SIZE}, AES-256-CBC)"
 else
     step 4 "tar → ${ARCHIVE}"
-    tar -C "$STAGE" -czf "$ARCHIVE" postgres.sql redis.rdb env manifest.json
-    chmod 600 "$ARCHIVE"
+    # Same, and it matters more here: unencrypted, this archive holds the env
+    # file and every subscription token in the database.
+    BACKUP_PART="${ARCHIVE}.part"
+    install -m 0600 /dev/null "$BACKUP_PART"
+    tar -C "$STAGE" -czf "$BACKUP_PART" postgres.sql redis.rdb env manifest.json
+    chmod 600 "$BACKUP_PART"
+    mv "$BACKUP_PART" "$ARCHIVE"
+    BACKUP_PART=""
     SIZE="$(du -h "$ARCHIVE" | cut -f1)"
     step_done
     echo

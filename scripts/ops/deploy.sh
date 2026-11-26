@@ -4,7 +4,8 @@
 # Pulls latest code, applies new Prisma migrations, rebuilds all containers
 # (--no-cache by default so an nginx.conf / dist / env change never lands on
 # a stale layer), then prints status and a tail of the backend log so you can
-# catch a startup error before tabbing away.
+# catch a startup error before tabbing away. Last, it waits up to 150 s for
+# the backend to be healthy: exit 1 if it is not (nothing is rolled back).
 #
 # Usage:
 #   ./scripts/deploy.sh             # re-deploy (--no-cache default)
@@ -42,7 +43,7 @@ for arg in "$@"; do
         --no-cache)        NO_CACHE=1 ;;
         --caddy-only)      CADDY_ONLY=1 ;;
         -h|--help)
-            sed -n '2,20p' "$0" | sed 's/^# \?//'
+            sed -n '2,21p' "$0" | sed 's/^# \?//'
             exit 0
             ;;
         *)
@@ -162,11 +163,25 @@ refresh_host_caddyfile
 step_done
 
 # ───── Step 6: status + backend tail ─────
-step 6 "status + backend tail"
+step 6 "verify + status + backend tail"
 "${DC[@]}" ps
 echo
 log_info "backend tail (last 30 lines):"
 "${DC[@]}" logs --tail=30 backend || true
+echo
+# A printed table and a log tail are not a check: the last line of this script
+# claims the new commit is being served. The backend's healthcheck asks /health
+# (503 while Postgres or Redis is down), so wait for it. The host Caddy step
+# above runs before this wait, as in the base.
+if wait_container_healthy "$("${DC[@]}" ps -q backend 2>/dev/null || true)"; then
+    log_ok "backend is healthy"
+else
+    log_err "backend did not come up; this deploy is NOT complete"
+    log_err "  the tail above is where the reason usually is. Nothing was rolled"
+    log_err "  back: the previous image was replaced, so the way out is a fix"
+    log_err "  forward, or ICESLAB_REF=<previous tag> ./scripts/ops/deploy.sh"
+    exit 1
+fi
 step_done
 
 # ───── Optional cleanup ─────

@@ -46,7 +46,16 @@ for arg in "$@"; do
         db|postgres|pg)     SERVICE="postgres" ;;
         redis|cache)        SERVICE="redis" ;;
         -f|--follow|tail)   FOLLOW=1 ;;
-        --tail=*)           TAIL_N="${arg#--tail=}" ;;
+        --tail=*)
+            TAIL_N="${arg#--tail=}"
+            # An unknown flag exits 2 with a sentence naming it; an unusable
+            # value for a known one should not instead reach compose and come
+            # back as its error text. `all` is docker's own "no limit".
+            if [[ "$TAIL_N" != "all" && ! "$TAIL_N" =~ ^[0-9]+$ ]]; then
+                log_err "--tail= wants a number of lines or 'all', got: ${TAIL_N:-(empty)}"
+                exit 2
+            fi
+            ;;
         -h|--help)
             sed -n '2,20p' "$0" | sed 's/^# \?//'
             exit 0
@@ -61,15 +70,26 @@ done
 # Caddy lives outside Docker: it's a host-side systemd unit set up by
 # install-iceslab.sh. Route its logs through journalctl instead of
 # `docker compose logs`.
+#
+# The unit is looked for BEFORE the journal is read: `journalctl -u <unit never
+# installed>` prints "-- No entries --" and exits 0, so an `|| log_warn` after
+# it can never fire, and a bare-IP install showed an empty caddy block that
+# reads the same as an installed, working, quiet caddy.
 caddy_logs() {
     local follow_flag=""
     if [[ $FOLLOW -eq 1 ]]; then follow_flag="-f"; fi
-    if command -v journalctl >/dev/null 2>&1; then
-        journalctl -u caddy $follow_flag --no-pager -n "$TAIL_N" 2>/dev/null \
-            || log_warn "caddy systemd unit not found (bare-IP install), skipping"
-    else
+    if ! command -v journalctl >/dev/null 2>&1; then
         log_warn "journalctl not available, can't read caddy logs"
+        return 0
     fi
+    if command -v systemctl >/dev/null 2>&1 &&
+        ! systemctl list-unit-files caddy.service >/dev/null 2>&1; then
+        log_warn "no caddy systemd unit on this host (bare-IP install has none), skipping"
+        return 0
+    fi
+    # shellcheck disable=SC2086
+    journalctl -u caddy $follow_flag --no-pager -n "$TAIL_N" \
+        || log_warn "reading the caddy journal failed (permissions? try sudo)"
 }
 
 if [[ "$SERVICE" == "caddy" ]]; then
@@ -89,12 +109,20 @@ fi
 
 # All-services mode: one block per service. Grouped output is easier to
 # skim than the interleaved default.
+#
+# "Not running" is asked of `ps -q`, not inferred from the exit code of `logs`:
+# compose answers 0 with an empty body for a declared service that has no
+# container, so the `|| log_warn` could not fire for the case it named.
 for s in backend frontend postgres redis; do
     printf '\n%b═══════════════════════════════════════════════════════════%b\n' "$C_INFO" "$C_RST"
     printf '%b  %s%b %b(last %s lines)%b\n' "$C_INFO" "$s" "$C_RST" "$C_DIM" "$TAIL_N" "$C_RST"
     printf '%b═══════════════════════════════════════════════════════════%b\n' "$C_INFO" "$C_RST"
+    if [[ -z "$("${DC[@]}" ps -q "$s" 2>/dev/null)" ]]; then
+        log_warn "service '$s' has no container running"
+        continue
+    fi
     "${DC[@]}" logs --tail="$TAIL_N" "$s" 2>/dev/null \
-        || log_warn "service '$s' not running"
+        || log_warn "reading '$s' logs failed"
 done
 
 # Caddy block last so an all-services tail still covers TLS issues.
