@@ -16,6 +16,7 @@ const SUB = 'Zx9QkT2mVb7LpR4sWc8NdY3h';
 const BOOTSTRAP = 'bs_Qm3Xr8TzK2vLp9WsN4cYd7HbF6jG';
 const PREVIEW = '7c1e4a52-9b3d-4f8e-a6c2-15d0e9b7f342';
 const BY_TOKEN = 'Hk4Lm9Qp2Rs7Tv3Wx8Yz5Ab6Cd';
+const GEO_TOKEN = 'c3f9a1d27b5e48f0a6d1e9b2740c5a38';
 const CLIENT_IP = '203.0.113.77';
 
 let app: FastifyInstance;
@@ -76,6 +77,9 @@ describe('the request log', () => {
       [`/api/internal/bootstrap/${BOOTSTRAP}`, BOOTSTRAP, false],
       [`/api/users/by-subscription-token/${BY_TOKEN}`, BY_TOKEN, true],
       [`/api/settings/subscription/preview/${PREVIEW}`, PREVIEW, true],
+      // The geo files (10.4); the flag is off here and the route still masks.
+      [`/geo/${GEO_TOKEN}/geoip.dat`, GEO_TOKEN, false],
+      [`/geo/${GEO_TOKEN}/a/b`, GEO_TOKEN, false],
     ] as const) {
       const out = await logOf(url, { auth });
       expect(out.length, url).toBeGreaterThan(0);

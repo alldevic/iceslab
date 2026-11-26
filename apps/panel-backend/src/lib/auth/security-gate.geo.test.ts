@@ -59,6 +59,15 @@ it('is actually configured for this file', () => {
   expect(config.ADMIN_ALLOWED_COUNTRIES).toEqual(['RU', 'DE']);
 });
 
+// The geo files (10.4) are fetched by clients worldwide with no session: the
+// gate gates /api/ only, so /geo/ needs no entry in PUBLIC_PATH_PREFIXES.
+it('lets /geo/ through from any country, and with none', async () => {
+  for (const headers of [{ 'cf-ipcountry': 'US' }, {}] as const) {
+    const res = await get('/geo/c3f9a1d27b5e48f0a6d1e9b2740c5a38/geoip.dat', headers);
+    expect(res.statusCode).toBe(200);
+  }
+});
+
 describe('the admin surface is gated by country', () => {
   it('lets every allowed country through', async () => {
     for (const country of ['RU', 'DE']) {

@@ -124,6 +124,11 @@ services:
       HONEY_USER_TOKENS: ${HONEY_USER_TOKENS:-}
       RATE_LIMIT_SUB_IP_PER_MIN: ${RATE_LIMIT_SUB_IP_PER_MIN:-120}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      # Geo files served to clients from this panel (/geo/<token>/<file>); see
+      # .env.production.example.
+      GEO_SELF_HOST: ${GEO_SELF_HOST:-false}
+      GEO_ARTIFACT_TOKEN: ${GEO_ARTIFACT_TOKEN:-}
+      RATE_LIMIT_GEO_PER_MIN: ${RATE_LIMIT_GEO_PER_MIN:-60}
       # Remnawave facade switch; see .env.production.example.
       REMNAWAVE_COMPAT_ENABLED: ${REMNAWAVE_COMPAT_ENABLED:-false}
       REMNAWAVE_COMPAT_PREFIX: ${REMNAWAVE_COMPAT_PREFIX:-rw}

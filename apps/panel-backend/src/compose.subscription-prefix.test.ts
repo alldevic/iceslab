@@ -91,3 +91,36 @@ describe('the subscription prefix is one variable with one default', () => {
     );
   });
 });
+
+// Milestone 10.4: the geo files at /geo/<token>/<file>. The path is a constant
+// (no variable), but it is still written in more than one place: a location that
+// proxies it, two masks that keep the token out of the access log, and the three
+// settings the backend reads.
+describe('the geo files path (/geo/) and its settings', () => {
+  const tpl = () => read('apps/panel-frontend/nginx.conf.template');
+
+  it('the nginx template proxies /geo/ to the backend, with ^~ so the static-asset regex cannot take a .dat', () => {
+    const t = tpl();
+    const at = t.indexOf('location ^~ /geo/ {');
+    expect(at, 'no `location ^~ /geo/` in nginx.conf.template: /geo/ would answer index.html with 200').toBeGreaterThan(-1);
+    const block = t.slice(at, t.indexOf('\n    }\n', at));
+    expect(block).toContain('proxy_pass http://$backend;');
+    expect(block).toMatch(/proxy_read_timeout (\d+)s;/);
+    expect(Number(/proxy_read_timeout (\d+)s;/.exec(block)![1])).toBeGreaterThanOrEqual(300);
+    // The error log carries the request line, token included.
+    expect(block).toMatch(/error_log [^\n]* crit;/);
+  });
+
+  it('both log masks list /geo/, so the token is never written', () => {
+    const maps = [...tpl().matchAll(/^\s+"~\^[^\n]*\(\$\{SUBSCRIPTION_PATH_PREFIX\}\/\|([^)\n]*)\)\[\^\/\?\]\+/gm)];
+    expect(maps.length, 'the URI map and the Referer map').toBe(2);
+    for (const m of maps) expect(m[1]!.split('|'), 'a mask lacks /geo/').toContain('/geo/');
+  });
+
+  it.each(COMPOSE_FILES)('%s passes the three geo settings to the backend, off and blank by default', (file) => {
+    const backend = services(read(file))['backend']!;
+    expect(backend).toMatch(/^\s+GEO_SELF_HOST:\s*\$\{GEO_SELF_HOST:-false\}\s*$/m);
+    expect(backend).toMatch(/^\s+GEO_ARTIFACT_TOKEN:\s*\$\{GEO_ARTIFACT_TOKEN:-\}\s*$/m);
+    expect(backend).toMatch(/^\s+RATE_LIMIT_GEO_PER_MIN:\s*\$\{RATE_LIMIT_GEO_PER_MIN:-60\}\s*$/m);
+  });
+});

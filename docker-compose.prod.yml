@@ -175,6 +175,11 @@ services:
       # Safety ceiling on device rows per user, and the login-alert toggle.
       HWID_MAX_DEVICES_PER_USER: ${HWID_MAX_DEVICES_PER_USER:-1000}
       TELEGRAM_NOTIFY_LOGIN_EVENTS: ${TELEGRAM_NOTIFY_LOGIN_EVENTS:-false}
+      # Geo files served to clients from this panel (/geo/<token>/<file>); see
+      # .env.production.example.
+      GEO_SELF_HOST: ${GEO_SELF_HOST:-false}
+      GEO_ARTIFACT_TOKEN: ${GEO_ARTIFACT_TOKEN:-}
+      RATE_LIMIT_GEO_PER_MIN: ${RATE_LIMIT_GEO_PER_MIN:-60}
       # Remnawave facade switch; see .env.production.example.
       REMNAWAVE_COMPAT_ENABLED: ${REMNAWAVE_COMPAT_ENABLED:-false}
       REMNAWAVE_COMPAT_PREFIX: ${REMNAWAVE_COMPAT_PREFIX:-rw}

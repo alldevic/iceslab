@@ -91,6 +91,8 @@ const PUBLIC: Record<string, string> = {
     "the subscription a buyer's client polls; the token in the path is the credential (path follows SUBSCRIPTION_PATH_PREFIX, default /sub)",
   'GET /sub/:token/:client':
     'the same subscription with the client format chosen in the path; same token credential',
+  'GET /geo/:token/:name':
+    'the geo files a client downloads from the panel (GEO_SELF_HOST, off answers 404); the credential is the token in the path, one for the panel',
 };
 
 beforeAll(async () => {

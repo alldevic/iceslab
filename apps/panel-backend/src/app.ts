@@ -36,6 +36,7 @@ import { bullBoardRoutes } from './modules/admin/bull-board.routes.js';
 import { systemRoutes } from './modules/system/system.routes.js';
 import { recipesRoutes } from './modules/recipes/recipes.routes.js';
 import { geoSetsRoutes } from './modules/geo-sets/geo-sets.routes.js';
+import { geoPublicRoutes } from './modules/geo-sets/geo-public.routes.js';
 import { routingPresetsRoutes } from './modules/routing-presets/routing-presets.routes.js';
 import { subscriptionTemplatesRoutes } from './modules/subscription-templates/templates.routes.js';
 import { auditRoutes } from './modules/audit/audit.routes.js';
@@ -341,6 +342,7 @@ export async function buildApp(opts: { log?: { level: string; stream: { write(li
   await app.register(systemRoutes);
   await app.register(recipesRoutes);
   await app.register(geoSetsRoutes);
+  await app.register(geoPublicRoutes);
   await app.register(routingPresetsRoutes);
   await app.register(subscriptionTemplatesRoutes);
   await app.register(auditRoutes);

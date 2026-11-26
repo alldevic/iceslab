@@ -117,6 +117,36 @@ export const ConfigSchema = z.object({
   // ~= 0.14/min. 120/min is ~1000x that, well clear of legit traffic.
   RATE_LIMIT_SUB_IP_PER_MIN: z.coerce.number().int().min(1).default(120),
 
+  // Public delivery of the geo files to CLIENTS from this panel's own domain
+  // (GET /geo/<token>/<file>, geo-sets/geo-public.routes.ts), for networks where
+  // GitHub and the CDNs are slow or blocked. Off by default: the address then
+  // answers 404 like any unknown path and the panel is the base. Nothing in the
+  // subscription points at it yet (that is a later milestone).
+  GEO_SELF_HOST: z
+    .string()
+    .default('false')
+    .transform((s) => s.toLowerCase() === 'true' || s === '1'),
+  // The token in that path. One for the whole panel, and every subscriber's
+  // client learns it, so it is a capability against scanners and not a secret:
+  // the files it opens are not secret either. Unset (blank counts as unset,
+  // compose passes `${VAR:-}`): derived from JWT_SECRET. Revoked by replacing it.
+  GEO_ARTIFACT_TOKEN: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v.trim() === '' ? undefined : v.trim()))
+    .pipe(
+      z
+        .string()
+        .min(16, 'GEO_ARTIFACT_TOKEN must be at least 16 characters')
+        .max(128)
+        .regex(/^[A-Za-z0-9_-]+$/, 'GEO_ARTIFACT_TOKEN: only [A-Za-z0-9_-], it is a path segment')
+        .optional(),
+    ),
+  // Downloads of those files per minute per address, 404s included (that is
+  // what holds back a guess at the token). A client takes two or three files
+  // per refresh.
+  RATE_LIMIT_GEO_PER_MIN: z.coerce.number().int().min(1).default(60),
+
   // Default OFF for alpha: admin-login activity is operational PII and
   // shouldn't auto-ship to a third-party chat. Set =true (and configure
   // TELEGRAM_BOT_TOKEN/CHAT_ID) only if the operator explicitly wants
