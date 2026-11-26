@@ -125,6 +125,11 @@ describe('the geo files path (/geo/) and its settings', () => {
     expect(backend).toMatch(/^\s+RATE_LIMIT_GEO_PER_MIN:\s*\$\{RATE_LIMIT_GEO_PER_MIN:-60\}\s*$/m);
   });
 
+  it.each(COMPOSE_FILES)('%s passes the xray-json geo inlining switch to the backend, off by default', (file) => {
+    const backend = services(read(file))['backend']!;
+    expect(backend).toMatch(/^\s+SUBSCRIPTION_XRAY_GEO_INLINE:\s*\$\{SUBSCRIPTION_XRAY_GEO_INLINE:-false\}\s*$/m);
+  });
+
   // Milestone 10.5. A blank default here would override the image's own ENV and
   // leave the panel with no sing-box, so the default is the image's path.
   it.each(COMPOSE_FILES)('%s passes SINGBOX_BIN with the image\'s own path as the default', (file) => {

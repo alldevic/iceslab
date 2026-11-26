@@ -250,6 +250,29 @@ describe.skipIf(!XRAY_BIN)('xray -test accepts an own preset of every kind', () 
   });
 });
 
+describe.skipIf(!XRAY_BIN)('xray -test accepts the split presets with the lists written in (f12-21)', () => {
+  // No geo files are given: a document that names no category must load without them.
+  const empty = mkdtempSync(join(tmpdir(), 'iceslab-nogeo-'));
+  const INLINE = {
+    'ru-split': {
+      domains: { 'category-ru': ['domain:yandex.ru', 'full:www.example.ru', 'keyword:ruword', 'regexp:^a\\.ru$'], 'category-gov-ru': ['domain:gosuslugi.ru'] },
+      cidrs: { ru: ['5.3.0.0/16', '77.88.0.0/16'] },
+    },
+    'cn-split': { domains: { cn: ['domain:baidu.com'] }, cidrs: { cn: ['1.0.1.0/24'] } },
+  };
+  it.each(['ru-split', 'cn-split'] as const)('%s: flat, balancer and array', (routingPreset) => {
+    const opts = { routingPreset, presetGeoInline: INLINE[routingPreset] };
+    for (const config of [
+      buildXrayJson(LOADABLE, opts),
+      buildXrayJson(LOADABLE, { ...opts, bundle: 'balancer' }),
+      ...(JSON.parse(buildXrayJsonArray(LOADABLE, opts)) as unknown[]).map((c) => JSON.stringify(c)),
+    ]) {
+      expect(config).not.toMatch(/geosite:|geoip:/);
+      expect(run(XRAY_BIN, (f) => ['-test', '-c', f], config, { XRAY_LOCATION_ASSET: empty })).toBe('');
+    }
+  });
+});
+
 describe.skipIf(!SINGBOX_BIN)('sing-box check accepts the split DNS of the built-in presets (f12-20)', () => {
   it.each(['ru-split', 'cn-split'] as const)('%s, selector and url-test', (routingPreset) => {
     for (const bundle of ['selector', 'url-test'] as const) {

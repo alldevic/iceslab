@@ -8,6 +8,7 @@ import type { SubscriptionEndpoint } from '../subscription.formats.js';
 import { endpointTag } from '../endpoint-identity.js';
 import { expandCascadeEntry } from '../cascade-entries.js';
 import { readFrame } from '../subscription.frames.js';
+import type { PresetGeoInline } from '../../geo-sets/geo-preset-inline.js';
 
 const xrayEp: SubscriptionEndpoint = {
   protocol: 'xray',
@@ -981,5 +982,103 @@ describe('buildXrayJsonArray: hysteria2 an xray client can reach', () => {
       tlsPin: { serverName: 'n1.example.com', certSha256: 'ab'.repeat(32), certPem: '' },
     } as SubscriptionEndpoint;
     expect(hyOut([pinned])).toBeDefined();
+  });
+});
+
+// Milestone 12.5 (f12-21): the split presets carry the region's lists themselves,
+// for the clients that trim their geo files to the tags of their own profile.
+describe('the split presets embed the region\'s lists (f12-21)', () => {
+  const RU: PresetGeoInline = {
+    domains: {
+      'category-ru': ['domain:yandex.ru', 'full:www.example.ru', 'keyword:ruword'],
+      'category-gov-ru': ['domain:gosuslugi.ru', 'domain:yandex.ru'],
+    },
+    cidrs: { ru: ['5.3.0.0/16', '77.88.0.0/16'] },
+  };
+  const CN: PresetGeoInline = { domains: { cn: ['domain:baidu.com'] }, cidrs: { cn: ['1.0.1.0/24'] } };
+  const text = (o: unknown) => JSON.stringify(o);
+  const noRegionRef = (s: string) => {
+    expect(s).not.toContain('geosite:');
+    expect(s).not.toMatch(/geoip:(?!$)/);
+  };
+
+  it('ru-split: the lists replace the names in the rules, the private ranges are literals, ads are not blocked', () => {
+    const cfg = parse(buildXrayJson([xrayEp], { routingPreset: 'ru-split', presetGeoInline: RU }));
+    const rules = cfg.routing.rules;
+    expect(rules).toHaveLength(3);
+    expect(rules[0]).toEqual({
+      type: 'field',
+      domain: ['domain:yandex.ru', 'full:www.example.ru', 'keyword:ruword', 'domain:gosuslugi.ru'],
+      outboundTag: 'direct',
+    });
+    const ip = rules[1]!.ip as string[];
+    expect(ip).toEqual(expect.arrayContaining(['10.0.0.0/8', '192.168.0.0/16', '5.3.0.0/16', '77.88.0.0/16']));
+    expect(ip.slice(-2)).toEqual(['5.3.0.0/16', '77.88.0.0/16']);
+    expect(rules[1]!.outboundTag).toBe('direct');
+    expect(rules[2]!.outboundTag).toBe(endpointTag(xrayEp));
+    expect(text(cfg.routing.rules)).not.toContain('block');
+    noRegionRef(text(cfg.routing.rules));
+    expect(cfg.routing.domainStrategy).toBe('IPOnDemand');
+  });
+
+  it('ru-split: the regional DNS server is scoped by the same domains, the rest of the block is as before', () => {
+    const base = JSON.parse(buildXrayJson([xrayEp], { routingPreset: 'ru-split' })).dns;
+    const dns = JSON.parse(buildXrayJson([xrayEp], { routingPreset: 'ru-split', presetGeoInline: RU })).dns;
+    expect(dns.servers[0]).toEqual({
+      address: '77.88.8.8',
+      domains: ['domain:yandex.ru', 'full:www.example.ru', 'keyword:ruword', 'domain:gosuslugi.ru'],
+      skipFallback: true,
+    });
+    expect(dns.servers[1]).toBe(base.servers[1]);
+    expect(dns.queryStrategy).toBe(base.queryStrategy);
+    noRegionRef(text(dns));
+  });
+
+  it('cn-split', () => {
+    const cfg = parse(buildXrayJson([xrayEp], { routingPreset: 'cn-split', presetGeoInline: CN }));
+    expect(cfg.routing.rules[0]).toEqual({ type: 'field', domain: ['domain:baidu.com'], outboundTag: 'direct' });
+    expect(cfg.routing.rules[1]!.ip).toContain('1.0.1.0/24');
+    noRegionRef(text(cfg.routing.rules) + text((cfg as unknown as { dns: unknown }).dns));
+  });
+
+  it('the array form: every element carries the lists', () => {
+    const out = parseArray(buildXrayJsonArray([xrayEp, xrayEp2], { routingPreset: 'ru-split', presetGeoInline: RU }));
+    expect(out).toHaveLength(2);
+    for (const cfg of out) {
+      noRegionRef(text(cfg.routing.rules) + text((cfg as unknown as { dns: unknown }).dns));
+      expect(cfg.routing.rules[0]!.domain).toContain('domain:yandex.ru');
+      expect(text(cfg.routing.rules)).not.toContain('block');
+    }
+  });
+
+  it('no data, or data that misses a category of the preset: the document is the base\'s', () => {
+    const base = buildXrayJson([xrayEp], { routingPreset: 'ru-split' });
+    expect(buildXrayJson([xrayEp], { routingPreset: 'ru-split', presetGeoInline: undefined })).toBe(base);
+    const half: PresetGeoInline = { domains: { 'category-ru': ['domain:yandex.ru'] }, cidrs: { ru: ['5.3.0.0/16'] } };
+    expect(buildXrayJson([xrayEp], { routingPreset: 'ru-split', presetGeoInline: half })).toBe(base);
+    expect(buildXrayJson([xrayEp], { routingPreset: 'ru-split', presetGeoInline: { ...RU, cidrs: { ru: [] } } })).toBe(base);
+    expect(buildXrayJson([xrayEp], { routingPreset: 'ru-split', presetGeoInline: CN })).toBe(base);
+    expect(text(JSON.parse(base).routing.rules)).toContain('geosite:category-ads-all');
+  });
+
+  it('proxy-all, the router form and an operator\'s own preset are not touched', () => {
+    const same = (o: Parameters<typeof buildXrayJson>[1]) =>
+      expect(buildXrayJson([xrayEp], { ...o, presetGeoInline: RU })).toBe(buildXrayJson([xrayEp], o));
+    same({ routingPreset: 'proxy-all' });
+    same({ routingPreset: 'ru-split', forRouter: true });
+    same({ routingPreset: 'ru-split', ownPresetRules: [{ match: ['geosite:category-ru'], action: 'direct', note: '' }] });
+    expect(
+      buildXrayJsonArray([xrayEp], { routingPreset: 'ru-split', ownPresetRules: [{ match: ['geoip:ru'], action: 'direct', note: '' }], presetGeoInline: RU }),
+    ).toBe(buildXrayJsonArray([xrayEp], { routingPreset: 'ru-split', ownPresetRules: [{ match: ['geoip:ru'], action: 'direct', note: '' }] }));
+  });
+
+  it('a frame with its own dns keeps it; the rules still carry the lists', () => {
+    const frame = readFrame(
+      'xray-json',
+      JSON.stringify({ iceslab: { routing: 'preset' }, dns: { servers: ['9.9.9.9'] }, outbounds: [{ tag: 'direct', protocol: 'freedom' }], routing: { rules: [] } }),
+    );
+    const cfg = parse(buildXrayJson([xrayEp], { frame, routingPreset: 'ru-split', presetGeoInline: RU }));
+    expect((cfg as unknown as { dns: unknown }).dns).toEqual({ servers: ['9.9.9.9'] });
+    expect(text(cfg.routing.rules)).toContain('domain:yandex.ru');
   });
 });

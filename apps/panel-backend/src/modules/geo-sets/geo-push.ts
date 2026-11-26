@@ -42,7 +42,7 @@ const built = new Map<string, Built | null>();
 const PARSED_KEEP = 4;
 const BUILT_KEEP = 512;
 
-async function parsedVersion(
+export async function parsedVersion(
   sha256: string,
   kind: 'geosite' | 'geoip' = 'geosite',
 ): Promise<{ buf: Uint8Array; index: GeoDatIndex }> {

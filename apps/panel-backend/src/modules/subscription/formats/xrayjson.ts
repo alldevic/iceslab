@@ -1,7 +1,8 @@
 import { transportServed, type RoutingPresetId } from '@iceslab/shared';
 import { emitsVisionFlow, isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 import { endpointTag, makeTagger } from '../endpoint-identity.js';
-import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
+import { ADS_GEOSITE, BUILTIN_PRESET_RULES, splitGeoTags, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
+import type { PresetGeoInline } from '../../geo-sets/geo-preset-inline.js';
 import { xrayDeviceRules } from '../subscription.device-rules.js';
 import { exitsHaveIpv6, xrayQueryStrategy } from '../subscription.address-family.js';
 import { asArray, asObject, defaultFrame, insertAfter, openFrame, type Frame } from '../subscription.frames.js';
@@ -76,6 +77,16 @@ export interface XrayJsonBuildOpts {
    * preset's, and no split DNS is written (see splitDnsFor).
    */
   ownPresetRules?: readonly DeviceRouteRule[];
+  /**
+   * Milestone 12.5: the region's matchers of a built-in split preset, written
+   * into the rules and into the regional DNS server's `domains` instead of
+   * geosite:/geoip: names, with the ad rule left out (see inlineSplitRules).
+   * Only for the built-in split presets of the single and array documents: an
+   * own preset, `proxy-all` and the router form (`forRouter`) ignore it, and so
+   * does a document the data does not cover. Absent = name the categories =
+   * byte-identical output.
+   */
+  presetGeoInline?: PresetGeoInline;
   /** A-236: the operator template to fill (an xray-json frame for the single
    *  config, an xray-json-array one for the array); absent = the Default. */
   frame?: Frame;
@@ -189,7 +200,73 @@ const CN_SPLIT_DNS: Record<string, unknown> = {
 // whose domains go direct, and an own preset says nothing about a country, so
 // it gets none (the client's resolver, as under proxy-all).
 function presetRules(opts: XrayJsonBuildOpts): readonly DeviceRouteRule[] {
+  const inline = inlineFor(opts);
+  if (inline) return inlineSplitRules(BUILTIN_PRESET_RULES[opts.routingPreset!], inline);
   return opts.ownPresetRules ?? BUILTIN_PRESET_RULES[opts.routingPreset ?? 'proxy-all'];
+}
+
+/**
+ * `geoip:private` written out: xray reads it from geoip.dat like any category,
+ * and a client whose file lacks it fails the document (`code not found in
+ * geoip.dat: PRIVATE`), which is the trimming the inlining is for. IPv4 only,
+ * as the lists are.
+ */
+const PRIVATE_CIDRS: readonly string[] = [
+  '0.0.0.0/8',
+  '10.0.0.0/8',
+  '100.64.0.0/10',
+  '127.0.0.0/8',
+  '169.254.0.0/16',
+  '172.16.0.0/12',
+  '192.0.0.0/24',
+  '192.0.2.0/24',
+  '192.168.0.0/16',
+  '198.18.0.0/15',
+  '198.51.100.0/24',
+  '203.0.113.0/24',
+  '224.0.0.0/4',
+  '240.0.0.0/4',
+  '255.255.255.255/32',
+];
+
+/** The embedded data when this document is to carry it: a built-in split preset, not the router form, every category of the preset covered. */
+function inlineFor(opts: XrayJsonBuildOpts): PresetGeoInline | null {
+  const inline = opts.presetGeoInline;
+  if (!inline || opts.ownPresetRules || opts.forRouter) return null;
+  const preset = opts.routingPreset ?? 'proxy-all';
+  if (preset === 'proxy-all') return null;
+  const want = splitGeoTags(preset);
+  if (want.geosite.length === 0) return null;
+  if (!want.geosite.every((t) => inline.domains[t]?.length) || !want.geoip.every((t) => inline.cidrs[t]?.length)) return null;
+  return inline;
+}
+
+/**
+ * The preset's rules with the geo names replaced by what they hold. The ad rule
+ * goes: 148 872 entries are 4.2 MB a document, and a blocked request has no
+ * source address to protect; with the matchers embedded ads are not blocked in
+ * the document until the operator sets a node policy. The regional IP rule
+ * stays, because the source address is what it protects (banks and state
+ * services must see the buyer's own address).
+ */
+function inlineSplitRules(rules: readonly DeviceRouteRule[], inline: PresetGeoInline): DeviceRouteRule[] {
+  const out: DeviceRouteRule[] = [];
+  for (const r of rules) {
+    const match = new Set<string>();
+    for (const m of r.match) {
+      if (m === ADS_GEOSITE) continue;
+      const list = m === 'geoip:private'
+        ? PRIVATE_CIDRS
+        : m.startsWith('geosite:')
+          ? inline.domains[m.slice(8)]
+          : m.startsWith('geoip:')
+            ? inline.cidrs[m.slice(6)]
+            : [m];
+      for (const x of list ?? []) match.add(x);
+    }
+    if (match.size > 0) out.push({ ...r, match: [...match] });
+  }
+  return out;
 }
 function splitDnsFor(
   opts: XrayJsonBuildOpts,
@@ -198,7 +275,15 @@ function splitDnsFor(
   if (opts.ownPresetRules) return null;
   const preset = opts.routingPreset ?? 'proxy-all';
   const dns = preset === 'ru-split' ? RU_SPLIT_DNS : preset === 'cn-split' ? CN_SPLIT_DNS : null;
-  return dns ? { queryStrategy: xrayQueryStrategy(exitsHaveIpv6(endpoints)), ...dns } : null;
+  if (!dns) return null;
+  const inline = inlineFor(opts);
+  // The regional resolver is scoped by the same categories and fails on a
+  // missing one the same way, so it gets the same lists.
+  const domains = inline ? [...new Set(splitGeoTags(preset).geosite.flatMap((t) => inline.domains[t]!))] : null;
+  const servers = domains
+    ? (dns.servers as unknown[]).map((srv) => (srv && typeof srv === 'object' && 'domains' in srv ? { ...srv, domains } : srv))
+    : dns.servers;
+  return { queryStrategy: xrayQueryStrategy(exitsHaveIpv6(endpoints)), ...dns, servers };
 }
 
 /**

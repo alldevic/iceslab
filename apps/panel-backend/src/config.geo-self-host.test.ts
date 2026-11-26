@@ -61,3 +61,14 @@ describe('SINGBOX_BIN', () => {
     expect(r.success && r.data.SINGBOX_BIN).toBe('/usr/local/bin/sing-box');
   });
 });
+
+describe('SUBSCRIPTION_XRAY_GEO_INLINE (milestone 12.5)', () => {
+  it('off by default, on for true and 1, nothing else', () => {
+    const r = parse();
+    expect(r.success && r.data.SUBSCRIPTION_XRAY_GEO_INLINE).toBe(false);
+    for (const [v, want] of [['true', true], ['TRUE', true], ['1', true], ['false', false], ['yes', false], ['', false]] as const) {
+      const p = parse({ SUBSCRIPTION_XRAY_GEO_INLINE: v });
+      expect(p.success && p.data.SUBSCRIPTION_XRAY_GEO_INLINE, v).toBe(want);
+    }
+  });
+});

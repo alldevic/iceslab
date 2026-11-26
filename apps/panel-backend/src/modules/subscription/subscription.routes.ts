@@ -16,6 +16,7 @@ import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson } from './formats/singbox.js';
 import { selfHostedGeo } from '../geo-sets/geo-self-host.js';
 import { expandExtLists, hasExtEntries, singboxExtRefs, type SingboxExtRef } from '../geo-sets/geo-ext-lists.js';
+import { presetGeoInline } from '../geo-sets/geo-preset-inline.js';
 import { buildWgQuickConf, wgconfTunnelName } from './formats/wgconf.js';
 import { buildAwgVpnLink } from './formats/amneziavpn.js';
 import { wantsTunnelPreselect, withConfigUrls } from './subscription.tunnel-links.js';
@@ -1033,6 +1034,11 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         }
       }
 
+      // Milestone 12.5: the region's lists for the xray-json documents (single and
+      // array, not the router's); undefined = switch off, own preset, or the sets
+      // cannot supply every category, and the builders then name the categories.
+      const inlineGeo = async () => (ownPresetRules ? undefined : ((await presetGeoInline(routingPreset)) ?? undefined));
+
       switch (format) {
         case 'json':
           return reply
@@ -1112,7 +1118,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               : undefined;
           return reply
             .type('application/json')
-            .send(buildXrayJson(served, { bundle: xjBundle, routingPreset, ownPresetRules, customRules: customRoutingRules, customDomainLists, tlsFragment, frame, remarks: docRemarks }));
+            .send(buildXrayJson(served, { bundle: xjBundle, routingPreset, ownPresetRules, customRules: customRoutingRules, customDomainLists, tlsFragment, frame, remarks: docRemarks, presetGeoInline: await inlineGeo() }));
         }
         case 'xrayjson-array': {
           // A1: top-level JSON array of standalone xray configs (one per
@@ -1121,7 +1127,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // `bundle` (no balancer: the client picks a server, not an outbound).
           return reply
             .type('application/json')
-            .send(buildXrayJsonArray(served, { routingPreset, ownPresetRules, customRules: customRoutingRules, customDomainLists, tlsFragment, frame }));
+            .send(buildXrayJsonArray(served, { routingPreset, ownPresetRules, customRules: customRoutingRules, customDomainLists, tlsFragment, frame, presetGeoInline: await inlineGeo() }));
         }
         case 'xkeen': {
           // XKeen (xray-core on Keenetic routers): outbounds + routing +

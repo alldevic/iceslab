@@ -38,3 +38,24 @@ export const BUILTIN_PRESET_RULES: Record<RoutingPresetId, readonly DeviceRouteR
     { match: ['geoip:private', 'geoip:cn'], action: 'direct', note: '' },
   ],
 };
+
+/** The geosite tag of the ad rule: the one category an embedded split preset drops (milestone 12.5). */
+export const ADS_GEOSITE = 'geosite:category-ads-all';
+
+/**
+ * The geo categories a built-in split preset names, ads left out: what a
+ * document would have to carry itself to name none (milestone 12.5). `private`
+ * is not one: it is written as literals. Empty for proxy-all.
+ */
+export function splitGeoTags(preset: RoutingPresetId): { geosite: string[]; geoip: string[] } {
+  const geosite: string[] = [];
+  const geoip: string[] = [];
+  for (const r of BUILTIN_PRESET_RULES[preset]) {
+    for (const m of r.match) {
+      if (m === ADS_GEOSITE) continue;
+      if (m.startsWith('geosite:')) geosite.push(m.slice(8));
+      else if (m.startsWith('geoip:') && m !== 'geoip:private') geoip.push(m.slice(6));
+    }
+  }
+  return { geosite, geoip };
+}

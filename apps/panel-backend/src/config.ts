@@ -126,6 +126,18 @@ export const ConfigSchema = z.object({
     .string()
     .default('false')
     .transform((s) => s.toLowerCase() === 'true' || s === '1'),
+  // The split presets of the xray-json documents carry the region's domain and
+  // IPv4 lists themselves instead of naming geosite:/geoip: categories
+  // (milestone 12.5): Happ and INCY on mobile trim their geo files to the tags
+  // their routing profile names, and a named category is then missing. The lists
+  // come from the panel's verified built-in sets and cost about 300 KB a
+  // document; with a set unverified or a category missing the document names the
+  // categories as before. Off by default: the document is the base's, byte for
+  // byte. Independent of GEO_SELF_HOST.
+  SUBSCRIPTION_XRAY_GEO_INLINE: z
+    .string()
+    .default('false')
+    .transform((s) => s.toLowerCase() === 'true' || s === '1'),
   // The token in that path. One for the whole panel, and every subscriber's
   // client learns it, so it is a capability against scanners and not a secret:
   // the files it opens are not secret either. Unset (blank counts as unset,

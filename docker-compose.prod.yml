@@ -180,6 +180,8 @@ services:
       GEO_SELF_HOST: ${GEO_SELF_HOST:-false}
       GEO_ARTIFACT_TOKEN: ${GEO_ARTIFACT_TOKEN:-}
       RATE_LIMIT_GEO_PER_MIN: ${RATE_LIMIT_GEO_PER_MIN:-60}
+      # Region lists written into xray-json split presets; see .env.production.example.
+      SUBSCRIPTION_XRAY_GEO_INLINE: ${SUBSCRIPTION_XRAY_GEO_INLINE:-false}
       # Keyed/rotating entry ordering. Off: entry order is unchanged. Only
       # meaningful with the entry-pool cap on; see .env.production.example.
       EXT_DIVERSITY_ENABLED: ${EXT_DIVERSITY_ENABLED:-false}
