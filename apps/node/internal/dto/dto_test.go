@@ -1,6 +1,9 @@
 package dto
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 // NativeEngine answers "which core renders this protocol" for every inbound the
 // panel pushes without pinning one, which is most of them: the field was added
@@ -57,5 +60,35 @@ func TestResolvedEnginePrefersThePinOverTheDefault(t *testing.T) {
 	pinned := InboundDto{Protocol: ProtocolShadowsocks, Engine: EngineSingbox}
 	if got := pinned.ResolvedEngine(); got != EngineSingbox {
 		t.Errorf("an inbound pinned to %q resolved to %q: the operator's choice was ignored", EngineSingbox, got)
+	}
+}
+
+func TestSingboxUserCorePayload(t *testing.T) {
+	socks := &ChainUserCoreSocks{Port: 26000, Username: "u", Password: "p"}
+	frag := json.RawMessage(`{"outbounds":[]}`)
+	tp := &ChainUserCoreTProxy{Port: 1, Mark: 2}
+	for _, tc := range []struct {
+		name string
+		core ChainUserCore
+		ok   bool
+	}{
+		{"tuic", ChainUserCore{Engine: EngineSingbox, Protocol: ProtocolTuic, Socks: socks}, true},
+		{"anytls", ChainUserCore{Engine: EngineSingbox, Protocol: ProtocolAnytls, Socks: socks}, true},
+		{"shadowtls", ChainUserCore{Engine: EngineSingbox, Protocol: ProtocolShadowtls, Socks: socks}, true},
+		{"shadowsocks", ChainUserCore{Engine: EngineSingbox, Protocol: ProtocolShadowsocks, Socks: socks}, true},
+		{"no socks", ChainUserCore{Engine: EngineSingbox, Protocol: ProtocolTuic}, false},
+		{"no protocol", ChainUserCore{Engine: EngineSingbox, Socks: socks}, false},
+		{"protocol that is no entry", ChainUserCore{Engine: EngineSingbox, Protocol: ProtocolXray, Socks: socks}, false},
+		{"fragments", ChainUserCore{Engine: EngineSingbox, Protocol: ProtocolTuic, Socks: socks, Fragments: frag}, false},
+		{"tproxy", ChainUserCore{Engine: EngineSingbox, Protocol: ProtocolTuic, Socks: socks, TProxy: tp}, false},
+		{"tproxy3", ChainUserCore{Engine: EngineSingbox, Protocol: ProtocolTuic, Socks: socks, TProxy3: tp}, false},
+	} {
+		got, err := tc.core.Payload()
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: err=%v, want ok=%v", tc.name, err, tc.ok)
+		}
+		if tc.ok && string(got) != `{"port":26000,"username":"u","password":"p"}` {
+			t.Errorf("%s: payload %s", tc.name, got)
+		}
 	}
 }

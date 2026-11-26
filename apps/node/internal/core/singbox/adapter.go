@@ -93,6 +93,10 @@ type Adapter struct {
 	// cert: the certificate file as TLSFact last read it (tls.go), under mu.
 	cert *certCache
 
+	// chain: the hand-off to the chain process (chain.go), nil when this
+	// instance is not a cascade entry. Under mu.
+	chain *ChainHandoff
+
 	// restartMu serializes regenerateAndRestart so concurrent user/inbound
 	// changes can't race the subprocess swap. Never held together with mu
 	// across IO.
@@ -756,6 +760,7 @@ func (a *Adapter) regenerateAndRestart() error {
 	statsListen := a.cfg.StatsListen
 	ctx := a.ctx
 	oldProc := a.proc
+	handoff := a.chain
 	users := make(map[string]userEntry, len(a.users))
 	for k, v := range a.users {
 		users[k] = v
@@ -769,7 +774,7 @@ func (a *Adapter) regenerateAndRestart() error {
 		ctx = context.Background()
 	}
 
-	blob, err := a.renderAll(certPath, keyPath, statsListen, held, users)
+	blob, err := a.renderAllWith(certPath, keyPath, statsListen, held, users, handoff)
 	if err != nil {
 		return &refusedError{fmt.Errorf("singbox: render config: %w", err)}
 	}

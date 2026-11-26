@@ -28,6 +28,7 @@ import {
 import { hostFromAddress } from '../subscription/subscription.formats.js';
 import { resolvePolicyForNode } from '../node-policies/node-policies.service.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
+import { effectiveEngineOf } from '../nodes/node-engines.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
 import {
@@ -517,6 +518,29 @@ export class CascadeEntryNodesDroppedError extends Error {
 }
 
 /**
+ * A sing-box entry whose protocol the entry node serves on ANOTHER core
+ * (shadowsocks on xray: its native core). The block goes to the sing-box
+ * instance of that protocol, there is none, and the users of that profile
+ * would leave from the entry country while the subscription names the line a
+ * cascade. 11.5.
+ */
+export class CascadeEntryProtocolNotOnSingboxError extends Error {
+  readonly code = 'ENTRY_PROTOCOL_NOT_ON_SINGBOX';
+  constructor(
+    public protocol: string,
+    public conflicts: { nodeName: string; profileName: string; engine: string }[],
+  ) {
+    super(
+      `A ${protocol} entry hands users to the chain through sing-box, and these profiles are served ` +
+        `by another core: ` +
+        conflicts.map((c) => `"${c.profileName}" on node "${c.nodeName}" (${c.engine})`).join('; ') +
+        `. Pin the profile to the sing-box engine, or choose another entry protocol.`,
+    );
+    this.name = 'CascadeEntryProtocolNotOnSingboxError';
+  }
+}
+
+/**
  * The entry nodes this save removes, and who is on them.
  *
  * Only profiles served with the entry protocol are named: those are the users
@@ -588,6 +612,32 @@ async function assertEntryCanChain(
     .filter((x) => !x.verdict.ok)
     .map((x) => ({ nodeName: x.node.name, engines: x.verdict.engines }));
   if (conflicts.length > 0) throw new CascadeEntryCannotChainError(conflicts, entry.entryProtocol!);
+}
+
+/**
+ * A sing-box entry must be served by sing-box on its nodes: an enabled profile
+ * of the entry protocol on another core would be handed nothing, and its users
+ * would leave directly. Only profiles that exist now: a binding made after the
+ * save is not asked about here.
+ */
+async function assertSingboxEntryProtocolOnSingbox(
+  positions?: { position: number; nodeIds: string[]; entryProtocol?: string }[],
+): Promise<void> {
+  const entry = positions?.find((p) => p.position === 0);
+  if (!entry || entry.nodeIds.length === 0 || !isSingboxEntry(entry.entryProtocol)) return;
+  const bindings = await prisma.profileNodeBinding.findMany({
+    where: { nodeId: { in: entry.nodeIds }, enabled: true, profile: { protocol: entry.entryProtocol } },
+    select: {
+      node: { select: { name: true } },
+      profile: { select: { name: true, protocol: true, engine: true } },
+    },
+    orderBy: [{ node: { name: 'asc' } }, { profile: { name: 'asc' } }],
+  });
+  const conflicts = bindings
+    .map((b) => ({ b, engine: effectiveEngineOf(b.profile) }))
+    .filter((x) => x.engine !== 'singbox')
+    .map((x) => ({ nodeName: x.b.node.name, profileName: x.b.profile.name, engine: x.engine as string }));
+  if (conflicts.length > 0) throw new CascadeEntryProtocolNotOnSingboxError(entry.entryProtocol, conflicts);
 }
 
 /** A direction names an outbound the panel does not have (deleted since the
@@ -2252,6 +2302,7 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
   // Phase 6: a hysteria entry reaches the cascade only through the chain
   // process, so its nodes must be able to run one.
   await assertEntryCanChain(positions);
+  await assertSingboxEntryProtocolOnSingbox(positions);
   await assertEntryPolicyExists(input.entryPolicyId);
   // A-101: one enabled cascade per node. A switched-off one is not drawn and
   // takes no node.
@@ -2481,6 +2532,7 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
   // a refusal no confirmation lifts; asking the operator to confirm a switch
   // that is then refused anyway would be a question with no useful answer.
   await assertEntryCanChain(gatePositions);
+  await assertSingboxEntryProtocolOnSingbox(gatePositions);
   await assertEntryChangeConfirmed(id, positions, input.confirmEntryChange === true);
   await assertEntryNodesDropConfirmed(id, positions, input.confirmEntryChange === true);
   await assertEntryPolicyExists(input.entryPolicyId);

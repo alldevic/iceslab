@@ -1449,6 +1449,9 @@ func (s *Server) applyPushKept(
 
 	var cascadeFragments json.RawMessage
 	router := ""
+	// For engine singbox, the instance that takes the hand-off: every sing-box
+	// instance answers to the engine, and only the protocol tells them apart.
+	routerProtocol := ""
 	// Set when the userCore block is malformed. Then NO adapter is told about a
 	// cascade in this push, not even "nil": nil means "you are no longer an
 	// entry", and a hysteria entry told that renders with no outbounds, which
@@ -1480,6 +1483,7 @@ func (s *Server) applyPushKept(
 			} else {
 				cascadeFragments = payload
 				router = string(handoffBlock.UserCore.Engine)
+				routerProtocol = string(handoffBlock.UserCore.Protocol)
 			}
 		}
 	} else if req.Cascade != nil {
@@ -1506,7 +1510,11 @@ func (s *Server) applyPushKept(
 			ca.SetChainHolds(chainInForce)
 		}
 		var mine json.RawMessage
-		if router != "" && adapter.Engine() == router {
+		// A sing-box hand-off goes to the instance of its protocol and to no other
+		// one: the rest are other profiles of the node and keep leaving the way
+		// they did. Told "nothing" like every non-addressee below.
+		if router != "" && adapter.Engine() == router &&
+			(router != string(dto.EngineSingbox) || adapter.Name() == routerProtocol) {
 			mine = cascadeFragments
 			deliveredCascade = true
 			if len(mine) > 0 && string(mine) != "null" {
@@ -1526,7 +1534,7 @@ func (s *Server) applyPushKept(
 	// about it would teach an operator to ignore the one line that matters.
 	if router != "" && !deliveredCascade {
 		s.logger.Error("applyInbounds: no core on this node draws the cascade, the chain is NOT applied",
-			"engine", router)
+			"engine", router, "protocol", routerProtocol)
 	}
 
 	// Which core each inbound goes to, settled before any of them is applied,

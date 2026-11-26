@@ -1,0 +1,129 @@
+package singbox
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
+)
+
+/*
+The hand-off to the chain process (11.5, the sing-box half of 11.4's contract).
+
+A sing-box instance that is the entry of a cascade sends EVERY connection of its
+inbounds into the chain's loopback socks listener, and has no other way out:
+the config then holds that one socks outbound and route.final names it. No
+"direct" outbound is drawn at all, so with the chain process down or every exit
+dead the connection is refused, never made from this node (the leak this whole
+phase exists to prevent).
+
+Without a hand-off nothing here is drawn and the config is byte for byte what
+it always was.
+
+For shadowtls the inbound detours into an inner shadowsocks inbound on loopback;
+the decrypted traffic is routed from THAT inbound, and route.final covers it.
+*/
+
+// ChainHandoff is where this instance's users go: the chain's socks listener on
+// this machine. A PORT and not an address, so a push cannot point the core
+// anywhere but another port on 127.0.0.1.
+type ChainHandoff struct {
+	Port     int
+	Username string
+	Password string
+}
+
+// chainHandoffWire mirrors NodeChain.userCore.socks in shared/transport.ts.
+type chainHandoffWire struct {
+	Port     int    `json:"port"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+const chainOutboundTag = "chain"
+
+var _ core.CascadeReceiver = (*Adapter)(nil)
+
+// ApplyCascade implements core.CascadeReceiver: the node-level hand-off to the
+// chain. The server calls it on EVERY push and only on the instance whose
+// protocol the block names; every other instance gets nil.
+//
+// nil takes the hand-off away and brings back the "direct" outbound. A hand-off
+// that repeats is a no-op: re-rendering would restart the core and drop every
+// live connection of the node on each push. A hand-off the renderer refuses is
+// not stored, so the next render does not run against it.
+func (a *Adapter) ApplyCascade(raw json.RawMessage) error {
+	var handoff *ChainHandoff
+	if len(raw) > 0 && string(raw) != "null" {
+		var wire chainHandoffWire
+		if err := json.Unmarshal(raw, &wire); err != nil {
+			return fmt.Errorf("singbox ApplyCascade: %w", err)
+		}
+		handoff = &ChainHandoff{Port: wire.Port, Username: wire.Username, Password: wire.Password}
+		if err := handoff.validate(); err != nil {
+			return err
+		}
+	}
+
+	a.mu.Lock()
+	if handoffEqual(a.chain, handoff) && !a.lastStartFailed {
+		a.mu.Unlock()
+		return nil
+	}
+	prev := a.chain
+	a.chain = handoff
+	nothingRuns := len(a.inbounds) == 0
+	a.mu.Unlock()
+	// No inbound yet: remembered for the render that comes (the inbounds of
+	// this same push are applied after this call).
+	if nothingRuns {
+		return nil
+	}
+	err := a.regenerateAndRestart()
+	var refused *refusedError
+	if errors.As(err, &refused) {
+		a.mu.Lock()
+		if handoffEqual(a.chain, handoff) {
+			a.chain = prev
+		}
+		a.mu.Unlock()
+	}
+	if err == nil {
+		a.logger.Info("singbox ApplyCascade: hand-off to the chain changed",
+			"protocol", a.protocol, "chain", handoff != nil)
+	}
+	return err
+}
+
+func (h *ChainHandoff) validate() error {
+	if h.Port < 1 || h.Port > 65535 {
+		return fmt.Errorf("singbox chain hand-off: port %d is not a port", h.Port)
+	}
+	// The chain's socks listeners are authenticated even on loopback: a VPS has
+	// other users.
+	if h.Username == "" || h.Password == "" {
+		return fmt.Errorf("singbox chain hand-off: username and password are required")
+	}
+	return nil
+}
+
+func handoffEqual(a, b *ChainHandoff) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// outbound is the one way out of an entry: socks5 to the chain's listener.
+func (h *ChainHandoff) outbound() map[string]any {
+	return map[string]any{
+		"type":        "socks",
+		"tag":         chainOutboundTag,
+		"server":      "127.0.0.1",
+		"server_port": h.Port,
+		"version":     "5",
+		"username":    h.Username,
+		"password":    h.Password,
+	}
+}

@@ -124,6 +124,10 @@ function handleError(err: unknown, reply: FastifyReply): FastifyReply {
     // 409: well-formed, and in conflict with what those nodes have installed.
     return reply.code(409).send({ error: err.code, message: err.message, conflicts: err.conflicts });
   }
+  if (err instanceof svc.CascadeEntryProtocolNotOnSingboxError) {
+    // 409 like ENTRY_CANNOT_CHAIN: the profiles are named, none is guessed.
+    return reply.code(409).send({ error: err.code, message: err.message, conflicts: err.conflicts });
+  }
   if (err instanceof svc.CascadeEntryChangeDropsUsersError) {
     // 409 and not 400: the request is valid and becomes acceptable with one
     // more field. The screen matches the code, shows who leaves, and repeats

@@ -55,6 +55,12 @@ func tagSuffix(id string) string {
 
 // renderAll draws every held inbound into one config.
 func (a *Adapter) renderAll(certPath, keyPath, statsListen string, held []heldInbound, users map[string]userEntry) ([]byte, error) {
+	return a.renderAllWith(certPath, keyPath, statsListen, held, users, nil)
+}
+
+// renderAllWith is renderAll for an instance that may be a cascade entry: with
+// a hand-off the config's only way out is the chain's socks listener.
+func (a *Adapter) renderAllWith(certPath, keyPath, statsListen string, held []heldInbound, users map[string]userEntry, handoff *ChainHandoff) ([]byte, error) {
 	var base map[string]any
 	var inbounds []any
 	statsUsers := map[string]bool{}
@@ -117,6 +123,11 @@ func (a *Adapter) renderAll(certPath, keyPath, statsListen string, held []heldIn
 		return nil, fmt.Errorf("no inbound to render")
 	}
 	base["inbounds"] = inbounds
+	if handoff != nil {
+		// The only outbound, and the route's end: see chain.go.
+		base["outbounds"] = []any{handoff.outbound()}
+		base["route"] = map[string]any{"final": chainOutboundTag}
+	}
 	if exp, ok := base["experimental"].(map[string]any); ok {
 		if v2, ok := exp["v2ray_api"].(map[string]any); ok {
 			if st, ok := v2["stats"].(map[string]any); ok {

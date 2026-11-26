@@ -440,7 +440,8 @@ type ChainTunnel struct {
 
 // ChainUserCore mirrors NodeChain.userCore in shared/transport.ts, which is a
 // union by engine: xray carries Fragments, hysteria carries Socks (phase 6),
-// amneziawg carries TProxy (phase 7).
+// amneziawg carries TProxy (phase 7), singbox carries Socks and the Protocol
+// of the instance that takes it (11.5).
 //
 // Go has no sum types, so the union is optional halves here and the rule is
 // enforced by Payload: the half that belongs to the named engine must be there,
@@ -455,8 +456,7 @@ type ChainUserCore struct {
 	TProxy3 *ChainUserCoreTProxy `json:"tproxy3,omitempty"`
 	// Protocol names the sing-box instance that takes the hand-off (engine
 	// "singbox"): every instance answers to that engine, and only the protocol
-	// tells them apart. Carried by the panel since 11.4; the agent starts
-	// reading it in 11.5, until then Payload refuses the engine.
+	// tells them apart. Carried by the panel since 11.4, read here since 11.5.
 	Protocol ProtocolName `json:"protocol,omitempty"`
 }
 
@@ -486,6 +486,16 @@ type ChainUserCoreSocks struct {
 	Port     int    `json:"port"`
 	Username string `json:"username"`
 	Password string `json:"password"`
+}
+
+// IsSingboxEntryProtocol: the protocols a sing-box instance can be a cascade
+// entry for. Mirrors SINGBOX_ENTRY_PROTOCOLS in shared/transport.ts.
+func IsSingboxEntryProtocol(p ProtocolName) bool {
+	switch p {
+	case ProtocolTuic, ProtocolAnytls, ProtocolShadowtls, ProtocolShadowsocks:
+		return true
+	}
+	return false
 }
 
 // Payload is what the adapter of the named engine receives, or an error for a
@@ -538,6 +548,24 @@ func (u *ChainUserCore) Payload() (json.RawMessage, error) {
 			h.Port, h.Mark = u.TProxy.Port, u.TProxy.Mark
 		}
 		return json.Marshal(h)
+	case EngineSingbox:
+		// The hysteria shape plus an addressee: every sing-box instance on the
+		// node answers to this engine, so a block that names no protocol (or
+		// one that is not an entry) would be handed to all of them or to none,
+		// and an entry told "nothing" leaves directly.
+		if u.Socks == nil {
+			return nil, fmt.Errorf("chain userCore: engine singbox carries no socks hand-off")
+		}
+		if !IsSingboxEntryProtocol(u.Protocol) {
+			return nil, fmt.Errorf("chain userCore: engine singbox names protocol %q, which is not a sing-box cascade entry", u.Protocol)
+		}
+		if hasFragments {
+			return nil, fmt.Errorf("chain userCore: engine singbox carries xray fragments")
+		}
+		if u.TProxy != nil || u.TProxy3 != nil {
+			return nil, fmt.Errorf("chain userCore: engine singbox carries a tproxy hand-off")
+		}
+		return json.Marshal(u.Socks)
 	default:
 		return nil, fmt.Errorf("chain userCore: engine %q draws no user core", u.Engine)
 	}
