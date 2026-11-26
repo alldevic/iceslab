@@ -129,6 +129,8 @@ EOF
 PORT_RANGE_FILE=/etc/hysteria/port-range
 HYHOP_BIN=/usr/local/bin/iceslab-hyhop
 HYHOP_UNIT=/etc/systemd/system/iceslab-hyhop.service
+# ⚠ The agent reports the range it finds redirected to this port
+# (hopguard.ListenPort); the two change as a pair.
 LISTEN_PORT=443
 
 port_range() {

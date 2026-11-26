@@ -83,6 +83,7 @@ func wirePairs() []wirePair {
 		{"ChainStatus", ChainStatusDto{}},
 		{"HealthcheckResponse", HealthcheckResponse{}},
 		{"NodePolicyDrawn", PolicyDrawn{}},
+		{"PortHopping", PortHopDto{}},
 		// Written inline on the property in TypeScript, never named.
 		{"NodePolicyDrawn.notDrawn", PolicyNotDrawn{}},
 		{"RotateCertRequest", RotateCertRequest{}},

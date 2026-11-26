@@ -54,6 +54,10 @@ function newBindingRefusal(err: unknown): { status: number; body: Record<string,
     };
   }
   // An xray-family profile on sing-box with a field sing-box cannot serve.
+  // A hysteria profile hopping over ports the node does not redirect.
+  if (err instanceof svc.PortHoppingOutsideNodeRangeError) {
+    return { status: 400, body: { error: err.code, message: err.message, nodeName: err.nodeName } };
+  }
   if (err instanceof svc.ProfileEngineNotForTransportError) {
     return { status: 400, body: { error: err.code, message: err.message, path: err.path } };
   }

@@ -50,7 +50,7 @@ type Config struct {
 	// brute-force passwords by hitting it directly. We generate a random
 	// 32-hex-char suffix at New() (e.g. "/auth/9f3a…") and embed the same
 	// path in hysteria-server's auth.http.url; probes of the canonical
-	// "/auth" return 404. Empty → "/auth" (tests / backwards-compat only).
+	// "/auth" return 404. Empty is not allowed: renderConfig refuses it, New() always fills it.
 	AuthCallbackPath string
 
 	// BinaryPath to the `hysteria` executable. If empty, the adapter runs in

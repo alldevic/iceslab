@@ -165,6 +165,9 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
       if (core) return reply.code(core.status).send(core.body);
       // The field sing-box cannot serve on an xray-family profile, with its
       // path, as the create path's schema issue carries it.
+      if (err instanceof svc.PortHoppingOutsideNodeRangeError) {
+        return reply.code(400).send({ error: err.code, message: err.message, nodeName: err.nodeName });
+      }
       if (err instanceof svc.ProfileEngineNotForTransportError) {
         return reply.code(400).send({ error: err.code, message: err.message, path: err.path });
       }
@@ -257,6 +260,9 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
       // AWG_PROTOCOL_MISMATCH.
       const core = coreGateReply(err);
       if (core) return reply.code(core.status).send(core.body);
+      if (err instanceof svc.PortHoppingOutsideNodeRangeError) {
+        return reply.code(400).send({ error: err.code, message: err.message, nodeName: err.nodeName });
+      }
       if (err instanceof svc.ProfileEngineNotForTransportError) {
         return reply.code(400).send({ error: err.code, message: err.message, path: err.path });
       }
@@ -325,6 +331,9 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
         return reply
           .code(409)
           .send({ error: err.code, message: err.message, conflicts: err.conflicts });
+      }
+      if (err instanceof svc.PortHoppingOutsideNodeRangeError) {
+        return reply.code(400).send({ error: err.code, message: err.message, nodeName: err.nodeName });
       }
       if (err instanceof svc.ProfileEngineNotForTransportError) {
         return reply.code(400).send({ error: err.code, message: err.message, path: err.path });

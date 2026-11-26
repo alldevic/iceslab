@@ -2,6 +2,7 @@ import {
   XRAY_TRANSPORT_SUBPROTOCOLS,
   clientSecurityLayer,
   transportServed,
+  type NodeCores,
   type RoutingPresetId,
 } from '@iceslab/shared';
 import {
@@ -279,6 +280,30 @@ export function collapseToOneLinePerNode(
     if (byProtocol < 0 || (byProtocol === 0 && e.port < current.port)) best.set(key, e);
   }
   return order.map((k) => best.get(k)!);
+}
+
+/**
+ * The port-hopping range a CLIENT may be told about: the profile's, but only
+ * when the node reported redirecting a range that covers all of it.
+ *
+ * The setting is the operator's; the promise is the client's. A client rotates
+ * its destination port across the range, the ports the node does not redirect
+ * reach nothing, and neither side logs it: the channel just stops working.
+ * assertPortHoppingFitsNode refuses a range that contradicts a reported one at
+ * save time; what it cannot judge is a node that reported nothing (an agent
+ * older than the field, a table it could not read), or one that reported
+ * "no redirect" ({0, 0}), or a range changed after the save. Unverified means
+ * unpromised: those get one port, which works. A partly covered range is no
+ * better than none (some connections land, some do not).
+ */
+export function servedPortHopping(
+  want: { start?: number | null; end?: number | null },
+  reported: NodeCores['portHopping'] | null,
+): { start?: number; end?: number } {
+  const { start, end } = want;
+  if (typeof start !== 'number' || typeof end !== 'number') return {};
+  if (!reported || reported.start <= 0) return {};
+  return start >= reported.start && end <= reported.end ? { start, end } : {};
 }
 
 /**
@@ -700,6 +725,9 @@ export async function generateSubscription(
                   // E30a: the self-signed pair native hysteria serves on a node
                   // addressed by IP; its certificate is what clients pin.
                   hysteriaTls: true,
+                  // The port-hopping range the node reported (NodeCores): what
+                  // servedPortHopping holds the profile's range against.
+                  cores: true,
                   // t07-6c: the node's 3.1 geometry, which a 3.1 key carries.
                   awg3Geometry: true,
                   createdAt: true,
@@ -1060,6 +1088,11 @@ export async function generateSubscription(
       const tlsPin = hysteriaPinFor(ib.engine, b.node.address, b.node.hysteriaTls);
       // A-154: the client's claim is the profile's bandwidth turned over, or none.
       const claim = clientBandwidthClaim(hyCfg);
+      // Port hopping only where the node confirmed it (servedPortHopping).
+      const hop = servedPortHopping(
+        { start: hyCfg?.portHoppingStart, end: hyCfg?.portHoppingEnd },
+        (b.node.cores as NodeCores | null)?.portHopping,
+      );
       endpoints.push({
         protocol: 'hysteria',
         nodeName,
@@ -1069,8 +1102,8 @@ export async function generateSubscription(
         password: user.hysteriaPassword,
         obfsPassword,
         ...claim,
-        portHoppingStart: hyCfg?.portHoppingStart,
-        portHoppingEnd: hyCfg?.portHoppingEnd,
+        portHoppingStart: hop.start,
+        portHoppingEnd: hop.end,
         ...(tlsPin ? { tlsPin } : {}),
         uri: buildHysteriaUri({
           password: user.hysteriaPassword,
@@ -1079,8 +1112,8 @@ export async function generateSubscription(
           name: nodeName,
           obfsPassword,
           ...claim,
-          portHoppingStart: hyCfg?.portHoppingStart,
-          portHoppingEnd: hyCfg?.portHoppingEnd,
+          portHoppingStart: hop.start,
+          portHoppingEnd: hop.end,
           pinSha256: tlsPin?.certSha256,
         }),
       });

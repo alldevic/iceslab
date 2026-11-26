@@ -13,6 +13,7 @@ import {
   ProfileEngineNotForTransportError,
   PortHeldByCascadeError,
   PortHeldByCoreServiceError,
+  PortHoppingOutsideNodeRangeError,
   PortInUseError,
   ProfileNotFoundError,
   updateBinding,
@@ -68,6 +69,7 @@ export {
   ProfileEngineNotForTransportError,
   PortHeldByCascadeError,
   PortHeldByCoreServiceError,
+  PortHoppingOutsideNodeRangeError,
   PortInUseError,
   ProfileNotFoundError,
 };

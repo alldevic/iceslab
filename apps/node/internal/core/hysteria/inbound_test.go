@@ -5,8 +5,12 @@ import (
 	"testing"
 )
 
+// A path the way New() makes one, without being random.
+const testAuthPath = "/auth/test-path-not-a-secret"
+
 func TestRenderConfig_MinimalValid(t *testing.T) {
 	cfg := Config{
+		AuthCallbackPath: testAuthPath,
 		Hostname:         "hy2.example.com",
 		ACMEEmail:        "admin@example.com",
 		AuthCallbackHost: "127.0.0.1",
@@ -28,7 +32,7 @@ acme:
 auth:
   type: http
   http:
-    url: http://127.0.0.1:9000/auth
+    url: http://127.0.0.1:9000/auth/test-path-not-a-secret
 
 ignoreClientBandwidth: true
 `
@@ -39,9 +43,10 @@ ignoreClientBandwidth: true
 
 func TestRenderConfig_WithObfsAndMasquerade(t *testing.T) {
 	cfg := Config{
-		Hostname:   "hy2.example.com",
-		ACMEEmail:  "a@b.io",
-		ListenPort: 8443,
+		AuthCallbackPath: testAuthPath,
+		Hostname:         "hy2.example.com",
+		ACMEEmail:        "a@b.io",
+		ListenPort:       8443,
 	}
 	inbound := InboundConfig{
 		ObfsPassword:  "salt-pw",
@@ -66,7 +71,7 @@ func TestRenderConfig_WithObfsAndMasquerade(t *testing.T) {
 }
 
 func TestRenderConfig_WithBrutalBandwidth(t *testing.T) {
-	cfg := Config{Hostname: "h", ACMEEmail: "e@x"}
+	cfg := Config{AuthCallbackPath: testAuthPath, Hostname: "h", ACMEEmail: "e@x"}
 	blob, err := renderConfig(cfg, InboundConfig{
 		BrutalUpMbps:   100,
 		BrutalDownMbps: 200,
@@ -85,7 +90,7 @@ func TestRenderConfig_WithBrutalBandwidth(t *testing.T) {
 }
 
 func TestRenderConfig_RequiresHostname(t *testing.T) {
-	_, err := renderConfig(Config{ACMEEmail: "x@y"}, InboundConfig{}, nil)
+	_, err := renderConfig(Config{AuthCallbackPath: testAuthPath, ACMEEmail: "x@y"}, InboundConfig{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "Hostname is required") {
 		t.Fatalf("expected Hostname-required error, got %v", err)
 	}
@@ -94,7 +99,7 @@ func TestRenderConfig_RequiresHostname(t *testing.T) {
 // A-276: a node with a domain and no ACME email renders, with an acme block
 // that carries no email line (hysteria 2.12.3 and certmagic take none).
 func TestRenderConfig_ACMEWithoutEmail(t *testing.T) {
-	out, err := renderConfig(Config{Hostname: "hy2.example.net"}, InboundConfig{}, nil)
+	out, err := renderConfig(Config{AuthCallbackPath: testAuthPath, Hostname: "hy2.example.net"}, InboundConfig{}, nil)
 	if err != nil {
 		t.Fatalf("a node with no ACME email refused the render: %v", err)
 	}
@@ -105,7 +110,7 @@ func TestRenderConfig_ACMEWithoutEmail(t *testing.T) {
 	if strings.Contains(s, "email") {
 		t.Fatalf("an email line with no email:\n%s", s)
 	}
-	with, err := renderConfig(Config{Hostname: "hy2.example.net", ACMEEmail: "ops@iceslab.test"}, InboundConfig{}, nil)
+	with, err := renderConfig(Config{AuthCallbackPath: testAuthPath, Hostname: "hy2.example.net", ACMEEmail: "ops@iceslab.test"}, InboundConfig{}, nil)
 	if err != nil || !strings.Contains(string(with), "  email: ops@iceslab.test\n") {
 		t.Fatalf("the email given is not rendered: %v\n%s", err, with)
 	}
@@ -116,7 +121,7 @@ func TestRenderConfig_ACMEWithoutEmail(t *testing.T) {
 // '#') because they can break out of the scalar value and inject top-level
 // YAML, e.g., disabling cert validation in acme: or swapping auth: source.
 func TestRenderConfig_RejectsInjectedObfsAndMasquerade(t *testing.T) {
-	baseCfg := Config{Hostname: "h", ACMEEmail: "a@b", ListenPort: 443}
+	baseCfg := Config{AuthCallbackPath: testAuthPath, Hostname: "h", ACMEEmail: "a@b", ListenPort: 443}
 	cases := []struct {
 		name    string
 		obfs    string
@@ -146,7 +151,7 @@ func TestRenderConfig_RejectsInjectedObfsAndMasquerade(t *testing.T) {
 
 func TestRenderConfig_DefaultPortAndAuth(t *testing.T) {
 	// ListenPort=0, AuthCallbackHost="", AuthCallbackPort=0 → defaults applied
-	cfg := Config{Hostname: "h", ACMEEmail: "e@x"}
+	cfg := Config{AuthCallbackPath: testAuthPath, Hostname: "h", ACMEEmail: "e@x"}
 	blob, err := renderConfig(cfg, InboundConfig{}, nil)
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
@@ -155,7 +160,7 @@ func TestRenderConfig_DefaultPortAndAuth(t *testing.T) {
 	if !strings.Contains(got, "listen: :443") {
 		t.Errorf("default ListenPort 443 not applied: %s", got)
 	}
-	if !strings.Contains(got, "url: http://127.0.0.1:9000/auth") {
+	if !strings.Contains(got, "url: http://127.0.0.1:9000"+testAuthPath) {
 		t.Errorf("default auth callback not applied: %s", got)
 	}
 }
@@ -194,7 +199,7 @@ func TestInboundCfgWireUnmarshal(t *testing.T) {
 // without re-onboarding it. That address is what clients dial and validate, so
 // the certificate has to be issued for it and not for the install-time name.
 func TestRenderConfig_PushedHostnameOverridesInstallTime(t *testing.T) {
-	cfg := Config{Hostname: "install.example.com", ACMEEmail: "a@b.io", ListenPort: 443}
+	cfg := Config{AuthCallbackPath: testAuthPath, Hostname: "install.example.com", ACMEEmail: "a@b.io", ListenPort: 443}
 
 	blob, err := renderConfig(cfg, InboundConfig{Hostname: "moved.example.com"}, nil)
 	if err != nil {
@@ -212,7 +217,7 @@ func TestRenderConfig_PushedHostnameOverridesInstallTime(t *testing.T) {
 func TestRenderConfig_FallsBackToInstallTimeHostname(t *testing.T) {
 	// A panel too old to send one, or a node whose address is an IP no CA will
 	// issue for. Either way the node keeps the certificate it already has.
-	cfg := Config{Hostname: "install.example.com", ACMEEmail: "a@b.io", ListenPort: 443}
+	cfg := Config{AuthCallbackPath: testAuthPath, Hostname: "install.example.com", ACMEEmail: "a@b.io", ListenPort: 443}
 
 	blob, err := renderConfig(cfg, InboundConfig{}, nil)
 	if err != nil {
@@ -226,9 +231,22 @@ func TestRenderConfig_FallsBackToInstallTimeHostname(t *testing.T) {
 func TestRenderConfig_RejectsInjectedHostname(t *testing.T) {
 	// acme.domains is a bare YAML scalar, so a newline would let a pushed value
 	// append arbitrary top-level keys to the config.
-	cfg := Config{Hostname: "hy2.example.com", ACMEEmail: "a@b.io", ListenPort: 443}
+	cfg := Config{AuthCallbackPath: testAuthPath, Hostname: "hy2.example.com", ACMEEmail: "a@b.io", ListenPort: 443}
 
 	if _, err := renderConfig(cfg, InboundConfig{Hostname: "evil.example.com\nlisten: :1"}, nil); err == nil {
 		t.Fatal("expected an error for a newline in the pushed hostname")
+	}
+}
+
+func TestRenderConfig_EmptyAuthPathIsAnError(t *testing.T) {
+	// "/auth" is the one URL the mux must answer 404 to; rendering it for an
+	// empty path would send every client's credentials there.
+	cfg := Config{Hostname: "h", ACMEEmail: "e@x"}
+	blob, err := renderConfig(cfg, InboundConfig{}, nil)
+	if err == nil {
+		t.Fatalf("an empty AuthCallbackPath rendered:\n%s", blob)
+	}
+	if !strings.Contains(err.Error(), "AuthCallbackPath") {
+		t.Errorf("error %q should name AuthCallbackPath", err)
 	}
 }

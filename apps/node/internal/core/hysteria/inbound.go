@@ -263,9 +263,15 @@ func renderConfig(adapterCfg Config, inbound InboundConfig, handoff *ChainHandof
 	if authPort == 0 {
 		authPort = 9000
 	}
+	// No fallback to "/auth", deliberately. The path is a shared secret: New()
+	// fills "/auth/<random hex>" and the mux serves exactly that, while the
+	// canonical "/auth" must 404. Rendering it here would have hysteria post
+	// every client's credentials to a path the mux does not serve: every
+	// connection refused with the callback up and the node reporting healthy.
+	// An empty path means the config never went through New().
 	authPath := adapterCfg.AuthCallbackPath
 	if authPath == "" {
-		authPath = "/auth"
+		return nil, fmt.Errorf("hysteria render: AuthCallbackPath is empty; New() fills it, so this config never went through it")
 	}
 
 	var b bytes.Buffer

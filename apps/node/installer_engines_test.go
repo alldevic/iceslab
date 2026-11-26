@@ -285,6 +285,14 @@ func TestHysteriaFlagsAreCheckedBeforeTheInstall(t *testing.T) {
 		{"hy.iceslab.dev", "root@box.localhost", true, "box.localhost"},
 		{"hy.iceslab.dev", "ops", true, "not an e-mail address"},
 		{"hy.iceslab.dev", "ops@", true, "not an e-mail address"},
+		// A name no public CA issues for: the panel's command carries the node's
+		// address, an IP for a node nobody has pointed DNS at.
+		{"203.0.113.7", "", true, "not a name a public CA can issue for"},
+		{"203.0.113.7", "ops@iceslab.dev", true, "an IP literal"},
+		{"2001:db8::1", "", true, "not a name a public CA can issue for"},
+		{"hy.iceslab.dev:443", "", true, "not a name a public CA can issue for"},
+		{"hysteria", "", true, "single-label name"},
+		{"hy1.iceslab.dev", "", false, "without an e-mail"},
 	} {
 		prog := "set -euo pipefail\nlog() { echo \"log: $*\"; }\nwarn() { echo \"warn: $*\"; }\nfail() { echo \"fail: $*\"; exit 1; }\n" +
 			coresSection(t) + "\n" +

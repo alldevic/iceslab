@@ -789,7 +789,17 @@ has_engine() { [[ " ${ENGINES[*]} " == *" $1 "* ]]; }
 # asks for the certificate without one (A-276). One Let's Encrypt refuses is
 # refused here instead, where it still names the flag: an example domain or
 # localhost (invalidContact) failed the first push hours later, in the journal.
+# The name is refused the same way when no public CA can issue for it (the rule
+# of acmeHostnameFor in the panel): an IP literal, or a single-label name. The
+# panel's own command puts the node's address there, and a node registered by
+# IP would otherwise start hysteria, fail to get a certificate and exit while
+# the installer's last step, which asks about the agent, prints its banner.
 check_hysteria_flags() {
+  if [[ -n "$HY_DOMAIN" ]]; then
+    if [[ "$HY_DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ || "$HY_DOMAIN" == *:* || "$HY_DOMAIN" != *.* ]]; then
+      fail "--hysteria-domain '$HY_DOMAIN' is not a name a public CA can issue for (an IP literal, or a single-label name). Point a public FQDN at this node, set it as the node's address in the panel and re-issue the install command; or leave both hysteria flags off and write /etc/hysteria/config.yaml by hand."
+    fi
+  fi
   if [[ -n "$HY_EMAIL" ]]; then
     local domain="${HY_EMAIL##*@}"
     domain="${domain,,}"

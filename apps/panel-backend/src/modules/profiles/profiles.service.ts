@@ -1,4 +1,4 @@
-import type { EngineName, Transport } from '@iceslab/shared';
+import type { EngineName, NodeCores, Transport } from '@iceslab/shared';
 import { Prisma } from '../../generated/prisma/client.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { prisma } from '../../prisma.js';
@@ -328,10 +328,8 @@ async function userReachForProfile(profileId: string): Promise<number> {
  * as it was. A schema issue on the field, so create and edit answer alike
  * (400 VALIDATION_ERROR, path config.portHoppingStart or .portHoppingEnd).
  *
- * Whether the range lies inside the one the node redirects is NOT checked:
- * that range is given to bootstrap-hysteria.sh (--hysteria-port-range) and
- * kept on the node (/etc/hysteria/port-range); no agent report carries it to
- * the panel. If one ever does, the check belongs here.
+ * Whether the range lies inside the one the node redirects is a different
+ * question, asked per node by assertPortHoppingFitsNode.
  */
 export function assertPortHoppingRange(protocol: string, config: unknown): void {
   if (protocol !== 'hysteria') return;
@@ -349,6 +347,64 @@ export function assertPortHoppingRange(protocol: string, config: unknown): void 
   if (start !== undefined && end !== undefined && end <= start) {
     throw issue('portHoppingEnd', `the end of the port hopping range (${end}) must be above its start (${start})`);
   }
+}
+
+/**
+ * A port-hopping range the node would not catch.
+ *
+ * Its own error, not a config one: nothing about the config is malformed, and
+ * the same profile is fine against a node installed with a wider range. What is
+ * wrong is the pair.
+ */
+export class PortHoppingOutsideNodeRangeError extends Error {
+  readonly code = 'PORT_HOPPING_OUTSIDE_NODE_RANGE';
+  constructor(
+    public readonly profileName: string,
+    public readonly nodeName: string,
+    public readonly wanted: { start: number; end: number },
+    public readonly nodeRange: { start: number; end: number },
+  ) {
+    super(
+      `Profile "${profileName}" hops over ports ${wanted.start}-${wanted.end}, but node ` +
+        `"${nodeName}" only redirects ${nodeRange.start}-${nodeRange.end} to its Hysteria ` +
+        `listener. Clients would rotate onto ports that node is not catching. Narrow the ` +
+        `profile's range, or re-run the node installer with ` +
+        `--hysteria-port-range ${wanted.start}-${wanted.end}.`,
+    );
+    this.name = 'PortHoppingOutsideNodeRangeError';
+  }
+}
+
+/**
+ * Refuse a hysteria config (the profile's, or the profile's merged with a
+ * binding's overrides) whose port-hopping range is not inside the range this
+ * node reported redirecting.
+ *
+ * The range is chosen when the node is installed (--hysteria-port-range) and is
+ * one nat REDIRECT. The ports outside it reach nothing and neither side logs a
+ * thing: the client rotates onto them and some attempts fail.
+ *
+ * Judged only against a REPORTED range (NodeCores.portHopping, start > 0). A
+ * node with no report, an older agent, a table it could not read, or one that
+ * says it redirects none ({0, 0}) is not judged: the last is not told apart
+ * from "no report" (as in fork-integration), and the subscription gives such a
+ * node's clients one port anyway (servedPortHopping).
+ */
+export function assertPortHoppingFitsNode(
+  node: { name: string; cores: unknown },
+  profile: { protocol: string; name: string },
+  config: unknown,
+): void {
+  if (profile.protocol !== 'hysteria' || config == null || typeof config !== 'object') return;
+  const cfg = config as { portHoppingStart?: unknown; portHoppingEnd?: unknown };
+  const start = cfg.portHoppingStart;
+  const end = cfg.portHoppingEnd;
+  // Hopping off, or half a pair: assertPortHoppingRange speaks to that.
+  if (typeof start !== 'number' || typeof end !== 'number' || start <= 0 || end < start) return;
+  const reported = (node.cores as NodeCores | null)?.portHopping;
+  if (!reported || reported.start <= 0) return;
+  if (start >= reported.start && end <= reported.end) return;
+  throw new PortHoppingOutsideNodeRangeError(profile.name, node.name, { start, end }, reported);
 }
 
 // ───── Profile CRUD ─────
@@ -630,10 +686,17 @@ export async function updateProfile(
   if (data.config !== undefined) {
     const bindings = await prisma.profileNodeBinding.findMany({
       where: { profileId: id },
-      select: { id: true, port: true, nodeId: true, transport: true, overrides: true },
+      select: {
+        id: true, port: true, nodeId: true, transport: true, overrides: true,
+        node: { select: { name: true, cores: true, deletedAt: true } },
+      },
     });
     const nextProfile = { protocol: existing.protocol, config: data.config as unknown };
     for (const b of bindings) {
+      // Each deployed node against the range as merged with this binding's overrides.
+      if (!b.node.deletedAt) {
+        assertPortHoppingFitsNode(b.node, { protocol: existing.protocol, name: input.name ?? existing.name }, resolveBindingConfig(data.config, b.overrides));
+      }
       const next = transportForBinding(nextProfile, b.overrides);
       if (next !== b.transport) moves.push({ ...b, transport: next });
     }
@@ -896,12 +959,13 @@ export async function assertBindingFitsNode(
     Parameters<typeof assertAwgSubnetFree>[0] & Parameters<typeof assertAdapterSlotFree>[0],
   profile: Parameters<typeof assertCoreOnNode>[1] & Parameters<typeof assertNodeRendersProfile>[1] &
     Parameters<typeof assertSingboxServesBinding>[0] & Parameters<typeof assertAwgSubnetFree>[1] &
-    Parameters<typeof assertAdapterSlotFree>[1],
+    Parameters<typeof assertAdapterSlotFree>[1] & Parameters<typeof assertPortHoppingFitsNode>[1] & { config: unknown },
   overrides?: unknown,
 ): Promise<void> {
   assertCoreOnNode(node, profile);
   assertNodeRendersProfile(node, profile);
   assertSingboxServesBinding(profile, overrides);
+  assertPortHoppingFitsNode(node, profile, resolveBindingConfig(profile.config, overrides));
   await assertAwgSubnetFree(node, profile);
   await assertAdapterSlotFree(node, profile, overrides);
 }
@@ -1002,7 +1066,10 @@ export async function updateBinding(
 ): Promise<PublicBindingDto> {
   const existing = await prisma.profileNodeBinding.findUnique({
     where: { id },
-    include: { profile: { select: { protocol: true, config: true, engine: true } } },
+    include: {
+      profile: { select: { name: true, protocol: true, config: true, engine: true } },
+      node: { select: { name: true, cores: true } },
+    },
   });
   if (!existing) throw new BindingNotFoundError(id);
 
@@ -1011,6 +1078,8 @@ export async function updateBinding(
   // after this edit rather than from what it was.
   const nextOverrides = input.overrides !== undefined ? input.overrides : existing.overrides;
   assertSingboxServesBinding(existing.profile, nextOverrides);
+  // The override can move the hopping range off what the node redirects.
+  assertPortHoppingFitsNode(existing.node, existing.profile, resolveBindingConfig(existing.profile.config, nextOverrides));
   // A-199: an MTU set through the binding's overrides is the node's mieru MTU
   // too, and one mita process holds one. Beside another mieru inbound a
   // different MTU is refused here, or the agent answers 500 on every push.

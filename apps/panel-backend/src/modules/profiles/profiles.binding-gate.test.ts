@@ -147,4 +147,29 @@ describe('the binding gate', () => {
     });
     expect((await prisma.profile.findUniqueOrThrow({ where: { id: profileId } })).engine).toBe('singbox');
   });
+
+  it('refuses a host for a hopping range the node does not catch, as the bindings route does', async () => {
+    const nodeId = await makeNode();
+    const made = await app.inject({
+      method: 'POST',
+      url: '/api/profiles',
+      headers: auth(),
+      payload: { name: 'bg-hop', protocol: 'hysteria', config: { portHoppingStart: 20000, portHoppingEnd: 50000 } },
+    });
+    expect(made.statusCode, made.body).toBe(201);
+    const profileId = JSON.parse(made.body).id as string;
+    await prisma.node.update({
+      where: { id: nodeId },
+      data: { cores: observedCores([{ name: 'hysteria', engine: 'hysteria', installed: true, running: true } as CoreStatus], new Date().toISOString(), undefined, undefined, { start: 30000, end: 40000 }) as unknown as object },
+    });
+
+    const viaHost = await app.inject({ method: 'POST', url: '/api/hosts', headers: auth(), payload: { profileId, nodeId, port: 443, remark: 'h' } });
+    const viaBinding = await app.inject({ method: 'POST', url: '/api/bindings', headers: auth(), payload: { profileId, nodeId, port: 443 } });
+    for (const res of [viaHost, viaBinding]) {
+      expect(res.statusCode, res.body).toBe(400);
+      expect(JSON.parse(res.body)).toMatchObject({ error: 'PORT_HOPPING_OUTSIDE_NODE_RANGE', nodeName: 'bg-node-1' });
+    }
+    expect(await prisma.profileNodeBinding.count()).toBe(0);
+    expect(await prisma.host.count()).toBe(0);
+  });
 });

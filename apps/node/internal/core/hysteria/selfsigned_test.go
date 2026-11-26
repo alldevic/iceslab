@@ -84,7 +84,7 @@ func pushed(t *testing.T, cfg map[string]any) json.RawMessage {
 func TestSelfSignedRendersTLSInsteadOfACME(t *testing.T) {
 	certPEM, keyPEM, _ := pemPair(t)
 	dir := t.TempDir()
-	blob, err := renderConfig(Config{ConfigPath: filepath.Join(dir, "config.yaml")},
+	blob, err := renderConfig(Config{AuthCallbackPath: testAuthPath, ConfigPath: filepath.Join(dir, "config.yaml")},
 		InboundConfig{Port: 443, TLSCertPEM: certPEM, TLSKeyPEM: keyPEM}, nil)
 	if err != nil {
 		t.Fatalf("a node on an IP with the panel's pair needs no hostname or email: %v", err)
@@ -159,7 +159,7 @@ func TestEngineServesThePanelsSelfSignedPair(t *testing.T) {
 	}
 	certPEM, keyPEM, _ := pemPair(t)
 	dir := t.TempDir()
-	cfg := Config{ConfigPath: filepath.Join(dir, "config.yaml")}
+	cfg := Config{AuthCallbackPath: testAuthPath, ConfigPath: filepath.Join(dir, "config.yaml")}
 	if err := writeTLSPair(cfg.ConfigPath, certPEM, keyPEM); err != nil {
 		t.Fatal(err)
 	}

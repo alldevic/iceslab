@@ -116,6 +116,17 @@ describe('what the panel keeps from the healthcheck', () => {
     expect('arch' in observedCores([], AT, 'riscv64' as never)).toBe(false);
   });
 
+  it('keeps the port-hopping range the node redirects, "none" included', () => {
+    const range = observedCores([], AT, undefined, undefined, { start: 30000, end: 40000 });
+    expect(range.portHopping).toEqual({ start: 30000, end: 40000 });
+    // {0, 0} is an answer: this node redirects nothing. Absent is not one.
+    expect(observedCores([], AT, undefined, undefined, { start: 0, end: 0 }).portHopping).toEqual({ start: 0, end: 0 });
+    expect('portHopping' in observedCores([], AT)).toBe(false);
+    for (const bad of [{ start: 50000, end: 20000 }, { start: 0, end: 50000 }, { start: 1.5, end: 2 }, { start: 20000, end: 70000 }]) {
+      expect('portHopping' in observedCores([], AT, undefined, undefined, bad), JSON.stringify(bad)).toBe(false);
+    }
+  });
+
   it('does not keep liveness, which belongs to the node status', () => {
     // Stored only when something changes, so a copy of `running` here would sit
     // stale next to a node the panel knows is down.
@@ -159,6 +170,14 @@ describe('when the inventory is written back', () => {
 
   it('writes when the arch is first learned, from an agent that now reports it', () => {
     expect(coresWorthWriting(inventory(), inventory({ arch: 'amd64' }), at(AT))).toBe(true);
+  });
+
+  it('writes when the port-hopping range moves, or is first reported', () => {
+    const range = (start: number, end: number) => inventory({ portHopping: { start, end } });
+    expect(coresWorthWriting(inventory(), range(20000, 50000), at(AT))).toBe(true);
+    expect(coresWorthWriting(range(20000, 50000), range(30000, 40000), at(AT))).toBe(true);
+    expect(coresWorthWriting(range(20000, 50000), range(0, 0), at(AT))).toBe(true);
+    expect(coresWorthWriting(range(20000, 50000), range(20000, 50000), at(AT))).toBe(false);
   });
 
   it('refreshes the stamp on the heartbeat so it keeps meaning something', () => {
