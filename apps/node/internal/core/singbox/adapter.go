@@ -555,7 +555,7 @@ func (a *Adapter) ApplyIdentifiedInbound(id string, port int, rawCfg json.RawMes
 	a.mu.Lock()
 	// A core whose last start failed is down under this very config; "unchanged"
 	// would ack a push the node is not serving.
-	if cur, ok := a.inbounds[id]; ok && cur == newInbound && !a.lastStartFailed {
+	if cur, ok := a.inbounds[id]; ok && cur == newInbound && !a.coreDownLocked() {
 		a.mu.Unlock()
 		a.logger.Info("singbox ApplyInbound: config unchanged, skipping")
 		return nil
@@ -1101,4 +1101,12 @@ func (a *Adapter) RestartStats() core.RestartStats {
 		rss = proc.RSSBytes()
 	}
 	return a.restarts.Stats(0, rss)
+}
+
+// coreDownLocked: an identical push is not "unchanged" while the core is down,
+// whether its last start failed or it started, passed the window and died later
+// (killed, crashed past the supervisor's budget). Caller holds a.mu. A nil proc
+// is a core that has nothing to serve, not a dead one.
+func (a *Adapter) coreDownLocked() bool {
+	return a.lastStartFailed || (a.proc != nil && !a.proc.Running())
 }

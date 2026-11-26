@@ -774,7 +774,7 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 
 	// A core whose last start failed is down under this very config; "unchanged"
 	// would ack a push the node is not serving.
-	if inboundEqual(a.inbound, newInbound) && !a.lastStartFailed {
+	if inboundEqual(a.inbound, newInbound) && !a.coreDownLocked() {
 		a.logger.Info("hysteria ApplyInbound: config unchanged, skipping rewrite")
 		return nil
 	}
@@ -846,7 +846,7 @@ func (a *Adapter) ApplyCascade(raw json.RawMessage) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if handoffEqual(a.chain, handoff) && !a.lastStartFailed {
+	if handoffEqual(a.chain, handoff) && !a.coreDownLocked() {
 		return nil
 	}
 	// No inbound yet, or nothing to write to: remember it for the render that
@@ -922,7 +922,7 @@ func (a *Adapter) restartLocked(who string) error {
 		// Spawn mode: a rewritten config is not picked up by a live process
 		// (as before), but a core that failed its start is spawned again here,
 		// so a repeated push after the death is not answered with a success.
-		if a.cfg.BinaryPath != "" && a.lastStartFailed {
+		if a.cfg.BinaryPath != "" && a.coreDownLocked() {
 			if a.proc != nil {
 				_ = a.proc.Stop(context.Background())
 				a.proc = nil
@@ -1009,4 +1009,12 @@ func (a *Adapter) RestartStats() core.RestartStats {
 		rss = proc.RSSBytes()
 	}
 	return a.restarts.Stats(0, rss)
+}
+
+// coreDownLocked: an identical push is not "unchanged" while the core is down,
+// whether its last start failed or it started, passed the window and died later
+// (killed, crashed past the supervisor's budget). Caller holds a.mu. A nil proc
+// is a core that has nothing to serve, not a dead one.
+func (a *Adapter) coreDownLocked() bool {
+	return a.lastStartFailed || (a.proc != nil && !a.proc.Running())
 }

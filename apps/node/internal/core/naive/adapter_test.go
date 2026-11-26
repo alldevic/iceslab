@@ -96,8 +96,25 @@ func newManagedTestAdapter(t *testing.T, fake *fakeCLI) (*Adapter, string) {
 	// Non-nil proc forces regenerateAndReload into the reload branch (via
 	// injected runCmd) instead of the production cold-start path that shells
 	// out to subprocess.New, caddy binary isn't on PATH in CI.
-	a.proc = &subprocess.Subprocess{}
+	a.proc = liveProc(t)
 	return a, caddyfile
+}
+
+// liveProc: a running stand-in for caddy. The reload path is taken only for a
+// proc that runs (a dead one is started again), so presence is not enough.
+func liveProc(t *testing.T) *subprocess.Subprocess {
+	t.Helper()
+	p := subprocess.New(subprocess.Config{
+		Name:   "caddy-stub",
+		Binary: "sleep",
+		Args:   []string{"30"},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err := p.Start(context.Background()); err != nil {
+		t.Fatalf("start stub: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Stop(context.Background()) })
+	return p
 }
 
 func TestName(t *testing.T) {

@@ -277,9 +277,11 @@ export function buildSingboxJson(
         server_port: e.port,
         method: e.method,
         password: e.password,
-        // SS2022 supports UDP relay; sing-box defaults `network: tcp` so
-        // we must enable UDP explicitly to match what the server emits.
-        network: 'tcp',
+        // `network` stays unset: sing-box then enables tcp AND udp. Pinning it
+        // to 'tcp' switches UDP off in the outbound ("UDP is not supported by
+        // outbound", verified on 1.13.19 against a 1.13 shadowsocks inbound), so
+        // DNS, QUIC and calls through this endpoint went nowhere. Measured: with
+        // 'tcp' no reply, with the key absent or 'udp' the reply arrives.
         udp_over_tcp: false,
       });
     } else if (e.protocol === 'tuic') {

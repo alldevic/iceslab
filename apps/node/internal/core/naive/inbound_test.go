@@ -8,8 +8,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/icecompany-tech/iceslab/apps/node/internal/core/subprocess"
 )
 
 func TestInboundEqual(t *testing.T) {
@@ -75,9 +73,8 @@ func newApplyAdapter(t *testing.T, runner *recordingRunner) *Adapter {
 	// Tests exercise the `caddy reload` (already-running) path. Marking
 	// proc as non-nil so regenerateAndReloadLocked skips the production
 	// cold-start branch that spawns a real subprocess (caddy binary isn't
-	// on PATH in CI). The zero-value subprocess is never invoked by the
-	// reload path, only its presence matters.
-	a.proc = &subprocess.Subprocess{}
+	// on PATH in CI). A stand-in that runs: a dead proc is started again.
+	a.proc = liveProc(t)
 	a.started = true
 	return a
 }

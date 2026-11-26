@@ -280,7 +280,10 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 		effectivePort = a.cfg.Inbound.ListenPort
 	}
 	newInbound := wire.toInboundConfig(effectivePort)
-	if inboundEqual(a.cfg.Inbound, newInbound) {
+	// A caddy that is not running (its cold start failed, or it died after the
+	// start window) is down under this very config: "unchanged" would ack a push
+	// the node is not serving.
+	if inboundEqual(a.cfg.Inbound, newInbound) && !a.coreDownLocked() {
 		a.mu.Unlock()
 		a.logger.Info("naive ApplyInbound: config unchanged, skipping reload")
 		return nil
@@ -330,7 +333,12 @@ func (a *Adapter) regenerateAndReload(parent context.Context) error {
 	bin := a.cfg.CaddyBin
 	reloadTimeout := a.cfg.ReloadTimeout
 	run := a.cfg.runCmd
-	procExists := a.proc != nil
+	// A dead caddy has no admin socket to reload: it is started again.
+	deadProc := a.proc
+	procExists := a.proc != nil && a.proc.Running()
+	if procExists {
+		deadProc = nil
+	}
 	sock := a.cfg.AdminSocket
 	a.mu.Unlock()
 
@@ -351,6 +359,9 @@ func (a *Adapter) regenerateAndReload(parent context.Context) error {
 	}
 
 	if !procExists {
+		if deadProc != nil {
+			_ = deadProc.Stop(parent)
+		}
 		// Cold start: spawn caddy, its admin socket in a directory nobody
 		// else may enter, and no socket file left by a caddy that died
 		// without removing it.
@@ -461,4 +472,12 @@ func (a *Adapter) RestartStats() core.RestartStats {
 		rss = proc.RSSBytes()
 	}
 	return a.restarts.Stats(0, rss)
+}
+
+// coreDownLocked: an identical push is not "unchanged" while caddy should run
+// and does not: never started (a failed cold start leaves the inbound in memory)
+// or started, passed the window and died later. Caller holds a.mu. Config-only
+// mode and an idle adapter (no hostname) have nothing to serve.
+func (a *Adapter) coreDownLocked() bool {
+	return a.cfg.CaddyBin != "" && a.cfg.Inbound.Hostname != "" && (a.proc == nil || !a.proc.Running())
 }

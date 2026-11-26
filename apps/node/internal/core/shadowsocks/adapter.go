@@ -402,7 +402,7 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	}
 	if a.cfg.Inbound.Method == wire.Method &&
 		a.cfg.Inbound.ServerPSK == wire.ServerPSK &&
-		a.cfg.Inbound.ListenPort == effectivePort && !a.lastStartFailed {
+		a.cfg.Inbound.ListenPort == effectivePort && !a.coreDownLocked() {
 		a.mu.Unlock()
 		a.logger.Info("shadowsocks ApplyInbound: config unchanged, skipping restart")
 		return nil
@@ -623,4 +623,12 @@ func (a *Adapter) RestartStats() core.RestartStats {
 		rss = proc.RSSBytes()
 	}
 	return a.restarts.Stats(0, rss)
+}
+
+// coreDownLocked: an identical push is not "unchanged" while the core is down,
+// whether its last start failed or it started, passed the window and died later
+// (killed, crashed past the supervisor's budget). Caller holds a.mu. A nil proc
+// is a core that has nothing to serve, not a dead one.
+func (a *Adapter) coreDownLocked() bool {
+	return a.lastStartFailed || (a.proc != nil && !a.proc.Running())
 }

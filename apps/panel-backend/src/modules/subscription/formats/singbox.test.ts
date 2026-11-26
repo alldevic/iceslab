@@ -296,6 +296,16 @@ describe('buildSingboxJson', () => {
     expect(ss.tls).toBeUndefined();
   });
 
+  // sing-box reads `network: 'tcp'` as "UDP off" ("UDP is not supported by
+  // outbound"): the stand 11.5 defect, reproduced on 1.13.19 against a 1.13
+  // shadowsocks inbound. Unset is tcp and udp both.
+  it('leaves UDP on in the shadowsocks outbound: no network key', () => {
+    const cfg = parse(buildSingboxJson([ssEp]));
+    const ss = cfg.outbounds.find((o) => o.type === 'shadowsocks');
+    expect(ss.network).toBeUndefined();
+    expect(ss.udp_over_tcp).toBe(false);
+  });
+
   it('mixed subscription emits all proxy types in the Auto selector', () => {
     const cfg = parse(buildSingboxJson([hysteriaEp, xrayEp, trojanEp, ssEp]));
     const sel = cfg.outbounds.find((o) => o.type === 'selector');
