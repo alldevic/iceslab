@@ -55,6 +55,8 @@ const FORWARDED = [
   'user.traffic-reset',
   'node.created',
   'node.status-changed',
+  'node.anomaly',
+  'node.anomaly-cleared',
   'node.deleted',
   'cascade.exits-changed',
   'profile.created',
@@ -146,6 +148,25 @@ describe('the webhook registry', () => {
     eventBus.emit('cascade.exits-changed', payload);
     await settle();
     expect(emittedPayloads).toEqual([['cascade.exits-changed', payload]]);
+  });
+
+  it('hands node.anomaly and node.anomaly-cleared to emitWebhook with the same payload', async () => {
+    registerWebhookEventHandlers();
+    const anomaly = {
+      nodeId: 'n1',
+      severity: 'critical' as const,
+      bytesThisPoll: 150,
+      expectedBaseline: 1_388_889,
+      activeUsers: 1,
+      droppedUsers: 9,
+    };
+    eventBus.emit('node.anomaly', anomaly);
+    eventBus.emit('node.anomaly-cleared', { nodeId: 'n1' });
+    await settle();
+    expect(emittedPayloads).toEqual([
+      ['node.anomaly', anomaly],
+      ['node.anomaly-cleared', { nodeId: 'n1' }],
+    ]);
   });
 
   // The bus has `on` and no `off`: a second subscription is a second delivery

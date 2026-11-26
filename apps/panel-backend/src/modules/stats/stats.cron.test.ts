@@ -6,6 +6,7 @@ import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
+import { eventBus } from '../../lib/infra/event-bus.js';
 import { NodeTransport } from '../nodes/nodes.transport.js';
 import { pollNodeStats } from './stats.cron.js';
 
@@ -309,5 +310,186 @@ describe('pollNodeStats bulk upsert (B3, integration)', () => {
       await pollNodeStats();
       expect((await prisma.userTraffic.findUnique({ where: { userId: tg } }))?.onlineAt ?? null).toBeNull();
     });
+  });
+});
+
+describe('pollNodeStats anomaly sensor (U7, integration)', () => {
+  it('fires node.anomaly once after a sustained correlated drop, then re-arms', async () => {
+    const nodeId = await createNode('ru-1', '10.0.0.9:8443');
+    const users: string[] = [];
+    for (let i = 0; i < 10; i++) users.push(await createUser(`anon${i}`));
+
+    // Seed a high 24h baseline directly: 4 GB across a past hour → ~1.39 MB/poll,
+    // comfortably above the sensor's min-baseline floor.
+    const pastHour = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    pastHour.setUTCMinutes(0, 0, 0);
+    await prisma.nodeUsageHistory.create({
+      data: { nodeId, hour: pastHour, downloadBytes: 3_000_000_000n, uploadBytes: 1_000_000_000n },
+    });
+
+    const emitSpy = vi.spyOn(eventBus, 'emit');
+    const anomalies = () => emitSpy.mock.calls.filter((c) => c[0] === 'node.anomaly');
+
+    // Healthy poll: 10 users transferring → establishes the expected-user level.
+    // Never fires on the first poll (no shortfall computed yet).
+    const healthy = () =>
+      mockStats(stats(users.map((id) => ({ userId: id, bytesIn: 200_000, bytesOut: 100_000 }))));
+    healthy();
+    await pollNodeStats();
+    expect(anomalies()).toHaveLength(0);
+
+    // Sustained correlated drop: 1 user, a trickle of bytes. Needs `debounce`
+    // (3) consecutive polls before firing.
+    const drop = () => mockStats(stats([{ userId: users[0]!, bytesIn: 100, bytesOut: 50 }]));
+    drop(); await pollNodeStats();
+    expect(anomalies()).toHaveLength(0); // hits=1
+    drop(); await pollNodeStats();
+    expect(anomalies()).toHaveLength(0); // hits=2
+    drop(); await pollNodeStats(); // hits=3 → fire
+    const fired = anomalies();
+    expect(fired).toHaveLength(1);
+    const payload = fired[0]![1] as { nodeId: string; severity: string; droppedUsers: number };
+    expect(payload.nodeId).toBe(nodeId);
+    expect(payload.severity).toBe('critical');
+    expect(payload.droppedUsers).toBeGreaterThanOrEqual(5);
+
+    // A 4th sustained-drop poll must NOT re-fire (single event per outage).
+    drop(); await pollNodeStats();
+    expect(anomalies()).toHaveLength(1);
+
+    // Recovery: users return → sensor re-arms (debounce reset, still one event)
+    // and the incident is closed with node.anomaly-cleared.
+    const cleared = () => emitSpy.mock.calls.filter((c) => c[0] === 'node.anomaly-cleared');
+    expect(cleared()).toHaveLength(0);
+    healthy();
+    await pollNodeStats();
+    expect(anomalies()).toHaveLength(1);
+    expect(cleared()).toHaveLength(1);
+    expect(cleared()[0]![1]).toEqual({ nodeId });
+
+    // A new sustained drop is a second incident.
+    drop(); await pollNodeStats();
+    drop(); await pollNodeStats();
+    drop(); await pollNodeStats();
+    expect(anomalies()).toHaveLength(2);
+  });
+
+  // The case above models a DELTA core: a node that goes dark simply stops
+  // listing its users, so the reported list shrinks. A CUMULATIVE core (xray,
+  // the common one) does the opposite — it keeps listing every user it has ever
+  // seen, with counters that stop growing. Counting the list instead of the
+  // users who actually moved bytes therefore leaves the breadth signal flat, and
+  // because evaluateNodeDrop requires it, the sensor goes silent exactly on the
+  // core most nodes run. It passes every pure-logic test while doing nothing.
+  it('fires on a cumulative core, where the node keeps listing users that stopped moving', async () => {
+    const nodeId = await createNode('ru-cum', '10.0.0.11:8443');
+    const users: string[] = [];
+    for (let i = 0; i < 10; i++) users.push(await createUser(`cumanon${i}`));
+
+    const pastHour = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    pastHour.setUTCMinutes(0, 0, 0);
+    await prisma.nodeUsageHistory.create({
+      data: { nodeId, hour: pastHour, downloadBytes: 3_000_000_000n, uploadBytes: 1_000_000_000n },
+    });
+
+    const emitSpy = vi.spyOn(eventBus, 'emit');
+    const anomalies = () => emitSpy.mock.calls.filter((c) => c[0] === 'node.anomaly');
+
+    // Cumulative counters: EVERY user is listed on EVERY poll, always.
+    const cumPoll = (perUser: number): GetStatsResponse => ({
+      users: users.map((id) => ({ userId: id, bytesIn: perUser, bytesOut: 0, cumulative: true })),
+      uptime: 1,
+      totalBytesIn: 0,
+      totalBytesOut: 0,
+      cumulative: true,
+    });
+
+    // Two healthy polls: counters climb, so 10 users are genuinely moving bytes.
+    // (The first poll only baselines the cumulative counters — its deltas are 0.)
+    // Re-mocking via mockStats() replaces the implementation in place; calling
+    // vi.restoreAllMocks() here would also drop the emit spy above and silently
+    // stop recording the very events this test asserts on.
+    mockStats(cumPoll(1_000_000));
+    await pollNodeStats();
+    mockStats(cumPoll(2_000_000));
+    await pollNodeStats();
+    expect(anomalies()).toHaveLength(0);
+
+    // Node goes dark: counters FROZEN. The list is still 10 users long — only
+    // the deltas are zero. This is what the old `userList.length` could not see.
+    const frozen = () => mockStats(cumPoll(2_000_000));
+    frozen(); await pollNodeStats();
+    frozen(); await pollNodeStats();
+    frozen(); await pollNodeStats();
+
+    const fired = anomalies();
+    expect(fired).toHaveLength(1);
+    const payload = fired[0]![1] as { nodeId: string; droppedUsers: number };
+    expect(payload.nodeId).toBe(nodeId);
+    expect(payload.droppedUsers).toBeGreaterThanOrEqual(5);
+  });
+
+  async function seedBaseline(nodeId: string) {
+    const pastHour = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    pastHour.setUTCMinutes(0, 0, 0);
+    await prisma.nodeUsageHistory.create({
+      data: { nodeId, hour: pastHour, downloadBytes: 3_000_000_000n, uploadBytes: 1_000_000_000n },
+    });
+  }
+
+  // A-163: one user on two adapters is listed twice. Counting entries would see
+  // 10 "users" in a poll where 5 are moving bytes, and the shortfall would never
+  // reach the threshold of 5 against a peak of 10.
+  it('counts a user listed by two adapters as one active user', async () => {
+    const nodeId = await createNode('ru-2ad', '10.0.0.12:8443');
+    const users: string[] = [];
+    for (let i = 0; i < 10; i++) users.push(await createUser(`twoad${i}`));
+    await seedBaseline(nodeId);
+
+    const emitSpy = vi.spyOn(eventBus, 'emit');
+    const anomalies = () => emitSpy.mock.calls.filter((c) => c[0] === 'node.anomaly');
+
+    // 10 users, 10 entries: the expected level is 10.
+    mockStats(stats(users.map((id) => ({ userId: id, bytesIn: 200_000, bytesOut: 100_000 }))));
+    await pollNodeStats();
+
+    // 4 users remain, each on two adapters = 8 entries. By entries the shortfall
+    // is 2 (no event); by distinct users it is 6.
+    const dark = users.slice(0, 4).flatMap((id) => [
+      { userId: id, bytesIn: 10, bytesOut: 0, protocol: 'vless', engine: 'xray' },
+      { userId: id, bytesIn: 10, bytesOut: 0, protocol: 'hysteria2', engine: 'hysteria' },
+    ]);
+    for (let i = 0; i < 3; i++) {
+      mockStats(stats(dark));
+      await pollNodeStats();
+    }
+    const fired = anomalies();
+    expect(fired).toHaveLength(1);
+    expect(fired[0]![1]).toMatchObject({ nodeId, activeUsers: 4, droppedUsers: 6 });
+  });
+
+  // A core that could not read its counters shows up as zero bytes and no users;
+  // that is a failed read, not a blackout.
+  it('does not count a poll in which a core had no data', async () => {
+    const nodeId = await createNode('ru-nodata', '10.0.0.13:8443');
+    const users: string[] = [];
+    for (let i = 0; i < 10; i++) users.push(await createUser(`nodata${i}`));
+    await seedBaseline(nodeId);
+
+    const emitSpy = vi.spyOn(eventBus, 'emit');
+    const anomalies = () => emitSpy.mock.calls.filter((c) => c[0] === 'node.anomaly');
+
+    mockStats(stats(users.map((id) => ({ userId: id, bytesIn: 200_000, bytesOut: 100_000 }))));
+    await pollNodeStats();
+
+    const blind: GetStatsResponse = {
+      ...stats([]),
+      cores: [{ protocol: 'vless', engine: 'xray', totalBytesIn: 0, totalBytesOut: 0, noData: true }],
+    } as GetStatsResponse;
+    for (let i = 0; i < 5; i++) {
+      mockStats(blind);
+      await pollNodeStats();
+    }
+    expect(anomalies()).toHaveLength(0);
   });
 });

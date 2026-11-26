@@ -1,7 +1,10 @@
 import { prisma } from '../../prisma.js';
+import { config } from '../../config.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { getLogger } from '../../lib/infra/logger.js';
+import { eventBus } from '../../lib/infra/event-bus.js';
+import { NodeAnomalySensor, type SensorObservation } from './stats.anomaly.js';
 import {
   computeNodeStatsWrites,
   computeNodeTotalsFromCores,
@@ -27,6 +30,44 @@ const totalSnapshot = new Map<string, { in: bigint; out: bigint }>();
  * backend restart baselines each cumulative adapter at a zero delta.
  */
 const adapterTotalSnapshot = new Map<string, Map<string, { in: bigint; out: bigint }>>();
+
+/**
+ * The traffic-anomaly sensor (stats.anomaly.ts), fed once per node per poll.
+ * In memory like the snapshots above: a restart starts every node over.
+ */
+const anomalySensor = new NodeAnomalySensor({
+  dropRatio: config.ANOMALY_DROP_RATIO,
+  criticalRatio: config.ANOMALY_CRITICAL_RATIO,
+  minUsersDrop: config.ANOMALY_MIN_USERS_DROP,
+  debounce: config.ANOMALY_DEBOUNCE,
+  minBaselineBytes: config.ANOMALY_MIN_BASELINE_BYTES,
+  expectedDecay: config.ANOMALY_EXPECTED_DECAY,
+});
+// node-stats-poll runs every 30s (scheduler.queue.ts) -> polls per 24h.
+const POLLS_PER_24H = (24 * 60 * 60) / 30;
+
+/**
+ * What one poll tells the sensor. A core that could not read its counters
+ * (`noData`) has its users missing from the list for that reason, not because
+ * they left, so such a poll is not judged. Active users are the DISTINCT users
+ * that MOVED bytes, not the length of the list: a cumulative core (xray) keeps
+ * listing every user it has seen, with counters that stop growing when the node
+ * goes dark, and a user on two adapters is listed twice (A-163).
+ */
+export function sensorObservationOf(
+  res: { cores?: { noData?: boolean }[] },
+  users: readonly { userId: string; bytesIn?: number; bytesOut?: number }[],
+  thisPollBytes: number,
+  baselinePerPoll: number,
+): SensorObservation {
+  if (res.cores?.some((c) => c.noData)) return { kind: 'unjudged', reason: 'no-data' };
+  const moved = new Map<string, number>();
+  for (const u of users) {
+    moved.set(u.userId, (moved.get(u.userId) ?? 0) + (u.bytesIn || 0) + (u.bytesOut || 0));
+  }
+  const activeUsers = [...moved.values()].filter((b) => b > 0).length;
+  return { kind: 'judged', thisPollBytes, activeUsers, baselinePerPoll };
+}
 
 /**
  * Per-user per-poll sanity ceiling for ingested traffic deltas. node-stats-poll
@@ -97,6 +138,19 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
   // dashboard "Top users today" groups node_user_usage_history by userId WHERE
   // date = today, so this must match startOfToday()'s UTC-midnight shape.
   const dateStr = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')}`;
+
+  // The sensor's baseline: each node's average bytes per poll over the last
+  // 24h, one grouped read for all the nodes.
+  const baselineRows = await prisma.nodeUsageHistory.groupBy({
+    by: ['nodeId'],
+    where: { hour: { gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) } },
+    _sum: { downloadBytes: true, uploadBytes: true },
+  });
+  const baselinePerPoll = new Map<string, number>();
+  for (const r of baselineRows) {
+    const sum = Number(r._sum.downloadBytes ?? 0n) + Number(r._sum.uploadBytes ?? 0n);
+    baselinePerPoll.set(r.nodeId, sum / POLLS_PER_24H);
+  }
 
   let ok = 0;
   let failed = 0;
@@ -331,6 +385,22 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
         );
         if (w.newSnapshot) totalSnapshot.set(node.id, w.newSnapshot);
         if (newAdapterTotals) adapterTotalSnapshot.set(node.id, newAdapterTotals);
+        // After the commit: a poll whose writes rolled back is read again on
+        // the next tick, and the sensor should not see its bytes twice.
+        const outcome = anomalySensor.observe(
+          node.id,
+          sensorObservationOf(res, userList, Number(w.nodeDownload + w.nodeUpload), baselinePerPoll.get(node.id) ?? 0),
+        );
+        if (outcome?.kind === 'fired') {
+          getLogger().warn(
+            `[cron] node-anomaly ${node.id}: ${outcome.incident.bytesThisPoll}B this poll against ${outcome.incident.expectedBaseline}B, ${outcome.incident.droppedUsers} users gone`,
+          );
+          eventBus.emit('node.anomaly', { nodeId: node.id, ...outcome.incident });
+        } else if (outcome?.kind === 'cleared') {
+          eventBus.emit('node.anomaly-cleared', { nodeId: node.id });
+        } else if (outcome?.kind === 'unjudged') {
+          getLogger().info(`[cron] node-anomaly ${node.id}: not judged while a core cannot read its counters`);
+        }
         ok++;
       } catch (err) {
         failed++;

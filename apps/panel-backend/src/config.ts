@@ -297,6 +297,20 @@ export const ConfigSchema = z.object({
   LOGIN_LOCKOUT_DURATION_MIN: z.coerce.number().int().min(1).default(5),
   LOGIN_LOCKOUT_WINDOW_MIN: z.coerce.number().int().min(1).default(10),
 
+  // Traffic-anomaly sensor thresholds (modules/stats/stats.anomaly.ts). The
+  // defaults are the values the sensor was tuned with on a live fleet; the
+  // keys exist so a node with fewer than 5 concurrent users, or a different
+  // tolerance for noise, can be tuned without a rebuild.
+  // A poll is anomalous when its bytes fall below ANOMALY_DROP_RATIO of the
+  // 24h per-poll average AND at least ANOMALY_MIN_USERS_DROP active users are
+  // missing against the expected level, ANOMALY_DEBOUNCE polls in a row (30 s each).
+  ANOMALY_DROP_RATIO: z.coerce.number().gt(0).max(1).default(0.2),
+  ANOMALY_CRITICAL_RATIO: z.coerce.number().gt(0).max(1).default(0.05),
+  ANOMALY_MIN_USERS_DROP: z.coerce.number().int().min(1).default(5),
+  ANOMALY_DEBOUNCE: z.coerce.number().int().min(1).default(3),
+  ANOMALY_MIN_BASELINE_BYTES: z.coerce.number().int().min(0).default(1_000_000),
+  ANOMALY_EXPECTED_DECAY: z.coerce.number().gt(0).max(1).default(0.95),
+
   // ACME contact email used by node-installers that need a Let's Encrypt
   // cert (Hysteria 2 / NaiveProxy / Caddy). Optional, install command
   // emits a placeholder when unset, admin fills manually.

@@ -39,6 +39,10 @@ export function registerWebhookEventHandlers(): void {
   // Liveness. Carries from/to, so a receiver can tell "went down" from "came
   // back" without keeping state of its own.
   forward('node.status-changed');
+  // A node that still answers but stopped carrying traffic, and its recovery
+  // (stats.anomaly.ts). Liveness above never sees it: the node stays online.
+  forward('node.anomaly');
+  forward('node.anomaly-cleared');
   forward('node.deleted');
   // A cascade losing its last live exit, or getting one back. Its entry refuses
   // connections in that state, so without this a receiver hears it from the
