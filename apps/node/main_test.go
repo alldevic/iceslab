@@ -15,7 +15,7 @@ import (
 // as not installed. Before core.Absent, such a node reported only hysteria (the
 // one adapter registered unconditionally), and "not installed" read the same as
 // "never mentioned" on the node card.
-func TestAnAgentWithNothingConfiguredReportsEightEnginesAllAbsent(t *testing.T) {
+func TestAnAgentWithNothingConfiguredReportsNineEnginesAllAbsent(t *testing.T) {
 	for _, k := range []string{"XRAY_BINARY", "SINGBOX_BINARY", "HYSTERIA_BINARY", "MTG_BINARY", "MTPROTOPROXY_SCRIPT", "MITA_BINARY"} {
 		t.Setenv(k, "")
 	}
@@ -23,6 +23,7 @@ func TestAnAgentWithNothingConfiguredReportsEightEnginesAllAbsent(t *testing.T) 
 	nowhere := t.TempDir()
 	t.Setenv("AMNEZIAWG_BIN", filepath.Join(nowhere, "awg"))
 	t.Setenv("CADDY_NAIVE_BIN", filepath.Join(nowhere, "caddy-naive"))
+	t.Setenv("WIREGUARD_BIN", "")
 
 	adapters := buildAdapters(slog.New(slog.NewTextHandler(io.Discard, nil)))
 
@@ -44,7 +45,7 @@ func TestAnAgentWithNothingConfiguredReportsEightEnginesAllAbsent(t *testing.T) 
 		}
 	}
 	sort.Strings(engines)
-	want := "amneziawg hysteria mieru mtproto mtprotoproxy naive singbox xray"
+	want := "amneziawg hysteria mieru mtproto mtprotoproxy naive singbox wireguard xray"
 	if got := strings.Join(engines, " "); got != want {
 		t.Fatalf("engines = %q, want exactly one row per known engine: %q", got, want)
 	}
@@ -97,8 +98,9 @@ func TestARegisteredEngineGetsNoStandIn(t *testing.T) {
 // Plain WireGuard (milestone 9.1) is registered by an explicit WIREGUARD_BIN
 // and by nothing else: wireguard-tools is on every AWG node (its bootstrap
 // installs it), so the presence of /usr/bin/wg says nothing about whether an
-// operator asked for the engine. Without the variable the adapter list is the
-// base's, one row per known engine.
+// operator asked for the engine. Without the variable the engine is the
+// absent stand-in of knownEngines, one row per known engine; with it the
+// adapter takes the stand-in's place.
 func TestWireguardIsRegisteredOnlyByAnExplicitBin(t *testing.T) {
 	for _, k := range []string{"XRAY_BINARY", "SINGBOX_BINARY", "HYSTERIA_BINARY", "MTG_BINARY", "MTPROTOPROXY_SCRIPT", "MITA_BINARY"} {
 		t.Setenv(k, "")
@@ -110,37 +112,33 @@ func TestWireguardIsRegisteredOnlyByAnExplicitBin(t *testing.T) {
 
 	t.Setenv("WIREGUARD_BIN", "")
 	for _, a := range buildAdapters(logger) {
-		if a.Name() == "wireguard" || a.Engine() == "wireguard" {
+		if (a.Name() == "wireguard" || a.Engine() == "wireguard") && !core.IsAbsent(a) {
 			t.Fatalf("a wireguard adapter without WIREGUARD_BIN: %s/%s", a.Name(), a.Engine())
 		}
 	}
 
-	// With the variable: one more adapter, on wg0, and no stand-in or row for
-	// the engine in knownEngines (the node reports it only when asked to run
-	// it; the name joins the shared lists in 9.3).
+	// With the variable: the adapter in place of the stand-in.
 	t.Setenv("WIREGUARD_BIN", filepath.Join(nowhere, "wg"))
 	t.Setenv("WIREGUARD_INTERFACE", "wg7")
 	var found core.CoreAdapter
 	n := 0
 	for _, a := range buildAdapters(logger) {
 		n++
-		if a.Name() == "wireguard" {
+		if a.Name() == "wireguard" || a.Engine() == "wireguard" {
 			found = a
 		}
 	}
 	if found == nil {
 		t.Fatal("WIREGUARD_BIN is set and no wireguard adapter is registered")
 	}
+	if core.IsAbsent(found) {
+		t.Error("WIREGUARD_BIN is set and the wireguard row is still the absent stand-in")
+	}
 	if found.Engine() != "wireguard" {
 		t.Errorf("engine = %q", found.Engine())
 	}
-	if n != len(knownEngines)+1 {
-		t.Errorf("%d adapters, want the %d known engines and the wireguard one", n, len(knownEngines))
-	}
-	for _, k := range knownEngines {
-		if k.engine == "wireguard" || k.protocol == "wireguard" {
-			t.Errorf("knownEngines names wireguard: %+v (milestone 9.3 adds it)", k)
-		}
+	if n != len(knownEngines) {
+		t.Errorf("%d adapters, want one per known engine (%d), the wireguard adapter in place of its stand-in", n, len(knownEngines))
 	}
 	// Not installed: the file is not there, and Installed says so.
 	if inst, ok := found.(core.Installable); !ok || inst.Installed() {

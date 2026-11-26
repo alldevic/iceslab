@@ -100,7 +100,7 @@ func TestARefusedFlagNeverReachesTheToken(t *testing.T) {
 		{[]string{"--engines", "nope"}, "unknown core 'nope'"},
 		{[]string{"--engines", "xray,xray"}, "named twice"},
 		{[]string{"--engines", ""}, "names no core"},
-		{[]string{"--protocol", "wireguard"}, "Unknown protocol: wireguard"},
+		{[]string{"--protocol", "wireguardx"}, "Unknown protocol: wireguardx"},
 		{[]string{"--engines", "xray", "--xray-port", "8443"}, "--xray-port needs --xray-reality-private-key"},
 		{[]string{"--engines", "hysteria", "--xray-reality-private-key", "k"}, "--xray-reality-private-key: the REALITY pre-seed is written only on a node with xray"},
 		{[]string{"--xray-reality-dest", "a.example:443", "--xray-port", "1"}, "--xray-reality-dest --xray-port"},

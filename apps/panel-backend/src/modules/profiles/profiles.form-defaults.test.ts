@@ -27,6 +27,8 @@ const OPERATOR_INPUT: Partial<FormValues> = {
   name: 'new-profile',
   awgServerPriv: WG_TEST_PRIVATE_KEY,
   awgServerPub: WG_TEST_PUBLIC_KEY,
+  wgServerPriv: WG_TEST_PRIVATE_KEY,
+  wgServerPub: WG_TEST_PUBLIC_KEY,
   xrayPrivateKey: REALITY_TEST_PRIVATE_KEY,
   xrayPublicKey: REALITY_TEST_PUBLIC_KEY,
   naiveHostname: 'proxy.example.com',
@@ -35,10 +37,7 @@ const OPERATOR_INPUT: Partial<FormValues> = {
 
 describe('the new-profile defaults of every kind of the form are accepted by the API', () => {
   it('every protocol of the contract has a kind in the form', () => {
-    // `wireguard` has no kind until the profile form of 9.3; 9.3 drops this filter.
-    expect([...new Set(PROFILE_KINDS.map((k) => k.protocol))].sort()).toEqual(
-      PROTOCOL_NAMES.filter((p) => p !== 'wireguard').sort(),
-    );
+    expect([...new Set(PROFILE_KINDS.map((k) => k.protocol))].sort()).toEqual([...PROTOCOL_NAMES].sort());
   });
 
   it('every protocol has a config schema', () => {

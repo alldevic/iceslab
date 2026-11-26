@@ -267,10 +267,40 @@ func TestNothingNamedInstallsTheAgentAlone(t *testing.T) {
 	}
 }
 
+// Plain WireGuard goes on by either spelling, the same bootstrap, the same env
+// block: --engines wireguard, and the older --protocol wireguard. It is its own
+// core, not amneziawg's: the two names run side by side.
+func TestInstallerInstallsWireguardByEitherSpelling(t *testing.T) {
+	byEngine := runInstall(t, true, "", "wireguard", false)
+	byProtocol := runInstall(t, true, "wireguard", "", false)
+	both := runInstall(t, true, "wireguard", "amneziawg", false)
+	for name, r := range map[string]installRun{"--engines": byEngine, "--protocol": byProtocol, "both": both} {
+		if r.err != nil {
+			t.Fatalf("%s: %v\n%s", name, r.err, r.out)
+		}
+		if !strings.Contains(r.calls, "bootstrap-wireguard.sh \n") {
+			t.Errorf("%s: bootstrap-wireguard.sh did not run:\n%s", name, r.calls)
+		}
+		if !strings.Contains(r.env, "# >>> iceslab-node env:wireguard >>>\nSTUB_WIREGUARD=1\n") {
+			t.Errorf("%s: no wireguard block in the env:\n%s", name, r.env)
+		}
+	}
+	if byEngine.calls != "bootstrap-wireguard.sh \n" || byEngine.calls != byProtocol.calls || byEngine.env != byProtocol.env {
+		t.Errorf("--engines wireguard and --protocol wireguard differ:\ncalls %q / %q\nenv:\n%s\n---\n%s",
+			byEngine.calls, byProtocol.calls, byEngine.env, byProtocol.env)
+	}
+	if strings.Contains(byEngine.calls, "amneziawg") {
+		t.Errorf("wireguard pulled the AmneziaWG bootstrap in:\n%s", byEngine.calls)
+	}
+	if !strings.Contains(both.calls, "bootstrap-amneziawg.sh") || !strings.Contains(both.calls, "bootstrap-wireguard.sh") {
+		t.Errorf("both cores were named and one is missing:\n%s", both.calls)
+	}
+}
+
 func TestInstallerRefusesAnUnusableSet(t *testing.T) {
 	for _, c := range []struct{ protocol, engines, flags, says string }{
 		{"xray", "xray,xray", "", "named twice"},
-		{"xray", "xray,wireguard", "", "unknown core 'wireguard'"},
+		{"xray", "xray,wireguardx", "", "unknown core 'wireguardx'"},
 		{"", ",", "", "names no core"},
 		// --engines '' names a list and puts nothing in it: a typo, not a choice.
 		{"", "", "ENGINES_GIVEN=1", "names no core"},

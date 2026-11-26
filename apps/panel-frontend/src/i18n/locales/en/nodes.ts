@@ -71,6 +71,7 @@ export const nodes = {
       enginesRefusedToast: 'The server did not accept the node cores ({{code}}, {{field}}): {{message}}',
       enginesHint: 'Every ticked core is installed. Cores can be added or removed later, on the node page.',
       coreVersionsBuilt: 'built on the node from source (the @naive branch), no release to choose',
+      coreVersionsDistro: 'installed from the distribution\'s packages, its version is the distribution\'s, no release to choose',
       coreVersionsOthers_one: 'other cores ({{count}})',
       coreVersionsOthers_other: 'other cores ({{count}})',
       coreVersionsNote: 'These versions go into the install together with the bootstrap token. They can be changed on the node page afterwards.',

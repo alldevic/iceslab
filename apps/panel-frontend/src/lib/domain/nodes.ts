@@ -7,6 +7,7 @@ export type NodeProtocol =
   | 'xray'
   | 'hysteria'
   | 'amneziawg'
+  | 'wireguard'
   | 'naive'
   | 'shadowsocks'
   | 'mtproto'

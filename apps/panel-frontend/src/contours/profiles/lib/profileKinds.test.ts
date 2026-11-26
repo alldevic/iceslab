@@ -76,3 +76,22 @@ describe('MTProto на mtprotoproxy', () => {
     expect(defaults({ protocol: 'mtproto', engine: null, config: {} } as never).engine).toBe('native');
   });
 });
+
+describe('plain WireGuard as a kind of profile (9.3)', () => {
+  it('one native kind, on the native shelf, with its own tile text', () => {
+    const kinds = PROFILE_KINDS.filter((k) => k.protocol === 'wireguard');
+    expect(kinds).toEqual([{ key: 'wireguard', protocol: 'wireguard', engine: 'native', label: 'WireGuard' }]);
+    expect(engineTabOf('wireguard', 'native')).toBe('native');
+    expect(profileKindKey('wireguard', 'native')).toBe('wireguard');
+  });
+
+  it('every kind has a tile label, hint and note', async () => {
+    const { PROTOCOL_TILE_HINT, PROTOCOL_TILE_LABEL, PROTOCOL_TILE_NOTE } = await import('@/contours/profiles/lib/protocolTiles');
+    for (const k of PROFILE_KINDS) {
+      const key = k.key;
+      expect(PROTOCOL_TILE_LABEL[key], `${key} label`).toBeTruthy();
+      expect(PROTOCOL_TILE_HINT[key], `${key} hint`).toBeTruthy();
+      expect(PROTOCOL_TILE_NOTE[key], `${key} note`).toBeTruthy();
+    }
+  });
+});

@@ -22,6 +22,11 @@ import { ssConfigPatch } from '@/contours/profiles/lib/ssServerKey';
 import { portHopProblem, portHopWords, type PortHopField } from '@/contours/profiles/lib/portHopRange';
 import { awgHeaderProblems, type AwgHField } from '@/contours/profiles/lib/awgHeaders';
 import { AWG_RULE_WORDS, awgRuleProblems, type AwgRuleField } from '@/contours/profiles/lib/awgRules';
+import {
+  WIREGUARD_RULE_WORDS,
+  wireguardRuleProblems,
+  type WireguardRuleField,
+} from '@/contours/profiles/lib/wireguardRules';
 
 /**
  * Everything the profile form owns that is not markup: the Mantine form, the
@@ -80,6 +85,10 @@ export function useProfileForm({
       awgS2: (_v, values) => awgRuleError(values, 'awgS2'),
       awgServerPriv: (_v, values) => awgRuleError(values, 'awgServerPriv'),
       awgServerPub: (_v, values) => awgRuleError(values, 'awgServerPub'),
+      // Plain WireGuard: the subnet and the shape of both server keys.
+      wgSubnet: (_v, values) => wireguardRuleError(values, 'wgSubnet'),
+      wgServerPriv: (_v, values) => wireguardRuleError(values, 'wgServerPriv'),
+      wgServerPub: (_v, values) => wireguardRuleError(values, 'wgServerPub'),
     },
   });
 
@@ -91,6 +100,11 @@ export function useProfileForm({
   function awgRuleError(values: FormValues, field: AwgRuleField): string | null {
     if (values.protocol !== 'amneziawg') return null;
     return awgRuleProblems(values).has(field) ? t(AWG_RULE_WORDS[field]) : null;
+  }
+
+  function wireguardRuleError(values: FormValues, field: WireguardRuleField): string | null {
+    if (values.protocol !== 'wireguard') return null;
+    return wireguardRuleProblems(values).has(field) ? t(WIREGUARD_RULE_WORDS[field]) : null;
   }
 
   function portHopError(values: FormValues, field: PortHopField): string | null {
@@ -128,6 +142,14 @@ export function useProfileForm({
     const kp = await keypairMutation.mutateAsync('amneziawg');
     form.setValues({ ...form.values, awgServerPriv: kp.privateKey, awgServerPub: kp.publicKey });
     notifications.show({ color: 'green', message: 'AmneziaWG server keypair generated' });
+  }
+
+  // The same x25519 keypair and the same alphabet as AmneziaWG's: the server
+  // hands out `amneziawg` keys for both.
+  async function generateWgKeys() {
+    const kp = await keypairMutation.mutateAsync('amneziawg');
+    form.setValues({ ...form.values, wgServerPriv: kp.privateKey, wgServerPub: kp.publicKey });
+    notifications.show({ color: 'green', message: 'WireGuard server keypair generated' });
   }
 
   function applyAwgPreset(preset: 'tspu' | 'mobile' | 'custom') {
@@ -232,6 +254,7 @@ export function useProfileForm({
     keypairPending: keypairMutation.isPending,
     generateXrayKeys,
     generateAwgKeys,
+    generateWgKeys,
     applyAwgPreset,
     handleSubmit,
   };

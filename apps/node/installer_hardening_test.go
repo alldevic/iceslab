@@ -245,4 +245,24 @@ func TestEveryCoreConfigDirIsInReadWritePaths(t *testing.T) {
 			t.Errorf("%s is created for a core and is not in ReadWritePaths", d)
 		}
 	}
+	// The check above only holds what the installer made; a directory it never
+	// made passes it. So the directories the adapters write their configs in are
+	// named here, one by one: plain WireGuard's /etc/wireguard (wg0.conf and
+	// wg0.state.json) was missing from both lists, and the agent's write failed
+	// with "read-only file system" on a node that had the core installed.
+	made := map[string]bool{}
+	for _, d := range dirs {
+		made[d] = true
+	}
+	for _, d := range []string{
+		"/etc/xray", "/etc/hysteria", "/etc/amnezia/amneziawg", "/etc/caddy", "/etc/mtg",
+		"/etc/mtprotoproxy", "/etc/mita", "/etc/sing-box", "/etc/wireguard",
+	} {
+		if !made[d] {
+			t.Errorf("%s is a core's config directory and the installer does not create it", d)
+		}
+		if !listed[d] {
+			t.Errorf("%s is a core's config directory and is not in ReadWritePaths", d)
+		}
+	}
 }

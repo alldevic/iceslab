@@ -17,7 +17,7 @@
 
 <br>
 
-Self-hosted proxy management panel that runs the real upstream binary for each protocol instead of wrapping everything through Xray-core. Hysteria 2, Xray (VLESS / VMess / Trojan + REALITY), AmneziaWG kernel module, NaiveProxy (Caddy fork), Shadowsocks 2022, MTProto, Mieru, and a sing-box engine for TUIC / AnyTLS / ShadowTLS: each one is the actual project binary, managed by a Go node-agent under a unified `CoreAdapter` interface.
+Self-hosted proxy management panel that runs the real upstream binary for each protocol instead of wrapping everything through Xray-core. Hysteria 2, Xray (VLESS / VMess / Trojan + REALITY), AmneziaWG kernel module, plain WireGuard, NaiveProxy (Caddy fork), Shadowsocks 2022, MTProto, Mieru, and a sing-box engine for TUIC / AnyTLS / ShadowTLS: each one is the actual project binary, managed by a Go node-agent under a unified `CoreAdapter` interface.
 
 ## Why Iceslab
 
@@ -92,7 +92,7 @@ The flags a panel's command uses, for reading or adjusting it:
 |---|---|
 | `--panel-url <url>` | The panel the agent belongs to. `https://` only. |
 | `--bootstrap <token>` | The one-time token from the panel. `--bootstrap-file <path>` reads it from a file instead, so it never shows in the process list. |
-| `--engines <list>` | The cores, comma-separated, in any order: `xray`, `singbox`, `hysteria`, `amneziawg`, `mtproto`, `mieru`, `naive`. None: the agent alone. |
+| `--engines <list>` | The cores, comma-separated, in any order: `xray`, `singbox`, `hysteria`, `amneziawg`, `wireguard`, `mtproto`, `mieru`, `naive`. None: the agent alone. `--protocol wireguard` is the older spelling of the same. |
 | `--panel-ip <ip>[,<ip>]` | Only these addresses may reach the agent's port (ufw). |
 | `--port <n>` | The agent's mTLS port, default `1337`. |
 | `--hysteria-domain <name>` | The name Hysteria's certificate is issued for (ACME, HTTP-01). The panel sets it from the node's address when that is a name. |
@@ -116,6 +116,7 @@ Per core:
 - **Hysteria 2**: an A-record for the node's name, DNS only (UDP does not pass through Cloudflare). The agent writes `/etc/hysteria/config.yaml` and obtains the certificate on the panel's first push; a node on an IP gets the panel's self-signed one.
 - **NaiveProxy**: an A-record for the profile's `hostname`. Building it needs 2 GB RAM.
 - **AmneziaWG**: the amnezia DKMS kernel module plus `awg` / `awg-quick`. The default subnet is `10.66.66.0/24`, since `10.0.0.0/24` collides with the host gateway on some budget providers. Pick a port below 9999: RU mobile carriers DPI-drop outbound UDP/443, and 51820 is targeted as the WireGuard default. Clients: AmneziaVPN ≥ 4.8.12.9 or Hiddify Next ≥ 2.4; non-zero S3/S4 drop traffic in AmneziaVPN ([amnezia-client#2582](https://github.com/amnezia-vpn/amnezia-client/issues/2582)), so presets keep `S3=0 S4=0`.
+- **WireGuard** (plain, upstream): `wireguard-tools` from the distribution (the kernel has had the module since 5.6; no DKMS, no reboot). It runs beside AmneziaWG, on its own interface `wg0`, its own subnet (default `10.77.77.0/24`) and its own `/etc/wireguard`. The installer opens `443/udp` and `1234/udp` in ufw, as it does for AmneziaWG, and sets ufw's routed policy to allow. **Limits:** there is no obfuscation, so a network that blocks WireGuard blocks this; traffic leaves the node directly (it is not an entry of a cascade; zapret2 and WARP do not apply); the `.conf` carries no `DNS` line unless you set one. Any stock WireGuard client imports the `.conf` (`?format=wgconf&protocols=wireguard`). `--uninstall` takes `wg0` and the files the agent wrote away and leaves the package.
 - **Xray (REALITY), Shadowsocks 2022 (on Xray), MTProto, Mieru**: no public domain needed; MTProto picks its masquerade domain in the profile.
 
 A note on `node.address`: this is the mTLS endpoint the panel uses to reach the agent (port 1337 by default). For routed-style cores (Hysteria, Naive, MTProto) it's the same FQDN clients hit on :443; for IP-style cores (Xray REALITY, AmneziaWG) it's the bare VPS IP. Set it correctly when creating the node: changing it later means using Refresh bootstrap (key icon on the node row) to re-issue the agent cert with the matching SAN.
@@ -160,6 +161,7 @@ It opens a menu that explains each action (deploy, backend/frontend-only deploy,
 | Hysteria 2 | `hysteria server` from apernet/hysteria, with auth-callback, Brutal CC, Salamander obfs, port-hopping | native |
 | Xray | `xray run` with VLESS / VMess / Trojan; security REALITY, own-cert TLS or none; transports raw / ws / gRPC / xhttp / httpupgrade / kcp; Vision flow | native |
 | AmneziaWG | amnezia-vpn DKMS kernel module + `awg-quick` | native |
+| WireGuard | `wireguard-tools` (`wg` / `wg-quick`), no obfuscation | native |
 | NaiveProxy | Caddy fork (`klzgrad/forwardproxy@naive` via xcaddy) | native |
 | Shadowsocks 2022 | xray-core inbound with `2022-blake3-*` ciphers | reuses xray binary |
 | MTProto | `9seconds/mtg` Fake-TLS, per-inbound secret derived from (id, domain) | native |
@@ -210,7 +212,7 @@ One link per user: `https://panel.example.com/sub/<token>`. The same URL serves 
 | `singbox` | `?format=singbox` or UA | sing-box, Hiddify |
 | `xrayjson` | `?format=xrayjson` or UA | Xray-JSON importers |
 | `json` | `?format=json` | API integrations |
-| `wgconf` | `?format=wgconf` | AmneziaWG / wg-quick `.conf` |
+| `wgconf` | `?format=wgconf` | AmneziaWG or plain WireGuard `.conf` (`&protocols=wireguard` picks the plain one) |
 | HTML page | browser | landing page with QR + per-format links |
 
 User-Agent auto-detection is admin-editable (Subscription Response Rules page). Useful query params: `?topN=N` caps the list to the best nodes by region + load, `?bundle=url-test|balancer` picks the auto-failover flavor, `?routing=` overrides the routing preset per request.

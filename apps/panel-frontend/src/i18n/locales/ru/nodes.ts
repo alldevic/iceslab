@@ -80,6 +80,7 @@ export const nodes = {
       enginesHint: 'Ставятся все отмеченные ядра. Добавить или снять ядро можно потом, на странице ноды.',
       // Компонент без релиза на выбор (caddy-naive): строка есть, выбора нет.
       coreVersionsBuilt: 'собирается на ноде из исходников (ветка @naive), релиза на выбор нет',
+      coreVersionsDistro: 'ставится пакетом дистрибутива, версия его, релиза на выбор нет',
       coreVersionsOthers_one: 'остальные ядра ({{count}})',
       coreVersionsOthers_few: 'остальные ядра ({{count}})',
       coreVersionsOthers_many: 'остальные ядра ({{count}})',

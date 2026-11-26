@@ -429,6 +429,9 @@ export const RECIPE_SECRET_FIELDS = new Set([
   'xrayTlsKey',
   'awgServerPriv',
   'awgServerPub',
+  // Plain WireGuard (9.3): the same key material as AmneziaWG's.
+  'wgServerPriv',
+  'wgServerPub',
   'hyObfsPassword',
   'serverPsk',
   'ssPassword',

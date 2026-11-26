@@ -3,6 +3,33 @@
 All notable changes to Iceslab are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags.
 
+## Unreleased
+
+### Added
+
+- **Plain WireGuard**, beside AmneziaWG. A profile of the new protocol
+  `wireguard` (a subnet and the server keypair, generated in the form; no
+  obfuscation block) goes to a node that carries the engine, and the user's
+  `.conf` (`?format=wgconf&protocols=wireguard`) imports into any stock
+  WireGuard client. The node installs it with `--engines wireguard` or the
+  older `--protocol wireguard`: `wireguard-tools` from the distribution, no
+  DKMS, `/etc/wireguard` writable for the agent, `443/udp` and `1234/udp`
+  open in ufw. The node page lists the engine, installed or absent; a node
+  that has `wg` from the AmneziaWG install but not this engine shows it as
+  absent.
+  Limits: no obfuscation, so a network that blocks WireGuard blocks this one;
+  traffic leaves the node directly, it is not an entry of a cascade, and
+  zapret2 and WARP do not apply; the `.conf` has no `DNS` line by default.
+  The wireguard-tools version is the distribution's (the manifest lists the
+  component without a pin).
+
+### Fixed
+
+- The agent's unit written by the installer lists `/etc/wireguard` among its
+  writable paths, as it does every other core's directory; without it the
+  agent could not write the config of a WireGuard interface under
+  `ProtectSystem=strict`.
+
 ## v0.3.1 (2026-11-02)
 
 A patch to v0.3.0. A user is switched off and on again from the user drawer

@@ -39,22 +39,6 @@ const AGENT_CORES = join(
   '../../../../../apps/node/internal/core',
 );
 
-/**
- * TEMPORARY, NAMED EXCEPTION (milestone 9.3 DELETES this list).
- *
- * Engines whose agent adapter exists but whose wiring does not yet: the
- * engine name is not in ENGINE_NAMES, because the same file ties that list to
- * the `node_env_block` of every bootstrap-*.sh, to `envBlockEngines` in
- * apps/node/internal/server/declared.go, to ENGINE_BOOTSTRAP and to a manifest
- * component each. `wireguard` (the amneziawg package in plain mode) has none
- * of those until 9.3 adds its bootstrap and installer step together with the
- * name. This is the ONLY place the mirror is weakened; the engine check below
- * skips exactly these names and nothing else.
- */
-const ENGINES_AWAITING_WIRING: readonly string[] = [
-  'wireguard', // 9.1 plain mode of the amneziawg package; wired and removed here by 9.3
-];
-
 /** Every `adapter.go` under internal/core, read once. */
 function adapterSources(): { pkg: string; src: string }[] {
   return readdirSync(AGENT_CORES, { withFileTypes: true })
@@ -94,21 +78,7 @@ describe('the wire enumerations against the agent that fills them', () => {
         'this test is checking nothing. Fix the pattern, do not delete the test.',
     ).toBeGreaterThanOrEqual(7);
 
-    // ENGINES_AWAITING_WIRING (top of the file) holds the engines whose wiring milestone (9.3) is pending.
-    const missing = [...found].filter(
-      ([engine]) =>
-        !(ENGINE_NAMES as readonly string[]).includes(engine) && !ENGINES_AWAITING_WIRING.includes(engine),
-    );
-    // The exception holds only while it is true: an excepted engine the agent no
-    // longer answers with, or one already in ENGINE_NAMES, is a stale entry that
-    // the wiring milestone had to delete.
-    for (const engine of ENGINES_AWAITING_WIRING) {
-      expect(found.has(engine), `${engine} is excepted here and no adapter answers it any more`).toBe(true);
-      expect(
-        (ENGINE_NAMES as readonly string[]).includes(engine),
-        `${engine} is in ENGINE_NAMES now: remove it from ENGINES_AWAITING_WIRING`,
-      ).toBe(false);
-    }
+    const missing = [...found].filter(([engine]) => !(ENGINE_NAMES as readonly string[]).includes(engine));
     expect(
       missing.map(([engine, pkg]) => `${engine} (${pkg})`),
       'these engines are answered by the agent and missing from EngineName in ' +

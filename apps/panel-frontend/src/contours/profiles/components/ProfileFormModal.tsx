@@ -58,6 +58,7 @@ import { HysteriaSection } from '@/contours/profiles/components/ProfileForm/Hyst
 import { portHopWords, type PortHopField } from '@/contours/profiles/lib/portHopRange';
 import type { AwgHField } from '@/contours/profiles/lib/awgHeaders';
 import { AmneziawgSection } from '@/contours/profiles/components/ProfileForm/AmneziawgSection';
+import { WireguardSection } from '@/contours/profiles/components/ProfileForm/WireguardSection';
 import { NaiveSection } from '@/contours/profiles/components/ProfileForm/NaiveSection';
 import { ShadowsocksSection } from '@/contours/profiles/components/ProfileForm/ShadowsocksSection';
 import { MtprotoSection } from '@/contours/profiles/components/ProfileForm/MtprotoSection';
@@ -139,6 +140,7 @@ export function ProfileFormModal({
     keypairPending,
     generateXrayKeys,
     generateAwgKeys,
+    generateWgKeys,
     applyAwgPreset,
     handleSubmit,
   } = useProfileForm({ profile, opened, mode, onSubmit, onClose });
@@ -430,6 +432,16 @@ export function ProfileFormModal({
               profileId={profile?.id ?? null}
               awgKnown={awgKnown}
               awgRefusal={awgRefusal ?? null}
+            />
+          )}
+
+          {form.values.protocol === 'wireguard' && (
+            <WireguardSection
+              form={form}
+              isEdit={isEdit}
+              generateWgKeys={generateWgKeys}
+              keypairPending={keypairPending}
+              profileId={profile?.id ?? null}
             />
           )}
 

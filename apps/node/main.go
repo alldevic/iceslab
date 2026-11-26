@@ -362,10 +362,9 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 	// AWG ones. Registered only when WIREGUARD_BIN is SET, never on the
 	// presence of /usr/bin/wg: bootstrap-amneziawg.sh installs wireguard-tools
 	// too, and the engine would turn up "installed" on every AWG node nobody
-	// asked for it on. Nothing writes the variable until milestone 9.3 (the
-	// bootstrap that does), so until then a node differs from the base by
-	// nothing. The node's engine list does not name wireguard either
-	// (knownEngines, envBlockEngines: 9.3).
+	// asked for it on. bootstrap-wireguard.sh writes the variable (its env
+	// block); a node without it reports the engine as not installed
+	// (knownEngines).
 	if wgBinPath := os.Getenv("WIREGUARD_BIN"); wgBinPath != "" {
 		wgCfg := amneziawg.Config{
 			Protocol:     amneziawg.NameWireguard,
@@ -498,6 +497,7 @@ var knownEngines = []struct{ protocol, engine string }{
 	{"naive", "naive"},
 	{"mtproto", "mtproto"},
 	{"mtproto", "mtprotoproxy"},
+	{"wireguard", "wireguard"},
 	{"mieru", "mieru"},
 }
 

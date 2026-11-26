@@ -411,9 +411,11 @@ export function DeployProfileModal({ profile, onClose }: Props) {
           description={
             profile?.protocol === 'amneziawg'
               ? t('profileForm.deployHintAwgPort')
-              : plainPort !== null
-                ? t('profiles.deploy.portPlainHint', { port: plainPort })
-                : t('profiles.deploy.portAutoHint')
+              : profile?.protocol === 'wireguard'
+                ? t('profileForm.deployHintWgPort')
+                : plainPort !== null
+                  ? t('profiles.deploy.portPlainHint', { port: plainPort })
+                  : t('profiles.deploy.portAutoHint')
           }
           min={1}
           max={65535}

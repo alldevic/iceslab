@@ -40,7 +40,7 @@ export function WizardCoreVersions({
       {corePickable(c) ? (
         <CoreVersionSelect component={c} intent={value} onIntent={onChange} ariaLabel={c} />
       ) : (
-        <Text style={{ fontSize: 12, lineHeight: '17px', color: FAINT }}>{t('nodes.form.coreVersionsBuilt')}</Text>
+        <Text style={{ fontSize: 12, lineHeight: '17px', color: FAINT }}>{t(c === 'wireguard-tools' ? 'nodes.form.coreVersionsDistro' : 'nodes.form.coreVersionsBuilt')}</Text>
       )}
     </Box>
   );

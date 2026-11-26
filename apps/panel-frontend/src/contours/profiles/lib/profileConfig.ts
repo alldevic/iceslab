@@ -97,6 +97,14 @@ export function profileConfigOf(values: FormValues): Record<string, unknown> {
           i5: (values.awgI5 ?? '').trim(),
         },
       };
+    case 'wireguard':
+      // No obfuscation member, not even an empty one: the schema strips what it
+      // does not know and the node refuses an obfuscated push.
+      return {
+        subnet: values.wgSubnet,
+        serverPrivateKey: values.wgServerPriv,
+        serverPublicKey: values.wgServerPub,
+      };
     case 'naive':
       return {
         hostname: values.naiveHostname,

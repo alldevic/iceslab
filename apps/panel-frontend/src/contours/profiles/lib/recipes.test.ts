@@ -48,9 +48,13 @@ describe('рецепты снимка у каждой плитки', () => {
     expect(SNAPSHOT_RECIPES.every((r) => r.schemaVersion === 2 && r.source === 'builtin')).toBe(true);
   });
 
-  it('у каждой плитки PROFILE_KINDS не меньше одного рецепта', () => {
+  it('у каждой плитки PROFILE_KINDS не меньше одного рецепта, кроме wireguard', () => {
+    // Обычный WireGuard (9.3) без рецепта: панель своих рецептов не держит, их
+    // источник публичный реестр и его снимок (packages/shared/src/recipes.ts), а
+    // встроенный рецепт форка добавлять некуда. Остальная плитка без рецепта это
+    // дыра, а не решение.
     const bare = PROFILE_KINDS.filter((k) => onTile(k.key).length === 0).map((k) => k.key);
-    expect(bare).toEqual([]);
+    expect(bare).toEqual(['wireguard']);
   });
 
   it('рецепт плитки sing-box не показывается на плитке своего демона, и наоборот', () => {
@@ -137,7 +141,7 @@ describe('страж: RECIPE_APPLY_KEYS не несёт ключевого ма�
 });
 
 describe('recipeTile: плитка выводится из engine, protocol, subprotocol', () => {
-  it('на всех 16 плитках: рецепт с полями плитки ложится ровно на неё, как профиль (profileKindKey)', () => {
+  it('на всех 17 плитках: рецепт с полями плитки ложится ровно на неё, как профиль (profileKindKey)', () => {
     const tiles = [
       // A recipe says native or sing-box (RECIPE_ENGINES); mtprotoproxy has no recipes.
       ...PROFILE_KINDS.flatMap((k) =>
@@ -145,7 +149,7 @@ describe('recipeTile: плитка выводится из engine, protocol, sub
       ),
       ...PREVIEW_KINDS.map((k) => ({ key: k.key, r: { protocol: k.key, engine: 'native' as const } })),
     ];
-    expect(tiles).toHaveLength(16);
+    expect(tiles).toHaveLength(17);
     for (const { key, r } of tiles) expect(recipeTile(r), key).toBe(key);
   });
 

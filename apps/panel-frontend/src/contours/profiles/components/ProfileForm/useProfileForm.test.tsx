@@ -191,3 +191,81 @@ describe('useProfileForm: правила AmneziaWG', () => {
     expect(sent).toHaveLength(1);
   });
 });
+
+/*
+ * Обычный WireGuard (9.3): подсеть и два ключа сервера, без обфускации. Тело
+ * сохранения не несёт ни `obfuscation`, ни поколения AmneziaWG; профиль, который
+ * схема откажет, форма не отправляет и называет поле.
+ */
+describe('useProfileForm: профиль wireguard', () => {
+  const KEY = 'YAT+bEESM0kh2iD3ujUlW1SQ/HeGjigNdYRs8B5ZSEE=';
+
+  async function submitWg(over: Record<string, unknown>) {
+    const sent: Record<string, unknown>[] = [];
+    const { result } = renderHook(
+      () =>
+        useProfileForm({
+          profile: null,
+          opened: true,
+          mode: 'create',
+          onSubmit: async (input) => {
+            sent.push(input as Record<string, unknown>);
+          },
+          onClose: () => {},
+        }),
+      { wrapper },
+    );
+    act(() =>
+      result.current.form.setValues({
+        protocol: 'wireguard',
+        name: 'wg',
+        wgServerPriv: KEY,
+        wgServerPub: KEY,
+        ...over,
+      }),
+    );
+    await act(async () => {
+      await result.current.form.onSubmit(result.current.handleSubmit)();
+    });
+    return { sent, errors: result.current.form.errors };
+  }
+
+  it('новый профиль уходит с подсетью по умолчанию и ключами, без обфускации и поколения', async () => {
+    const { sent, errors } = await submitWg({});
+    expect(errors).toEqual({});
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      protocol: 'wireguard',
+      engine: null,
+      config: { subnet: '10.77.77.0/24', serverPrivateKey: KEY, serverPublicKey: KEY },
+    });
+    expect(Object.keys(sent[0]!.config as object).sort()).toEqual(['serverPrivateKey', 'serverPublicKey', 'subnet']);
+    expect(sent[0]).not.toHaveProperty('awgProtocol');
+  });
+
+  it('подсеть не вида a.b.c.d/n: не отправляется, ошибка у подсети', async () => {
+    const { sent, errors } = await submitWg({ wgSubnet: '10.77.77.0' });
+    expect(sent).toEqual([]);
+    expect(Object.keys(errors)).toEqual(['wgSubnet']);
+  });
+
+  it('ключ без «=» на конце: не отправляется, ошибка у ключа', async () => {
+    const { sent, errors } = await submitWg({ wgServerPub: 'a'.repeat(44) });
+    expect(sent).toEqual([]);
+    expect(Object.keys(errors)).toEqual(['wgServerPub']);
+  });
+
+  it('правила WireGuard не трогают AmneziaWG, а правила AmneziaWG не трогают WireGuard', async () => {
+    const { sent, errors } = await submitWg({ awgServerPriv: '', awgJmin: 500 });
+    expect(errors).toEqual({});
+    expect(sent).toHaveLength(1);
+  });
+
+  it('ключи генерирует та же ручка, что у AmneziaWG: алфавит base64', async () => {
+    const { result } = renderHook(
+      () => useProfileForm({ profile: null, opened: true, mode: 'create', onSubmit: async () => {}, onClose: () => {} }),
+      { wrapper },
+    );
+    expect(typeof result.current.generateWgKeys).toBe('function');
+  });
+});

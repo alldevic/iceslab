@@ -3,6 +3,7 @@ import { NETWORKS_CARRYING_VISION, REALITY_TRANSPORTS } from '@iceslab/shared';
 import { backendSource, exportedConst } from '@/test-support/backendSource';
 import { AWG_H_MIN } from '@/contours/profiles/lib/awgHeaders';
 import { AWG_S_GAP, WG_KEY_RE } from '@/contours/profiles/lib/awgRules';
+import { WG_SUBNET_RE } from '@/contours/profiles/lib/wireguardRules';
 import { MIERU_MTU } from '@/contours/profiles/lib/mieruMtu';
 import {
   FLOW_COMPATIBLE_TRANSPORTS,
@@ -65,5 +66,23 @@ describe('the AmneziaWG rules of the form against AmneziawgConfigSchema', () => 
   it('the two cross-field rules are the schema\'s: S1 + 56 = S2 and Jmin > Jmax', () => {
     expect(inbounds).toContain(`obfuscation.s1 + ${AWG_S_GAP} === obfuscation.s2`);
     expect(inbounds).toContain('obfuscation.jmin > obfuscation.jmax');
+  });
+});
+
+describe('the plain WireGuard rules of the form against WireguardConfigSchema', () => {
+  const schema = exportedConst(inbounds, 'WireguardConfigSchema');
+
+  it('the subnet pattern is the schema\'s', () => {
+    const m = schema.match(/subnet: z\.string\(\)\.regex\(\/(.+)\/\)/);
+    expect(m?.[1]).toBe(WG_SUBNET_RE.source);
+  });
+
+  it('both server keys are checked by the same WgKeySchema as AmneziaWG\'s', () => {
+    expect(schema).toContain('serverPrivateKey: WgKeySchema');
+    expect(schema).toContain('serverPublicKey: WgKeySchema');
+  });
+
+  it('there is no obfuscation member, so the form sends none', () => {
+    expect(schema).not.toContain('obfuscation:');
   });
 });

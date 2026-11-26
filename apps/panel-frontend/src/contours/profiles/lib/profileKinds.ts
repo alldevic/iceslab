@@ -42,6 +42,7 @@ export const PROFILE_KINDS: ProfileKind[] = [
   { key: 'hysteria', protocol: 'hysteria', engine: 'native', label: 'Hysteria 2 (native)' },
   { key: 'shadowsocks', protocol: 'shadowsocks', engine: 'native', label: 'Shadowsocks 2022 (native)' },
   { key: 'amneziawg', protocol: 'amneziawg', engine: 'native', label: 'AmneziaWG' },
+  { key: 'wireguard', protocol: 'wireguard', engine: 'native', label: 'WireGuard' },
   { key: 'naive', protocol: 'naive', engine: 'native', label: 'NaiveProxy' },
   { key: 'mtproto', protocol: 'mtproto', engine: 'native', label: 'MTProto (Telegram-only, mtg)' },
   {

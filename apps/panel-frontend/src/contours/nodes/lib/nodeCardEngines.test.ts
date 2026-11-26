@@ -87,3 +87,26 @@ describe('engineVersionLines: версии в подсказке из cores[]', 
     expect(engineVersionLines(['singbox'], undefined)).toEqual([{ engine: 'sing-box', version: null }]);
   });
 });
+
+describe('wireguard на карточке ноды (9.3)', () => {
+  it('короткое имя wg, в конце порядка ENGINE_NAMES', () => {
+    expect(ENGINE_SHORT.wireguard).toBe('wg');
+    expect(cardEngines(['wireguard', 'amneziawg', 'xray']).map((e) => ENGINE_SHORT[e])).toEqual(['xray', 'awg', 'wg']);
+  });
+
+  it('нода с AWG без блока wireguard: ядро отсутствует, а не стоит (wg от AWG-bootstrap не в счёт)', () => {
+    const cores = [
+      { name: 'amneziawg', engine: 'amneziawg', installed: true },
+      { name: 'wireguard', engine: 'wireguard', installed: false },
+    ] as NodeCoreInfo[];
+    expect(cardEngineSet([], cores)).toEqual(['amneziawg']);
+  });
+
+  it('нода с установленным wireguard показывает оба туннеля', () => {
+    const cores = [
+      { name: 'amneziawg', engine: 'amneziawg', installed: true },
+      { name: 'wireguard', engine: 'wireguard', installed: true },
+    ] as NodeCoreInfo[];
+    expect(cardEngineSet([], cores)).toEqual(['amneziawg', 'wireguard']);
+  });
+});

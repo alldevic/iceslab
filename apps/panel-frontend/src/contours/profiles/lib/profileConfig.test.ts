@@ -25,9 +25,7 @@ describe('profileConfigOf against PROFILE_CONFIG_KEYS.form (A-285)', () => {
     expect(Object.keys(SEEDED).sort()).toEqual([...PROTOCOL_NAMES].sort());
   });
 
-  // `wireguard` has no form until 9.3 (the form's protocol type is its own list),
-  // so there is no save to hold to the shared list yet; 9.3 drops this filter.
-  for (const protocol of PROTOCOL_NAMES.filter((p) => p !== 'wireguard')) {
+  for (const protocol of PROTOCOL_NAMES) {
     it(`${protocol}: defaults() seeds every form key and the save sends it back unchanged`, () => {
       const form = [...PROFILE_CONFIG_KEYS[protocol].form].sort();
       const sent = new Set<string>();

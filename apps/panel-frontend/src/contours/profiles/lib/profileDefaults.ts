@@ -74,6 +74,12 @@ export function defaults(profile: Profile | null): FormValues {
     awgI4: '',
     awgI5: '',
 
+    // Not AmneziaWG's 10.66.66.0/24: a node serves both and the panel refuses
+    // overlapping subnets (assertAwgSubnetFree).
+    wgSubnet: '10.77.77.0/24',
+    wgServerPriv: '',
+    wgServerPub: '',
+
     naiveHostname: '',
     naiveTlsEmail: '',
     naiveMasquerade: '/var/www/html',
@@ -166,6 +172,13 @@ export function defaults(profile: Profile | null): FormValues {
         awgI5: ((obf.i5 as string) ?? '') as string,
       };
     }
+    case 'wireguard':
+      return {
+        ...base,
+        wgSubnet: (cfg.subnet as string) ?? base.wgSubnet,
+        wgServerPriv: (cfg.serverPrivateKey as string) ?? '',
+        wgServerPub: (cfg.serverPublicKey as string) ?? '',
+      };
     case 'naive':
       return {
         ...base,

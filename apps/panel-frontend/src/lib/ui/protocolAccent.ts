@@ -11,6 +11,8 @@ export const PROTOCOL_ACCENT: Record<string, string> = {
   shadowsocks: '#F5A3B8',
   hysteria: '#7DD3FC',
   amneziawg: '#A7D8B9',
+  // Plain WireGuard: AmneziaWG's family, its own lighter shade.
+  wireguard: '#88C6A4',
   naive: '#F5B14C',
   mtproto: '#67E8F9',
   socks5: '#67E8F9',

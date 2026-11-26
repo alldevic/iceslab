@@ -44,6 +44,7 @@ export const CORE_COMPONENTS = [
   'amneziawg-tools',
   'mtg',
   'mtprotoproxy',
+  'wireguard-tools',
   'mita',
   'caddy-naive',
 ] as const;
@@ -369,6 +370,17 @@ export const CORE_VERSIONS: Record<CoreComponent, CoreVersionEntry> = {
     knownBad: [],
   },
 
+  'wireguard-tools': {
+    upstream: 'WireGuard/wireguard-tools',
+    reportedBy: { engine: 'wireguard', field: 'version' },
+    pinned: null,
+    unpinnedReason:
+      'Installed by apt from the distribution (wireguard-tools): the distribution decides the ' +
+      'version, there is no release file to pin. The node reports what `wg --version` says.',
+    releases: [],
+    knownBad: [],
+  },
+
   mita: {
     upstream: 'enfein/mieru',
     reportedBy: { engine: 'mieru', field: 'version' },
@@ -424,6 +436,7 @@ export const CORE_ENV_PREFIX: Record<CoreComponent, string> = {
   'amneziawg-tools': 'AWG_TOOLS',
   mtg: 'MTG',
   mtprotoproxy: 'MTPROTOPROXY',
+  'wireguard-tools': 'WIREGUARD_TOOLS',
   mita: 'MIERU',
   'caddy-naive': 'CADDY_NAIVE',
 };
@@ -614,6 +627,7 @@ export const ENGINE_BOOTSTRAP: Record<EngineName, string> = {
   amneziawg: 'bootstrap-amneziawg.sh',
   mtproto: 'bootstrap-mtg.sh',
   mtprotoproxy: 'bootstrap-mtprotoproxy.sh',
+  wireguard: 'bootstrap-wireguard.sh',
   mieru: 'bootstrap-mieru.sh',
   naive: 'bootstrap-naive.sh',
 };

@@ -97,6 +97,8 @@ export const profiles = {
         'amneziawg-module': 'AWG модуль',
         'amneziawg-tools': 'AWG tools',
         mtg: 'mtg',
+        mtprotoproxy: 'mtprotoproxy',
+        'wireguard-tools': 'wireguard-tools',
         mita: 'mita',
         'caddy-naive': 'caddy-naive',
       },
@@ -255,6 +257,8 @@ export const profiles = {
         awgJunkOrder: 'Jmin не может быть больше Jmax',
         awgPaddingGap: 'S1 + 56 не должно равняться S2 (это длина рукопожатия обычного WireGuard)',
         awgKeyShape: 'Ключ WireGuard: 44 символа base64, последний «=»',
+        wgSubnetHint: 'Не подсеть AmneziaWG на той же ноде; не бери 10.0.0.0/24',
+        wgSubnetShape: 'Подсеть вида 10.77.77.0/24',
         awgHWarning:
           'H1-H4 должны быть попарно уникальны, сейчас есть дубликаты. Жми «Re-roll» чтобы сгенерировать заново.',
         naiveHostnameLabel: 'Публичный хост',
@@ -351,6 +355,14 @@ export const profiles = {
     awgImportant3:
       'При миграции со старого AmneziaWG 1.0 - все ключи peer\'ов нужно перегенерить, со старыми не работает.',
     deployHintAwgPort: 'Для AmneziaWG: ≤ 9999, например 443 или 1234. 51820 не используй.',
+    deployHintWgPort: 'Для WireGuard: установщик открывает в ufw 443/udp и 1234/udp, другой порт откроешь сам. 51820 — известный порт по умолчанию.',
+    wgImportantTitle: 'Что важно знать про обычный WireGuard:',
+    wgImportant1:
+      'Без обфускации: DPI узнаёт рукопожатие сразу. Для сетей, где WireGuard режут, бери AmneziaWG.',
+    wgImportant2:
+      '.conf импортирует любой штатный клиент WireGuard (Windows, macOS, Linux, iOS, Android). Остальные форматы подписки его не несут.',
+    wgImportant3:
+      'Трафик выходит с ноды напрямую: это не вход каскада, zapret2 и WARP на него не действуют.',
     // Старая пара текстов читала node.protocol как ограничение. Это ярлык
     // основного адаптера, а не список того, что нода умеет: нода с ярлыком
     // tuic штатно несёт xray-профиль рядом. Теперь вопрос один: есть ли

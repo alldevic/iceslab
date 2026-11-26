@@ -17,7 +17,7 @@
 
 <br>
 
-Self-hosted панель для прокси, которая запускает настоящий апстрим-бинарник каждого протокола вместо того чтобы оборачивать всё через Xray-core. Hysteria 2, Xray (VLESS / VMess / Trojan + REALITY), AmneziaWG kernel module, NaiveProxy (Caddy fork), Shadowsocks 2022, MTProto, Mieru и движок sing-box для TUIC / AnyTLS / ShadowTLS: каждый это реальный бинарь проекта, под управлением Go node-agent через общий интерфейс `CoreAdapter`.
+Self-hosted панель для прокси, которая запускает настоящий апстрим-бинарник каждого протокола вместо того чтобы оборачивать всё через Xray-core. Hysteria 2, Xray (VLESS / VMess / Trojan + REALITY), AmneziaWG kernel module, обычный WireGuard, NaiveProxy (Caddy fork), Shadowsocks 2022, MTProto, Mieru и движок sing-box для TUIC / AnyTLS / ShadowTLS: каждый это реальный бинарь проекта, под управлением Go node-agent через общий интерфейс `CoreAdapter`.
 
 ## Зачем Iceslab
 
@@ -92,7 +92,7 @@ bash <(curl -fsSL .../install-iceslab-node.sh) \
 |---|---|
 | `--panel-url <url>` | Панель, к которой относится агент. Только `https://`. |
 | `--bootstrap <token>` | Одноразовый токен из панели. `--bootstrap-file <path>` читает его из файла, тогда он не виден в списке процессов. |
-| `--engines <список>` | Ядра через запятую, в любом порядке: `xray`, `singbox`, `hysteria`, `amneziawg`, `mtproto`, `mieru`, `naive`. Пусто: только агент. |
+| `--engines <список>` | Ядра через запятую, в любом порядке: `xray`, `singbox`, `hysteria`, `amneziawg`, `wireguard`, `mtproto`, `mieru`, `naive`. Пусто: только агент. `--protocol wireguard` это старое написание того же. |
 | `--panel-ip <ip>[,<ip>]` | Порт агента доступен только с этих адресов (ufw). |
 | `--port <n>` | mTLS-порт агента, по умолчанию `1337`. |
 | `--hysteria-domain <имя>` | Имя, на которое Hysteria получает сертификат (ACME, HTTP-01). Панель берёт его из адреса ноды, если это имя. |
@@ -116,6 +116,7 @@ bash <(curl -fsSL .../install-iceslab-node.sh) \
 - **Hysteria 2**: A-запись на имя ноды, только DNS (UDP через Cloudflare не проходит). Агент пишет `/etc/hysteria/config.yaml` и получает сертификат при первом пуше панели; нода на IP получает самоподписанный от панели.
 - **NaiveProxy**: A-запись на `hostname` профиля. Сборке нужно 2 GB RAM.
 - **AmneziaWG**: DKMS-модуль ядра amnezia и `awg` / `awg-quick`. Подсеть по умолчанию `10.66.66.0/24`, потому что `10.0.0.0/24` совпадает с host-gateway у некоторых бюджетных провайдеров. Порт ниже 9999: мобильные операторы в РФ режут исходящий UDP/443 по DPI, а 51820 как порт WireGuard по умолчанию ловят специально. Клиенты: AmneziaVPN ≥ 4.8.12.9 или Hiddify Next ≥ 2.4; ненулевые S3/S4 в AmneziaVPN рвут трафик ([amnezia-client#2582](https://github.com/amnezia-vpn/amnezia-client/issues/2582)), поэтому пресеты держат `S3=0 S4=0`.
+- **WireGuard** (обычный, апстрим): `wireguard-tools` из дистрибутива (модуль в ядре с 5.6: ни DKMS, ни перезагрузки). Работает рядом с AmneziaWG: свой интерфейс `wg0`, своя подсеть (по умолчанию `10.77.77.0/24`) и свой `/etc/wireguard`. Установщик открывает в ufw `443/udp` и `1234/udp`, как для AmneziaWG, и ставит политику routed в allow. **Ограничения:** обфускации нет, поэтому сеть, где WireGuard режут, режет и его; трафик выходит с ноды напрямую (это не вход каскада, zapret2 и WARP на него не действуют); в `.conf` нет строки `DNS`, пока вы её не зададите. `.conf` импортирует любой штатный клиент WireGuard (`?format=wgconf&protocols=wireguard`). `--uninstall` снимает `wg0` и файлы, написанные агентом, пакет оставляет.
 - **Xray (REALITY), Shadowsocks 2022 (на Xray), MTProto, Mieru**: публичный домен не нужен; домен маскировки MTProto выбирается в профиле.
 
 Про `node.address`: это mTLS-эндпоинт, через который панель ходит на агента (порт 1337 по умолчанию). Для routed-style ядер (Hysteria, Naive, MTProto) это тот же FQDN на котором клиенты будут стучаться в :443; для IP-style (Xray REALITY, AmneziaWG) это голый IP. Задавай правильно при создании ноды, потому что менять потом можно только через Refresh bootstrap (key-иконка в строке ноды) с перевыпуском cert под новый SAN.
@@ -160,6 +161,7 @@ bash scripts/iceslab.sh
 | Hysteria 2 | `hysteria server` из apernet/hysteria, с auth-callback, Brutal CC, Salamander obfs, port-hopping | native |
 | Xray | `xray run` с VLESS / VMess / Trojan; security REALITY, свой TLS-серт или none; транспорты raw / ws / gRPC / xhttp / httpupgrade / kcp; Vision flow | native |
 | AmneziaWG | amnezia-vpn DKMS kernel-модуль + `awg-quick` | native |
+| WireGuard | `wireguard-tools` (`wg` / `wg-quick`), без обфускации | native |
 | NaiveProxy | Caddy fork (`klzgrad/forwardproxy@naive` через xcaddy) | native |
 | Shadowsocks 2022 | xray-core inbound с `2022-blake3-*` шифрами | reuses xray binary |
 | MTProto | `9seconds/mtg` Fake-TLS, per-inbound secret из (id, domain) | native |
@@ -209,7 +211,7 @@ xray-конфиг. Переключатель на ноду, клиент мен
 | `singbox` | `?format=singbox` или UA | sing-box, Hiddify |
 | `xrayjson` | `?format=xrayjson` или UA | импортёры Xray-JSON |
 | `json` | `?format=json` | API-интеграции |
-| `wgconf` | `?format=wgconf` | AmneziaWG / wg-quick `.conf` |
+| `wgconf` | `?format=wgconf` | `.conf` AmneziaWG или обычного WireGuard (`&protocols=wireguard` выбирает обычный) |
 | HTML-страница | браузер | человекочитаемая страница с QR и ссылками |
 
 Автоопределение по User-Agent редактируется админом (страница Subscription Response Rules). Полезные query-параметры: `?topN=N` режет список до лучших нод по региону и нагрузке, `?bundle=url-test|balancer` выбирает режим авто-failover, `?routing=` переопределяет пресет маршрутизации на один запрос.

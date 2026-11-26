@@ -14,6 +14,7 @@ export const ENGINE_SHORT: Record<EngineName, string> = {
   mieru: 'mieru',
   mtproto: 'mtg',
   mtprotoproxy: 'mtpp',
+  wireguard: 'wg',
 };
 
 const ENGINE_FULL: Record<EngineName, string> = {
@@ -25,6 +26,7 @@ const ENGINE_FULL: Record<EngineName, string> = {
   mieru: 'mieru',
   mtproto: 'mtproto',
   mtprotoproxy: 'mtprotoproxy',
+  wireguard: 'wireguard',
 };
 
 /** Ядра намерения в порядке ENGINE_NAMES, как бы список ни хранился. */

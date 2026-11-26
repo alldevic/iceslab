@@ -79,6 +79,13 @@ export interface FormValues {
   awgI4: string;
   awgI5: string;
 
+  // Plain WireGuard (milestone 9.3): the subnet and the server keypair, no
+  // obfuscation; its own fields so a draft of one flavour never leaks into the
+  // other.
+  wgSubnet: string;
+  wgServerPriv: string;
+  wgServerPub: string;
+
   // Naive
   naiveHostname: string;
   naiveTlsEmail: string;

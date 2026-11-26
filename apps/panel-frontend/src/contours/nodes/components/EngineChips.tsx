@@ -14,6 +14,7 @@ const ENGINE_LABEL: Record<EngineName, string> = {
   mieru: 'Mieru',
   mtproto: 'MTProto',
   mtprotoproxy: 'MTProto (mtprotoproxy)',
+  wireguard: 'WireGuard',
 };
 
 /**

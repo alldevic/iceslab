@@ -32,7 +32,7 @@ type T = (key: string, opts?: Record<string, unknown>) => string;
 
 /** Engines that are one protocol's own core: their name says nothing an
  *  operator does not already read in the protocol, so they get one word. */
-const OWN_DAEMON = new Set<EngineName>(['hysteria', 'amneziawg', 'naive', 'mieru', 'mtproto']);
+const OWN_DAEMON = new Set<EngineName>(['hysteria', 'amneziawg', 'wireguard', 'naive', 'mieru', 'mtproto']);
 
 /**
  * The engine inside a PAIR, where the protocol stands right next to it:

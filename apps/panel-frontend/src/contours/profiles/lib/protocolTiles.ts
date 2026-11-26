@@ -27,6 +27,7 @@ export const PROTOCOL_TILE_HINT: Record<string, string> = {
   hysteria: 'QUIC, Brutal CC, port hopping',
   shadowsocks: 'blake3 ciphers, minimal overhead',
   amneziawg: 'WireGuard with obfuscation',
+  wireguard: 'Stock WireGuard, any client',
   naive: 'Chromium TLS, Caddy fork',
   mtproto: "Telegram's own, fake-TLS",
   'mtproto#mtprotoproxy': 'Fake-TLS, a secret per user',
@@ -48,6 +49,7 @@ export const PROTOCOL_TILE_LABEL: Record<string, string> = {
   hysteria: 'Hysteria 2',
   shadowsocks: 'Shadowsocks 2022',
   amneziawg: 'AmneziaWG',
+  wireguard: 'WireGuard',
   naive: 'NaiveProxy',
   mtproto: 'MTProto',
   'mtproto#mtprotoproxy': 'MTProto, per user',
@@ -72,6 +74,7 @@ export const PROTOCOL_TILE_NOTE: Record<string, string> = {
   hysteria: 'own process, own port',
   shadowsocks: 'multi-user, per-user keys',
   amneziawg: 'kernel module, no userspace proc',
+  wireguard: 'no obfuscation, easy for DPI to spot',
   naive: 'Caddy fork, no per-user stats',
   // The artboard prints the daemon's version here. The panel is not told it:
   // only the xray core reports a version, so the line names the binary and

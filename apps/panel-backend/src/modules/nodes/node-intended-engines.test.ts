@@ -177,6 +177,20 @@ describe('POST and PUT /api/nodes with intendedEngines', () => {
     expect(cmd).not.toContain('--protocol');
   });
 
+  it('takes wireguard as an engine, beside amneziawg, and the install line names it (9.3)', async () => {
+    const res = await create({ intendedEngines: ['wireguard', 'amneziawg'] });
+    expect(res.statusCode, res.body).toBe(201);
+    const node = JSON.parse(res.body);
+    // The order of ENGINE_NAMES; the label is the first of them.
+    expect(node).toMatchObject({ intendedEngines: ['amneziawg', 'wireguard'], protocol: 'amneziawg', singboxEngine: false });
+    expect(node.bootstrap.command).toContain('--engines amneziawg,wireguard');
+    const alone = JSON.parse((await create({ intendedEngines: ['wireguard'] })).body);
+    expect(alone).toMatchObject({ intendedEngines: ['wireguard'], protocol: 'wireguard' });
+    expect(alone.bootstrap.command).toContain('--engines wireguard');
+    // And a name that is no engine is still refused.
+    expect((await create({ intendedEngines: ['wireguardx'] })).statusCode).toBe(400);
+  });
+
   it('creates a node with no core, labelled none, whose install line names none', async () => {
     const empty = await create({ intendedEngines: [] });
     expect(empty.statusCode, empty.body).toBe(201);

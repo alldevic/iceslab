@@ -4,6 +4,7 @@ export const PROTOCOL_DOT: Record<string, string> = {
   shadowsocks: '#F5A3B8',
   hysteria: CYAN,
   amneziawg: MOSS,
+  wireguard: '#88C6A4',
   naive: AMBER,
   mtproto: CYAN_HI,
   mieru: '#C78BFA',

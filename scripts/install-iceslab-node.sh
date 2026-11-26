@@ -20,6 +20,8 @@
 #        mtprotoproxy                 -> bootstrap-mtprotoproxy.sh (alexbers/mtprotoproxy; only
 #                                        by this name: mtproto stays mtg. It opens NO firewall
 #                                        port, open the port of the profile's inbound yourself)
+#        wireguard                    -> bootstrap-wireguard.sh (wireguard-tools; upstream WireGuard
+#                                        next to AmneziaWG, its own interface and config)
 #        mieru                        -> bootstrap-mieru.sh (enfein/mieru, mita.service)
 #   6. Drops a systemd unit at /etc/systemd/system/iceslab-node.service
 #   7. Enables + starts the service, waits for it to be active
@@ -699,8 +701,9 @@ do_uninstall() {
 # keeps the cores themselves.
 
 # The open ufw rules the firewall step writes for the cores (443/tcp for xray,
-# naive, mtproto, mieru; 443/udp for hysteria, amneziawg, mieru; 80/tcp for the
-# ACME of hysteria and naive; 1234/udp for amneziawg), taken off by do_uninstall.
+# naive, mtproto, mieru; 443/udp for hysteria, amneziawg, wireguard, mieru; 80/tcp
+# for the ACME of hysteria and naive; 1234/udp for amneziawg, wireguard), taken
+# off by do_uninstall.
 PROTOCOL_PORTS="443/tcp 443/udp 80/tcp 1234/udp"
 UFW_DEFAULT_FILE=/etc/default/ufw
 PROC_ROOT=/proc
@@ -739,13 +742,18 @@ stop_cores() {
   for u in hysteria hysteria-server mita xray caddy-naive mtg iceslab-hyhop; do
     systemctl stop "$u" >/dev/null 2>&1 || true
   done
-  for u in $(systemctl list-units --plain --no-legend 'xray@*' 'awg-quick@*' 2>/dev/null | awk '{print $1}' || true); do
+  for u in $(systemctl list-units --plain --no-legend 'xray@*' 'awg-quick@*' 'wg-quick@*' 2>/dev/null | awk '{print $1}' || true); do
     systemctl stop "$u" >/dev/null 2>&1 || true
   done
   # Every AmneziaWG interface, the users' and a cascade leg's alike.
   for i in $(ip -o link show type amneziawg 2>/dev/null | awk -F': ' '{print $2}' || true); do
     i="${i%%@*}"
     awg-quick down "$i" >/dev/null 2>&1 || ip link del "$i" >/dev/null 2>&1 || true
+  done
+  # Every plain WireGuard interface (type wireguard; awg0 is not one).
+  for i in $(ip -o link show type wireguard 2>/dev/null | awk -F': ' '{print $2}' || true); do
+    i="${i%%@*}"
+    wg-quick down "$i" >/dev/null 2>&1 || ip link del "$i" >/dev/null 2>&1 || true
   done
   for p in $CORE_PROCESSES; do
     pkill -TERM -x "$p" >/dev/null 2>&1 || true
@@ -781,6 +789,9 @@ core_present() {
     naive)     [[ -e /usr/local/bin/caddy-naive ]] ;;
     mieru)     [[ -e /usr/local/bin/mita ]] || dpkg -s mita >/dev/null 2>&1 ;;
     amneziawg) command -v awg >/dev/null 2>&1 || [[ -n "$(dkms status amneziawg 2>/dev/null || true)" ]] ;;
+    # wg is on every AWG node too; the env block is what says the node was set
+    # up for plain WireGuard (bootstrap-wireguard.sh writes it).
+    wireguard) grep -q '^# >>> iceslab-node env:wireguard >>>' "${ICESLAB_NODE_ENV:-/etc/iceslab-node/env}" 2>/dev/null ;;
     *) return 1 ;;
   esac
 }
@@ -911,7 +922,7 @@ resolve_bootstrap() {
 
 # ───── Cores: which, and how each goes on ─────
 
-KNOWN_ENGINES="xray singbox hysteria amneziawg mtproto mtprotoproxy mieru naive"
+KNOWN_ENGINES="xray singbox hysteria amneziawg mtproto mtprotoproxy wireguard mieru naive"
 
 # native_engine_of <protocol>: the core a --protocol runs on. The protocol is
 # a label of the install, not a core: shadowsocks runs inside xray, and tuic,
@@ -920,7 +931,7 @@ native_engine_of() {
   case "$1" in
     xray|shadowsocks)                       echo xray ;;
     tuic|anytls|shadowtls)                  echo singbox ;;
-    hysteria|amneziawg|naive|mtproto|mieru) echo "$1" ;;
+    hysteria|amneziawg|naive|mtproto|mieru|wireguard) echo "$1" ;;
     *) return 1 ;;
   esac
 }
@@ -936,6 +947,7 @@ bootstrap_of() {
     amneziawg) echo bootstrap-amneziawg.sh ;;
     mtproto)   echo bootstrap-mtg.sh ;;
     mtprotoproxy) echo bootstrap-mtprotoproxy.sh ;;
+    wireguard) echo bootstrap-wireguard.sh ;;
     mieru)     echo bootstrap-mieru.sh ;;
     naive)     echo bootstrap-naive.sh ;;
     *) return 1 ;;
@@ -1181,6 +1193,7 @@ legacy_primary_env() {
     singbox|tuic|anytls|shadowtls)
       printf 'SINGBOX_BINARY=/usr/local/bin/sing-box\nSINGBOX_CERT=/etc/sing-box/cert.pem\nSINGBOX_KEY=/etc/sing-box/key.pem\n' >>"$ENV_FILE" ;;
     amneziawg) ;; # the agent finds awg on its own
+    wireguard) ;; # bootstrap-wireguard.sh writes its block
   esac
 }
 
@@ -1232,7 +1245,7 @@ while [[ $# -gt 0 ]]; do
     --ssh-port)           SSH_PORT="$2"; shift 2 ;;
     --core-source)        ICESLAB_CORE_SOURCE="$2"; shift 2 ;;
     # The cores this node gets, comma-separated, in any order:
-    # xray,singbox,hysteria,amneziawg,mtproto,mtprotoproxy,mieru,naive. See resolve_engines.
+    # xray,singbox,hysteria,amneziawg,mtproto,mtprotoproxy,wireguard,mieru,naive. See resolve_engines.
     --engines)            ENGINES_ARG="$2"; ENGINES_GIVEN=1; shift 2 ;;
     # The old spelling of adding singbox, still accepted.
     --with-singbox)       WITH_SINGBOX=1; shift ;;
@@ -1271,8 +1284,8 @@ if [[ $UNINSTALL -eq 0 ]]; then
   # The cores come from --engines; --protocol (the older spelling) is optional
   # and adds its core. Nothing named at all: the agent alone (25.09), no menu.
   case "$PROTOCOL" in
-    ""|hysteria|xray|amneziawg|naive|shadowsocks|mtproto|mieru|tuic|anytls|shadowtls) ;;
-    *)  fail "Unknown protocol: $PROTOCOL (valid: hysteria|xray|amneziawg|naive|shadowsocks|mtproto|mieru|tuic|anytls|shadowtls)" ;;
+    ""|hysteria|xray|amneziawg|wireguard|naive|shadowsocks|mtproto|mieru|tuic|anytls|shadowtls) ;;
+    *)  fail "Unknown protocol: $PROTOCOL (valid: hysteria|xray|amneziawg|wireguard|naive|shadowsocks|mtproto|mieru|tuic|anytls|shadowtls)" ;;
   esac
   resolve_engines
   check_hysteria_flags
@@ -1620,7 +1633,7 @@ mkdir -p "$ENV_DIR"
 # explicit ReadWritePaths. ReadWritePaths can't create directories, only
 # permit writes inside existing ones, so we pre-create every per-protocol
 # config dir here, even if the protocol isn't installed on this node.
-mkdir -p /etc/xray /etc/hysteria /etc/amnezia/amneziawg /etc/caddy /etc/mtg /etc/mtprotoproxy /etc/mita /etc/sing-box
+mkdir -p /etc/xray /etc/hysteria /etc/amnezia/amneziawg /etc/caddy /etc/mtg /etc/mtprotoproxy /etc/mita /etc/sing-box /etc/wireguard
 ENV_FILE="$ENV_DIR/env"
 
 # The file is written BEFORE the cores go on: every bootstrap writes its own
@@ -1834,8 +1847,9 @@ if [[ "${SKIP_FIREWALL:-0}" != "1" ]]; then
     xray)
       ufw allow 443/tcp                  >/dev/null 2>&1 || true
       ;;
-    amneziawg)
-      # Per upstream amnezia.org docs: pick a port BELOW 9999 (some ISPs
+    amneziawg|wireguard)
+      # wireguard: the same ports and the same routed policy (upstream WireGuard
+      # is a routed VPN too, on wg0). Per upstream amnezia.org docs: pick a port BELOW 9999 (some ISPs
       # block UDP on high ports, and 51820 is the well-known WireGuard
       # default that DPI specifically targets). We pre-open 443 (HTTPS-
       # masquerade) and 1234 (recommended by upstream as an example
@@ -1983,7 +1997,7 @@ ProtectHome=true
 # /etc/sing-box: the sing-box adapters write their configs there (tuic,
 # anytls, shadowtls, and the xray-family, hy2 and ss engines); it was missing
 # from this list while every other core's directory was on it.
-ReadWritePaths=-/var/log -/etc/iceslab-node -/etc/hysteria -/etc/xray -/usr/local/etc/xray -/etc/amnezia/amneziawg -/etc/caddy -/etc/mtg -/etc/mtprotoproxy -/etc/mita -/var/lib/mita -/etc/sing-box -/run -/etc/iptables -/etc/ufw
+ReadWritePaths=-/var/log -/etc/iceslab-node -/etc/hysteria -/etc/xray -/usr/local/etc/xray -/etc/amnezia/amneziawg -/etc/wireguard -/etc/caddy -/etc/mtg -/etc/mtprotoproxy -/etc/mita -/var/lib/mita -/etc/sing-box -/run -/etc/iptables -/etc/ufw
 PrivateTmp=true
 
 # Journald log limits; without these a node running for months can balloon

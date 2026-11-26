@@ -145,9 +145,13 @@ func runUninstallWith(t *testing.T, o uninstallOpts) uninstallRun {
 		"ufw":       note + `if [ "$1" = status ]; then cat '` + statusFile + "'; fi\n",
 		"systemctl": note,
 		"awg-quick": note,
+		"wg-quick":  note,
 		"pkill":     note,
 		"pgrep":     "exit 1\n",
-		"ip":        note + `if [ "$1" = -o ]; then echo '7: awg0: <POINTOPOINT,NOARP,UP> mtu 1420'; echo '9: awg-l1: <POINTOPOINT,NOARP,UP> mtu 1420'; fi` + "\n",
+		"ip":        note +
+			// The interfaces by type, as `ip -o link show type X` lists them: awg0 is
+			// not a wireguard-type interface and wg0 is not an amneziawg one.
+			`if [ "$1" = -o ]; then case "$*" in *"type wireguard"*) echo '11: wg0: <POINTOPOINT,NOARP,UP> mtu 1420' ;; *) echo '7: awg0: <POINTOPOINT,NOARP,UP> mtu 1420'; echo '9: awg-l1: <POINTOPOINT,NOARP,UP> mtu 1420' ;; esac; fi` + "\n",
 	})
 	keep := "0"
 	if keepCores {
@@ -155,7 +159,7 @@ func runUninstallWith(t *testing.T, o uninstallOpts) uninstallRun {
 	}
 	prog := "set -euo pipefail\n" +
 		"log() { echo \"log: $*\"; echo \"log: $*\" >>'" + calls + "'; }\nwarn() { echo \"warn: $*\"; }\nfail() { echo \"fail: $*\"; exit 1; }\n" +
-		"KNOWN_ENGINES=\"xray singbox hysteria amneziawg mtproto mtprotoproxy mieru naive\"\n" +
+		"KNOWN_ENGINES=\"xray singbox hysteria amneziawg mtproto mtprotoproxy wireguard mieru naive\"\n" +
 		"CORE_PROCESSES=\"xray sing-box hysteria mtg caddy-naive mita\"\n" +
 		"MTPROTOPROXY_SCRIPT_PATH=/nonexistent/mtprotoproxy.py\n" +
 		installerFunc(t, "bootstrap_of") + installerFunc(t, "stop_cores") + installerFunc(t, "remove_cores") +
@@ -227,6 +231,14 @@ func TestUninstallStopsThenRemovesThenDeletesTheCheckout(t *testing.T) {
 	if at(r.calls, "awg-quick down awg-l1") == -1 {
 		t.Errorf("the cascade leg's interface was left up:\n%s", r.calls)
 	}
+	// Plain WireGuard's wg0 goes down with wg-quick, and only wg0: the awg
+	// interfaces are not its to touch.
+	if at(r.calls, "wg-quick down wg0") == -1 {
+		t.Errorf("the plain WireGuard interface was left up:\n%s", r.calls)
+	}
+	if at(r.calls, "wg-quick down awg") != -1 {
+		t.Errorf("wg-quick was asked to bring an AmneziaWG interface down:\n%s", r.calls)
+	}
 	for _, line := range strings.Split(r.calls, "\n") {
 		if strings.HasPrefix(line, "bootstrap ") && !strings.HasSuffix(line, "--remove checkout=yes") {
 			t.Errorf("a bootstrap ran without --remove or without its checkout: %q", line)
@@ -274,7 +286,7 @@ func TestKeepCoresTouchesNoCore(t *testing.T) {
 	if r.err != nil {
 		t.Fatalf("%v\n%s", r.err, r.out)
 	}
-	for _, not := range []string{"bootstrap ", "pkill ", "awg-quick "} {
+	for _, not := range []string{"bootstrap ", "pkill ", "awg-quick ", "wg-quick "} {
 		if at(r.calls, not) != -1 {
 			t.Errorf("--keep-cores ran %q:\n%s", not, r.calls)
 		}

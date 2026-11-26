@@ -91,6 +91,8 @@ export const profiles = {
         'amneziawg-module': 'AWG module',
         'amneziawg-tools': 'AWG tools',
         mtg: 'mtg',
+        mtprotoproxy: 'mtprotoproxy',
+        'wireguard-tools': 'wireguard-tools',
         mita: 'mita',
         'caddy-naive': 'caddy-naive',
       },
@@ -247,6 +249,8 @@ export const profiles = {
         awgJunkOrder: 'Jmin must not be above Jmax',
         awgPaddingGap: 'S1 + 56 must not equal S2 (the handshake length of plain WireGuard)',
         awgKeyShape: 'A WireGuard key: 44 base64 characters ending in =',
+        wgSubnetHint: 'Not the AmneziaWG subnet of the same node; avoid 10.0.0.0/24',
+        wgSubnetShape: 'A subnet like 10.77.77.0/24',
         awgHWarning:
           'H1-H4 must be pairwise-unique, there are duplicates. Click Re-roll to regenerate.',
         naiveHostnameLabel: 'Public hostname',
@@ -340,6 +344,14 @@ export const profiles = {
     awgImportant3:
       'Migrating from AmneziaWG 1.0 - you need to regenerate all peer keys; old keys won\'t work.',
     deployHintAwgPort: 'For AmneziaWG: ≤ 9999, e.g. 443 or 1234. Don\'t use 51820.',
+    deployHintWgPort: 'For WireGuard: the installer opens 443/udp and 1234/udp in ufw; any other port you open yourself. 51820 is the well-known default.',
+    wgImportantTitle: 'What you should know about plain WireGuard:',
+    wgImportant1:
+      'No obfuscation: DPI recognises the handshake at once. For networks that block WireGuard use AmneziaWG.',
+    wgImportant2:
+      'Any stock WireGuard client imports the .conf (Windows, macOS, Linux, iOS, Android). Subscription formats other than the .conf do not carry it.',
+    wgImportant3:
+      'Traffic leaves the node directly: it is not an entry of a cascade, and zapret2 and WARP do not apply to it.',
     // The old pair of texts read node.protocol as a restriction. It is a label
     // for the primary adapter, not a list of what the node can run: a node
     // labelled tuic serves an xray profile beside it every day. The question is

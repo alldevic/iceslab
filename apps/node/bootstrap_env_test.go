@@ -35,6 +35,7 @@ var bootstraps = map[string]string{
 	"amneziawg":    "bootstrap-amneziawg.sh",
 	"mtproto":      "bootstrap-mtg.sh",
 	"mtprotoproxy": "bootstrap-mtprotoproxy.sh",
+	"wireguard":    "bootstrap-wireguard.sh",
 	"mieru":        "bootstrap-mieru.sh",
 	"naive":        "bootstrap-naive.sh",
 }
