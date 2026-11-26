@@ -16,10 +16,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // vi.hoisted: the mock factory is lifted above every import, so a plain const
 // would still be in its temporal dead zone when the factory runs.
-const { emitted } = vi.hoisted(() => ({ emitted: [] as string[] }));
+const { emitted, emittedPayloads } = vi.hoisted(() => ({
+  emitted: [] as string[],
+  emittedPayloads: [] as [string, unknown][],
+}));
 vi.mock('../../lib/notify/webhook.js', () => ({
-  emitWebhook: (event: string) => {
+  emitWebhook: (event: string, payload: unknown) => {
     emitted.push(event);
+    emittedPayloads.push([event, payload]);
   },
 }));
 
@@ -52,6 +56,7 @@ const FORWARDED = [
   'node.created',
   'node.status-changed',
   'node.deleted',
+  'cascade.exits-changed',
   'profile.created',
   'profile.updated',
   'profile.deleted',
@@ -83,6 +88,7 @@ function settle(): Promise<void> {
 
 beforeEach(() => {
   emitted.length = 0;
+  emittedPayloads.length = 0;
 });
 
 describe('the webhook registry', () => {
@@ -129,6 +135,16 @@ describe('the webhook registry', () => {
       [],
     );
     expect(FORWARDED.filter((e) => INTERNAL.includes(e))).toEqual([]);
+  });
+
+  // Classified is not delivered: the payload has to arrive as the receiver is
+  // promised it.
+  it('hands cascade.exits-changed to emitWebhook with the same payload', async () => {
+    registerWebhookEventHandlers();
+    const payload = { cascadeId: 'c1', cascadeName: 'n', live: 0, total: 2 };
+    eventBus.emit('cascade.exits-changed', payload);
+    await settle();
+    expect(emittedPayloads).toEqual([['cascade.exits-changed', payload]]);
   });
 
   // The bus has `on` and no `off`: a second subscription is a second delivery

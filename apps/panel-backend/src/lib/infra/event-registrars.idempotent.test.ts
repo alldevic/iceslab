@@ -5,6 +5,7 @@ import { registerUserEventHandlers } from '../../modules/users/users.events.js';
 import { registerNodeEventHandlers } from '../../modules/nodes/nodes.events.js';
 import { registerInboundEventHandlers } from '../../modules/inbounds/inbounds.events.js';
 import { registerWebhookEventHandlers } from '../../modules/webhooks/webhook.events.js';
+import { registerCascadeEventHandlers } from '../../modules/cascades/cascade.events.js';
 import { registerBindingsCacheBust } from '../../modules/subscription/subscription.bindings-cache.js';
 
 /**
@@ -36,6 +37,7 @@ const WATCHED: (keyof DomainEventMap)[] = [
   'binding.updated',
   'binding.deleted',
   'cascade.changed',
+  'cascade.exits-changed',
 ];
 
 const snapshot = (): Record<string, number> =>
@@ -52,6 +54,7 @@ describe('the bus is subscribed once per process', () => {
     ['registerNodeEventHandlers', registerNodeEventHandlers],
     ['registerInboundEventHandlers', registerInboundEventHandlers],
     ['registerWebhookEventHandlers', registerWebhookEventHandlers],
+    ['registerCascadeEventHandlers', registerCascadeEventHandlers],
     ['registerBindingsCacheBust', registerBindingsCacheBust],
   ];
 

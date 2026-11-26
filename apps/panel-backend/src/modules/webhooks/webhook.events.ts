@@ -7,7 +7,7 @@ import { emitWebhook } from '../../lib/notify/webhook.js';
  * One subscriber; the events are already emitted onto the typed event bus by
  * the services, so there are no call-site changes. `binding.*` is
  * node-push plumbing (interesting to the node-agent, not to a billing bot), so
- * only the user / profile / node lifecycle is forwarded.
+ * only the user / profile / node lifecycle and the cascade exits state are forwarded.
  *
  * The four an operator's bot actually waits for are now all here: a node going
  * down or coming back (`node.status-changed`), a user expiring or hitting their
@@ -40,6 +40,10 @@ export function registerWebhookEventHandlers(): void {
   // back" without keeping state of its own.
   forward('node.status-changed');
   forward('node.deleted');
+  // A cascade losing its last live exit, or getting one back. Its entry refuses
+  // connections in that state, so without this a receiver hears it from the
+  // subscribers.
+  forward('cascade.exits-changed');
   forward('profile.created');
   forward('profile.updated');
   forward('profile.deleted');

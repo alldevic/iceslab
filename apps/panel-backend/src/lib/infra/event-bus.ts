@@ -98,6 +98,13 @@ export interface DomainEventMap {
   // DB and never reached the nodes until an unrelated profile/binding edit
   // fired a re-push. Caught live during the first cascade field test 2026-06-17.
   'cascade.changed':      { nodeIds: string[] };
+  // cascade.exits-changed → a cascade has no live exit left (live 0), or got its
+  // first one back (live 1). With no live exit the entry refuses subscribers'
+  // connections, which the panel used to say nothing about. Edge-triggered off
+  // node.status-changed, so it fires on the flip, not on every poll. Forwarded
+  // to external webhooks (webhook.events.ts). Exits are the directions' nodes;
+  // a direction on a named outbound has no node status and is not counted.
+  'cascade.exits-changed': { cascadeId: string; cascadeName: string; live: number; total: number };
   // geo.rolledOut → a rollout moved these nodes' pins of one geo set (phase
   // 9.2). Their next push lays out the new file and names it, so they need
   // one now; nobody else's push carries a new list.
