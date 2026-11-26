@@ -48,6 +48,35 @@ export const HysteriaConfigSchema = z.object({
   portHoppingEnd: z.number().int().min(1024).max(65535).optional(),
 });
 
+/**
+ * An X25519 key as REALITY spells it: base64url of 32 bytes, unpadded, so
+ * exactly 43 characters out of [A-Za-z0-9_-].
+ *
+ * This is NOT the WireGuard alphabet. xray decodes both `privateKey` and the
+ * client's `publicKey` with base64.RawURLEncoding and refuses anything else
+ * (infra/conf/transport_security.go), so a standard-base64 key (`+`, `/`, `=`)
+ * saves fine, pushes fine, and then xray rejects the config on the node: the
+ * panel says "inbound failed to apply" and the reason exists only in the node's
+ * journal. Also catches a truncated paste.
+ *
+ * Empty stays legal: it is the "not configured yet" state the form starts in.
+ */
+const RealityKeySchema = z
+  .string()
+  .max(128)
+  .refine(
+    (v) => v === '' || /^[A-Za-z0-9_-]{43}$/.test(v),
+    "must be a base64url X25519 key: 43 chars from [A-Za-z0-9_-], no + / or = (that alphabet is WireGuard's, and xray rejects it)",
+  )
+  .default('');
+
+/**
+ * The transports REALITY can carry, per xray itself:
+ * `infra/conf: REALITY only supports RAW, XHTTP and gRPC for now.`
+ * Exported for the frontend mirror test (milestone 6.5).
+ */
+export const REALITY_TRANSPORTS = ['raw', 'xhttp', 'grpc'] as const;
+
 export const XrayConfigSchema = z.object({
   /**
    * Stream security. 'reality' (default) or 'none' (plain transport, e.g.
@@ -92,9 +121,9 @@ export const XrayConfigSchema = z.object({
     .array(z.string().regex(/^[0-9a-fA-F]{0,16}$/))
     .max(8)
     .default([]),
-  realityPrivateKey: z.string().max(128).default(''),
+  realityPrivateKey: RealityKeySchema,
   /** REALITY public key paired with privateKey, emitted in client URI. */
-  realityPublicKey: z.string().max(128).default(''),
+  realityPublicKey: RealityKeySchema,
   /** REALITY protocol version mirrored to the upstream TLS dest. 0 (default)
    *  is the conservative choice; 1/2 enable newer REALITY handshake variants. */
   realityXver: z.number().int().min(0).max(2).default(0),
@@ -136,9 +165,10 @@ export const XrayConfigSchema = z.object({
   fingerprint: z.string().max(32).default('chrome'),
   /**
    * Stream transport. v24.9.30 names: `raw` (was `tcp`), `xhttp` (was
-   * `splithttp`). REALITY+Vision canonical is `raw`. `ws`/`grpc`/`xhttp` work
-   * but Vision is incompatible with `ws`/`grpc`, the adapter doesn't enforce
-   * this at write time, the operator must align flow + network themselves.
+   * `splithttp`). REALITY+Vision canonical is `raw`. REALITY carries only
+   * REALITY_TRANSPORTS (superRefine below); Vision rides only the transports in
+   * NETWORKS_CARRYING_VISION (xray-transport-fields.ts), which sweeps `flow` on
+   * save and on the binding merge.
    *
    * Slice 24c part 2 added `httpupgrade` (CDN-friendly, no WebSocket
    * handshake overhead) and `kcp` (UDP-based, useful on lossy networks).
@@ -220,6 +250,19 @@ export const XrayConfigSchema = z.object({
   // be a profile no client can use, so it is refused here rather than
   // rendered.
   .superRefine((cfg, ctx) => {
+    // REALITY carries only three transports, and xray refuses the config
+    // outright for the rest (measured on 26.3.27: ws / kcp -> `infra/conf:
+    // REALITY only supports RAW, XHTTP and gRPC for now.`). Saved, the agent
+    // writes the config, xray exits and restart-loops, taking every other inbound
+    // on the node down; the reason stays in the node's journal. Only REALITY is
+    // restricted: plain TLS over WebSocket is a good inbound and still saves.
+    if (cfg.security === 'reality' && !(REALITY_TRANSPORTS as readonly string[]).includes(cfg.network)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['network'],
+        message: `REALITY carries only ${REALITY_TRANSPORTS.join(', ')}: xray refuses to load a ${cfg.network} inbound with REALITY and the node's core restart-loops, taking every other inbound on it down too`,
+      });
+    }
     if (!(XRAY_PLAIN_SUBPROTOCOLS as readonly string[]).includes(cfg.subprotocol)) return;
     if (cfg.security !== 'none') {
       ctx.addIssue({

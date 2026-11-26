@@ -47,7 +47,8 @@ describe('the old transport spelling', () => {
 
   it('keeps the other transports working', () => {
     for (const network of ['xhttp', 'ws', 'grpc', 'httpupgrade', 'kcp']) {
-      expect(xray.parse({ ...base, network }).network).toBe(network);
+      // REALITY carries raw/xhttp/grpc only; the rest are plain-security transports.
+      expect(xray.parse({ ...base, security: 'none', network }).network).toBe(network);
     }
   });
 });

@@ -425,3 +425,38 @@ describe('registryProblems: строка на источник, который �
     expect(registryProblems(undefined)).toBeNull();
   });
 });
+
+describe('validateXrayConfig: правила xray под бэкенд', () => {
+  const ok = { xrayNetwork: 'raw', xrayFlow: '', xraySubprotocol: 'vless', xraySecurity: 'reality' };
+  const keys = (v: Partial<typeof ok>) => validateXrayConfig({ ...ok, ...v }).map((i) => i.key);
+
+  it('транспорт, которого REALITY не несёт, это ошибка только при REALITY', () => {
+    for (const n of ['ws', 'httpupgrade', 'kcp']) {
+      expect(keys({ xrayNetwork: n }), n).toContain('validation.xray.networkInvalid');
+      expect(keys({ xrayNetwork: n, xraySecurity: 'tls' }), `tls ${n}`).not.toContain('validation.xray.networkInvalid');
+      expect(keys({ xrayNetwork: n, xraySecurity: 'none' }), `none ${n}`).not.toContain('validation.xray.networkInvalid');
+    }
+    for (const n of ['raw', 'xhttp', 'grpc']) {
+      expect(keys({ xrayNetwork: n }), n).not.toContain('validation.xray.networkInvalid');
+    }
+  });
+
+  it('Vision на raw и xhttp не вызывает предупреждения, на grpc/ws вызывает', () => {
+    const vision = 'xtls-rprx-vision';
+    for (const n of ['raw', 'xhttp']) {
+      expect(keys({ xrayNetwork: n, xrayFlow: vision }), n).not.toContain('validation.xray.visionNeedsRawOrXhttp');
+    }
+    for (const n of ['grpc', 'ws', 'kcp', 'httpupgrade']) {
+      expect(keys({ xrayNetwork: n, xrayFlow: vision, xraySecurity: 'tls' }), n).toContain(
+        'validation.xray.visionNeedsRawOrXhttp',
+      );
+    }
+  });
+
+  it('ключи сообщений есть в обеих локалях', () => {
+    for (const k of ['networkInvalid', 'visionNeedsRawOrXhttp', 'trojanIgnoresFlow', 'rawWithoutVisionSlow']) {
+      expect((en.validation.xray as Record<string, string>)[k], `en ${k}`).toBeTruthy();
+      expect((ru.validation.xray as Record<string, string>)[k], `ru ${k}`).toBeTruthy();
+    }
+  });
+});

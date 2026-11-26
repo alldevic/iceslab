@@ -219,7 +219,7 @@ describe('an xray-family profile on the sing-box engine', () => {
     for (const [name, cfg] of [
       ['xr-tls-ok', tls],
       ['xr-self-ok', { ...reality, realityMode: 'self-steal' }],
-      ['xr-ws-ok', { ...reality, network: 'ws' }],
+      ['xr-ws-ok', { ...reality, security: 'none', network: 'ws' }],
       ['xr-names-ok', { ...reality, realityServerNames: ['www.microsoft.com', 'www.apple.com'] }],
     ] as const) {
       const res = await create(name, cfg, 'xray');

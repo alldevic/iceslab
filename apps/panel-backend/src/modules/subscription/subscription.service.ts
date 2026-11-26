@@ -67,6 +67,7 @@ import { ensureAwg3Geometry, readAwg3Geometry } from '../nodes/awg3-geometry.js'
 import { getLogger } from '../../lib/infra/logger.js';
 import { endpointId } from './endpoint-identity.js';
 import { expandCascadeEntry } from './cascade-entries.js';
+import { resolveBindingConfig } from '../profiles/profiles.service.js';
 
 // ───── Domain errors ─────
 
@@ -962,9 +963,8 @@ export async function generateSubscription(
   const endpoints: SubscriptionEndpoint[] = [];
   for (const b of bindings) {
     // Resolve deployable config: profile.config + binding.overrides.
-    const baseConfig = (b.profile.config ?? {}) as Record<string, unknown>;
-    const ovr = (b.overrides ?? {}) as Record<string, unknown>;
-    const cfgMerged = { ...baseConfig, ...ovr };
+    // The same merge the node is pushed (resolveBindingConfig).
+    const cfgMerged = resolveBindingConfig(b.profile.config, b.overrides, b.profile.protocol);
 
     // Synthetic "ib" handle so the per-protocol branches below stay close
     // to the previous shape (less churn in the giant switch).

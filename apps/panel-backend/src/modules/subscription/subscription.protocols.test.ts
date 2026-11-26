@@ -12,6 +12,7 @@ import { deriveSsPassword } from '../../lib/auth/credentials.js';
 import { parseProtocolsParam, withProtocols } from './subscription.protocols.js';
 import { buildSubscriptionPage, type SubscriptionPageData } from './subscription.page.js';
 import { emptyNarrowingWords } from './subscription.routes.js';
+import { REALITY_TEST_PRIVATE_KEY, REALITY_TEST_PUBLIC_KEY } from '../../../tests/helpers/reality-keys.js';
 
 /**
  * `?protocols=`: a subscription that hands out one protocol or a few, on every
@@ -64,8 +65,8 @@ const XRAY = {
   realityDest: 'www.cloudflare.com:443',
   realityServerNames: ['www.cloudflare.com'],
   realityShortIds: ['abc123'],
-  realityPrivateKey: 'test-pubkey-for-vitest',
-  realityPublicKey: 'test-pubkey-for-vitest',
+  realityPrivateKey: REALITY_TEST_PRIVATE_KEY,
+  realityPublicKey: REALITY_TEST_PUBLIC_KEY,
 };
 
 /** One node with three protocols on it, and a person who has all three. */

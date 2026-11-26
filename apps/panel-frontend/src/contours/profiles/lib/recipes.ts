@@ -17,6 +17,7 @@
 
 import type { ProtocolName } from '@/lib/domain/protocols';
 import { profileKindKey, type PreviewKindKey } from '@/contours/profiles/lib/profileKinds';
+import { FLOW_COMPATIBLE_TRANSPORTS, transportAllowedUnder } from '@/contours/profiles/lib/xrayTransports';
 import { RECIPE_SCHEMA_VERSION, RECIPE_SOURCE_BUILTIN, RECIPE_SOURCE_MINE } from '@iceslab/shared';
 import snapshot from '@iceslab/shared/recipes.snapshot.json';
 import type {
@@ -534,8 +535,9 @@ export function downloadRecipeJson(recipe: Recipe): void {
 
 // ───── Live validator ─────
 //
-// Returns warnings/errors for the current form state. Errors block save
-// (returned as `level: 'error'`); warnings just inform.
+// Returns warnings/errors for the current form state. None of them blocks save:
+// the form renders every issue as an alert and the backend is what refuses a
+// bad config. `level: 'error'` is the red alert, not a gate.
 
 export interface ValidationIssue {
   level: 'error' | 'warning' | 'info';
@@ -552,13 +554,14 @@ export function validateXrayConfig(values: {
   xrayNetwork: string;
   xrayFlow: string;
   xraySubprotocol: string;
+  xraySecurity: string;
 }): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
-  // Hard error: REALITY only works with raw/xhttp/grpc.
-  // Form already filters dropdown to these 3, but defensive, paste/import
-  // could carry an invalid value.
-  if (!['raw', 'xhttp', 'grpc'].includes(values.xrayNetwork)) {
+  // Hard error: REALITY only works with raw/xhttp/grpc. Only REALITY: plain TLS
+  // and none carry every transport. The form disables the other pills under
+  // REALITY, but a recipe, a saved profile or an import can still carry one.
+  if (!transportAllowedUnder(values.xraySecurity, values.xrayNetwork)) {
     issues.push({
       level: 'error',
       field: 'xrayNetwork',
@@ -567,12 +570,12 @@ export function validateXrayConfig(values: {
     });
   }
 
-  // Hard error: Vision requires raw.
-  if (values.xrayFlow === 'xtls-rprx-vision' && values.xrayNetwork !== 'raw') {
+  // Hard error: Vision rides raw and xhttp only (what the backend keeps).
+  if (values.xrayFlow === 'xtls-rprx-vision' && !FLOW_COMPATIBLE_TRANSPORTS.includes(values.xrayNetwork)) {
     issues.push({
       level: 'error',
       field: 'xrayFlow',
-      key: 'validation.xray.visionRequiresRaw',
+      key: 'validation.xray.visionNeedsRawOrXhttp',
       args: { network: values.xrayNetwork },
     });
   }

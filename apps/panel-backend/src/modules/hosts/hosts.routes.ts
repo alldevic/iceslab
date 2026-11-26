@@ -61,6 +61,10 @@ function newBindingRefusal(err: unknown): { status: number; body: Record<string,
   if (err instanceof svc.ProfileEngineNotForTransportError) {
     return { status: 400, body: { error: err.code, message: err.message, path: err.path } };
   }
+  // The overrides of the binding the host form creates break a rule of the protocol.
+  if (err instanceof svc.InvalidBindingConfigError) {
+    return { status: 400, body: { error: err.code, message: err.message, issues: err.issues } };
+  }
   return null;
 }
 

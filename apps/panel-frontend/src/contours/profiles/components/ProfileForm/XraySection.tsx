@@ -15,6 +15,7 @@ import {
   PATH_HOST_TRANSPORTS,
   SINGBOX_XRAY,
   XRAY_TRANSPORTS,
+  transportAllowedUnder,
 } from '@/contours/profiles/lib/xrayTransports';
 import { PillChip } from '@/contours/profiles/components/ProfileForm/PillChip';
 import { StepLabel } from '@/contours/profiles/components/ProfileForm/StepLabel';
@@ -55,6 +56,7 @@ export function XraySection({
   // прочее агент отказывает, поэтому здесь оно недоступно с причиной.
   const onSingbox = form.values.engine === 'singbox';
   const singboxWhy = t('profiles.form.cfg.singboxXrayOnly');
+  const realityWhy = t('profiles.form.cfg.realityNetworkDesc');
   // Who will not get the saved profile: the server's /formats at the profile's
   // own security, the answer the host chips read (no copy of the table here).
   const formatsQuery = useQuery({
@@ -112,12 +114,15 @@ export function XraySection({
                     {/* What each transport actually is stays on hover: the
                         artboard keeps this row to pills alone. */}
                     {XRAY_TRANSPORTS.map((tr) => {
-                      const locked = onSingbox && tr.value !== SINGBOX_XRAY.network;
+                      const singboxLocked = onSingbox && tr.value !== SINGBOX_XRAY.network;
+                      // REALITY carries raw / xhttp / grpc only; the rest stay for TLS and none.
+                      const realityLocked = !transportAllowedUnder(form.values.xraySecurity, tr.value);
+                      const locked = singboxLocked || realityLocked;
                       return (
                         <PillChip
                           key={tr.value}
                           label={tr.label}
-                          title={locked ? singboxWhy : tr.hint}
+                          title={singboxLocked ? singboxWhy : realityLocked ? realityWhy : tr.hint}
                           disabled={locked}
                           active={form.values.xrayNetwork === tr.value}
                           onClick={() => form.setFieldValue('xrayNetwork', tr.value)}
@@ -125,6 +130,9 @@ export function XraySection({
                       );
                     })}
                   </Group>
+                  {form.values.xraySecurity === 'reality' && (
+                    <Text style={{ fontSize: 12, lineHeight: '17px', color: '#7A8BA3' }}>{realityWhy}</Text>
+                  )}
                   <PillError error={form.errors.xrayNetwork} />
                 </Stack>
 

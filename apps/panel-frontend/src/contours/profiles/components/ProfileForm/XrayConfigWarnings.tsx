@@ -14,6 +14,7 @@ export function XrayConfigWarnings({
       xrayNetwork: form.values.xrayNetwork,
       xrayFlow: form.values.xrayFlow,
       xraySubprotocol: form.values.xraySubprotocol,
+      xraySecurity: form.values.xraySecurity,
     });
     if (issues.length === 0) return null;
     return (

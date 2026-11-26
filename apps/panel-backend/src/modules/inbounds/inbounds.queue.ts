@@ -10,6 +10,7 @@ import type {
 import { queueRedis, redis } from '../../lib/infra/redis.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
+import { resolveBindingConfig } from '../profiles/profiles.service.js';
 import { mtprotoSecret } from '../../core-adapters/mtproto/index.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { inboundSyncJobs } from '../../lib/infra/metrics.js';
@@ -248,9 +249,12 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
   const inbounds = bindings.map((b) => {
     // Shallow merge: per-binding overrides win over profile.config. Used for
     // ACME domain, AmneziaWG private key, Shadowsocks server PSK, etc.
-    const baseConfig = (b.profile.config ?? {}) as Record<string, unknown>;
-    const overrides = (b.overrides ?? {}) as Record<string, unknown>;
-    let config = { ...baseConfig, ...overrides } as InboundDto['config'];
+    //
+    // Through resolveBindingConfig, the one merge the subscription generator
+    // and the write checks use too: for xray it also drops the fields of a
+    // transport the override moved away from, so the node and the client links
+    // are built from the same config.
+    let config = resolveBindingConfig(b.profile.config, b.overrides, b.profile.protocol) as InboundDto['config'];
 
     // Slice 41: mtproto secret derived from (binding.id, domain). Both
     // the wire push (here) and subscription generator key on binding.id so

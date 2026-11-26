@@ -1,5 +1,5 @@
 import type { FormValues } from '@/contours/profiles/lib/profileFormValues';
-import { FLOW_COMPATIBLE_TRANSPORTS } from '@/contours/profiles/lib/xrayTransports';
+import { FLOW_COMPATIBLE_TRANSPORTS, transportAllowedUnder } from '@/contours/profiles/lib/xrayTransports';
 
 type XrayFields = Pick<FormValues, 'xrayNetwork' | 'xrayServiceName' | 'xrayFlow' | 'xraySubprotocol' | 'xraySecurity'>;
 
@@ -17,7 +17,12 @@ type XrayFields = Pick<FormValues, 'xrayNetwork' | 'xrayServiceName' | 'xrayFlow
  *     транспорта не было, реакции нет;
  *   транспорт, на котором Vision не работает -> flow снимается;
  *   подпротокол стал vmess при REALITY        -> security none (ссылка vmess
- *     REALITY не несёт).
+ *     REALITY не несёт);
+ *   security стала REALITY на транспорте, который REALITY не несёт (ws,
+ *     httpupgrade, kcp) -> транспорт raw: кнопки отключены только для одного
+ *     порядка кликов, это второй (сначала транспорт, потом REALITY). На засеве
+ *     не срабатывает: сохранённый профиль показывается как есть, с
+ *     предупреждением, а не молча правится.
  *
  * `previous` null это «всё сменилось»: так форма ведёт себя на засеве, как
  * прежние эффекты на первом рендере.
@@ -27,6 +32,9 @@ export function xrayFieldReactions(values: XrayFields, previous: XrayFields | nu
   if (!previous || values.xrayNetwork !== previous.xrayNetwork) {
     if (values.xrayNetwork === 'grpc' && !values.xrayServiceName) patch.xrayServiceName = 'GunService';
     if (!FLOW_COMPATIBLE_TRANSPORTS.includes(values.xrayNetwork) && values.xrayFlow) patch.xrayFlow = '';
+  }
+  if (previous && values.xraySecurity !== previous.xraySecurity) {
+    if (!transportAllowedUnder(values.xraySecurity, values.xrayNetwork)) patch.xrayNetwork = 'raw';
   }
   if (!previous || values.xraySubprotocol !== previous.xraySubprotocol) {
     if (values.xraySubprotocol === 'vmess' && values.xraySecurity === 'reality') patch.xraySecurity = 'none';

@@ -57,8 +57,8 @@ export const common = {
     xray: {
       networkInvalid:
         'xray-core will reject the config: REALITY supports only raw / xhttp / grpc, not "{{network}}".',
-      visionRequiresRaw:
-        'Vision flow is incompatible with {{network}}. Set Flow = "(none)" or Network = "raw".',
+      visionNeedsRawOrXhttp:
+        'Vision flow is incompatible with {{network}}. Set Flow = "(none)" or Network = "raw" / "xhttp".',
       trojanIgnoresFlow:
         'Trojan does not use flow; the field will be ignored by the client.',
       rawWithoutVisionSlow:

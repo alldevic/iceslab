@@ -7,6 +7,7 @@ import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { invalidateSrrCache } from '../srr/srr.service.js';
 import { deriveSsPassword } from '../../lib/auth/credentials.js';
+import { REALITY_TEST_PRIVATE_KEY, REALITY_TEST_PUBLIC_KEY } from '../../../tests/helpers/reality-keys.js';
 
 let app: FastifyInstance;
 let token: string;
@@ -116,8 +117,8 @@ async function createXrayInbound(nodeId: string, port = 8443): Promise<string> {
       realityDest: 'www.cloudflare.com:443',
       realityServerNames: ['www.cloudflare.com'],
       realityShortIds: ['abc123'],
-      realityPrivateKey: 'test-pubkey-for-vitest',
-      realityPublicKey: 'test-pubkey-for-vitest',
+      realityPrivateKey: REALITY_TEST_PRIVATE_KEY,
+      realityPublicKey: REALITY_TEST_PUBLIC_KEY,
     },
     `${nodeId.slice(0, 6)}-${port}`,
   );
@@ -772,8 +773,8 @@ describe('a stored config that is missing fields', () => {
         realityDest: 'www.cloudflare.com:443',
         realityServerNames: ['www.cloudflare.com'],
         realityShortIds: ['abc123'],
-        realityPrivateKey: 'test-pubkey-for-vitest',
-        realityPublicKey: 'test-pubkey-for-vitest',
+        realityPrivateKey: REALITY_TEST_PRIVATE_KEY,
+        realityPublicKey: REALITY_TEST_PUBLIC_KEY,
       },
       'jsonb-x',
     );

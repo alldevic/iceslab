@@ -665,7 +665,7 @@ export async function updateProfile(
       select: { overrides: true },
     });
     for (const b of deployed) {
-      const f = singboxRefusesXrayField('xray', 'singbox', resolveBindingConfig(nextConfig, b.overrides));
+      const f = singboxRefusesXrayField('xray', 'singbox', resolveBindingConfig(nextConfig, b.overrides, 'xray'));
       if (f) throw new ProfileEngineNotForTransportError(f, 'overrides');
     }
   }
@@ -695,7 +695,14 @@ export async function updateProfile(
     for (const b of bindings) {
       // Each deployed node against the range as merged with this binding's overrides.
       if (!b.node.deletedAt) {
-        assertPortHoppingFitsNode(b.node, { protocol: existing.protocol, name: input.name ?? existing.name }, resolveBindingConfig(data.config, b.overrides));
+        assertPortHoppingFitsNode(b.node, { protocol: existing.protocol, name: input.name ?? existing.name }, resolveBindingConfig(data.config, b.overrides, existing.protocol));
+        // The merge is what the node deploys: judged against the schema too.
+        assertNoNewConfigViolations(
+          existing.protocol,
+          { profileConfig: existing.config, overrides: b.overrides },
+          { profileConfig: data.config, overrides: b.overrides },
+          `Profile "${input.name ?? existing.name}" on node "${b.node.name}"`,
+        );
       }
       const next = transportForBinding(nextProfile, b.overrides);
       if (next !== b.transport) moves.push({ ...b, transport: next });
@@ -935,7 +942,7 @@ export function assertSingboxServesBinding(
   const f = singboxRefusesXrayField(
     profile.protocol,
     profile.engine,
-    resolveBindingConfig(profile.config, overrides),
+    resolveBindingConfig(profile.config, overrides, profile.protocol),
   );
   if (!f) return;
   const own = overrides && typeof overrides === 'object' && f in (overrides as object);
@@ -965,7 +972,14 @@ export async function assertBindingFitsNode(
   assertCoreOnNode(node, profile);
   assertNodeRendersProfile(node, profile);
   assertSingboxServesBinding(profile, overrides);
-  assertPortHoppingFitsNode(node, profile, resolveBindingConfig(profile.config, overrides));
+  assertPortHoppingFitsNode(node, profile, resolveBindingConfig(profile.config, overrides, profile.protocol));
+  // The overrides have met no schema before this: judge the merge they make.
+  assertNoNewConfigViolations(
+    profile.protocol,
+    { profileConfig: profile.config, overrides: null },
+    { profileConfig: profile.config, overrides: overrides ?? null },
+    `Binding profile "${profile.name}" to node "${node.name}"`,
+  );
   await assertAwgSubnetFree(node, profile);
   await assertAdapterSlotFree(node, profile, overrides);
 }
@@ -1079,7 +1093,15 @@ export async function updateBinding(
   const nextOverrides = input.overrides !== undefined ? input.overrides : existing.overrides;
   assertSingboxServesBinding(existing.profile, nextOverrides);
   // The override can move the hopping range off what the node redirects.
-  assertPortHoppingFitsNode(existing.node, existing.profile, resolveBindingConfig(existing.profile.config, nextOverrides));
+  assertPortHoppingFitsNode(existing.node, existing.profile, resolveBindingConfig(existing.profile.config, nextOverrides, existing.profile.protocol));
+  if (input.overrides !== undefined) {
+    assertNoNewConfigViolations(
+      existing.profile.protocol,
+      { profileConfig: existing.profile.config, overrides: existing.overrides },
+      { profileConfig: existing.profile.config, overrides: input.overrides },
+      `Binding "${existing.profile.name}" on node "${existing.node.name}"`,
+    );
+  }
   // A-199: an MTU set through the binding's overrides is the node's mieru MTU
   // too, and one mita process holds one. Beside another mieru inbound a
   // different MTU is refused here, or the agent answers 500 on every push.
@@ -1170,19 +1192,106 @@ export async function deleteBinding(id: string): Promise<void> {
 /**
  * Resolve the deployable inbound config for a (profile, node) pair: shallow
  * merge of `profile.config` + `binding.overrides`. Used by the inbound-sync
- * queue when shipping configs to node-agents and by the subscription
- * generator when emitting client URIs.
+ * queue when shipping configs to node-agents, by the subscription generator
+ * when emitting client URIs, and by the checks that judge what a write would
+ * deploy (a copy that drifts from it would turn them into checks on a config
+ * nothing ships).
  *
  * Shallow merge is intentional, overrides should mention specific top-level
  * fields (`acmeDomain`, `serverPsk`, etc.). Deep merge would silently mask
  * partial-array edits which is rarely what admins mean.
+ *
+ * For xray the merge is then swept by `stripInapplicableTransportFields`, the
+ * same normaliser a profile goes through when it is SAVED. `network` is one of
+ * the things an override may change and the merge is shallow, so a REALITY+raw
+ * profile carrying Vision, bound with `overrides: {network: 'grpc'}`, would
+ * otherwise deploy a gRPC inbound that still demands Vision while every client
+ * link answers without it (xray: "client flow is empty"). Keyed on the
+ * protocol: nothing else owns a field named `path`, `host` or `serviceName`
+ * today, and the sweep must not start deleting another protocol's.
  */
 export function resolveBindingConfig(
   profileConfig: unknown,
   overrides: unknown,
+  protocol: string,
 ): Record<string, unknown> {
   const base = (profileConfig ?? {}) as Record<string, unknown>;
   const ov = (overrides ?? {}) as Record<string, unknown>;
-  return { ...base, ...ov };
+  const merged = { ...base, ...ov };
+  return protocol === 'xray' ? stripInapplicableTransportFields(merged) : merged;
+}
+
+/**
+ * Fingerprint of a schema violation: the field it lands on and the kind of
+ * failure, without the offending value, so two configs that break the same rule
+ * on the same field share one even when the messages name different values.
+ * Maps fingerprint -> message.
+ *
+ * The same preprocessing a profile gets on save: the vmess default security
+ * (withXraySecurityDefault) before the parse, and the vmess-on-REALITY refusal
+ * that lives beside the schema (VMESS_REALITY_MESSAGE).
+ */
+function issueFingerprints(protocol: string, config: unknown): Map<string, string> {
+  const out = new Map<string, string>();
+  const schema = PROTOCOL_CONFIG_SCHEMAS[protocol as keyof typeof PROTOCOL_CONFIG_SCHEMAS];
+  if (!schema) return out;
+  const isXray = protocol === 'xray';
+  const res = schema.safeParse(isXray ? withXraySecurityDefault(config) : config);
+  if (!res.success) {
+    for (const i of res.error.issues) {
+      const path = i.path.map(String).join('.') || '(root)';
+      out.set(`${path} ${i.code}`, `${path}: ${i.message}`);
+    }
+  }
+  if (isXray && vmessOnReality(withXraySecurityDefault(config))) {
+    out.set('security vmess-reality', `security: ${VMESS_REALITY_MESSAGE}`);
+  }
+  return out;
+}
+
+export class InvalidBindingConfigError extends Error {
+  readonly code = 'INVALID_CONFIG';
+  constructor(public readonly issues: string[], subject: string) {
+    super(`${subject} would deploy a config its protocol refuses: ${issues.join('; ')}`);
+    this.name = 'InvalidBindingConfigError';
+  }
+}
+
+/**
+ * Gate the config a binding will actually DEPLOY - `profile.config` merged with
+ * `binding.overrides` - against the protocol's own schema.
+ *
+ * Every rule that schema carries ran on `Profile.config` alone, at profile-save
+ * time; `overrides` is typed `z.record(z.string(), z.unknown())` and met no
+ * schema. So `POST /api/bindings {profileId: <a REALITY profile>, overrides:
+ * {"network":"ws"}}` answered 201 and the merge, which is what reaches the
+ * node, was one xray refuses to load. The check is on the MERGE, not on the
+ * overrides alone: overrides are partial by design and half a config cannot be
+ * judged (`security` may sit in the profile while `network` arrives from the
+ * binding).
+ *
+ * Four doors change a merge: createBinding and the host form (both through
+ * assertBindingFitsNode), updateBinding, and updateProfile across the
+ * profile/binding seam (both halves valid alone, neither the one being edited).
+ *
+ * What it promises, exactly: not "the deployed config is valid" but *this
+ * request introduces no violation that was not already there*. A profile saved
+ * before a rule existed is already broken through no act of its operator, and a
+ * gate demanding plain validity would strand the person digging out. So it
+ * stays bindable and fixable; what it cannot do is acquire a NEW broken field.
+ * Fingerprints are (path, code): trading one refused transport for another on
+ * an already-refused field reads as "still broken", not "made worse".
+ */
+export function assertNoNewConfigViolations(
+  protocol: string,
+  before: { profileConfig: unknown; overrides: unknown },
+  after: { profileConfig: unknown; overrides: unknown },
+  subject: string,
+): void {
+  const post = issueFingerprints(protocol, resolveBindingConfig(after.profileConfig, after.overrides, protocol));
+  if (post.size === 0) return;
+  const pre = issueFingerprints(protocol, resolveBindingConfig(before.profileConfig, before.overrides, protocol));
+  const fresh = [...post].filter(([k]) => !pre.has(k)).map(([, msg]) => msg);
+  if (fresh.length > 0) throw new InvalidBindingConfigError(fresh, subject);
 }
 

@@ -87,7 +87,14 @@ export const SINGBOX_XRAY_FORM_FIELD: Record<
   realityLimitFallbackDownloadBytesPerSec: 'xrayRealityLimitFallbackDownload',
 };
 
-// Vision flow is only valid on raw/xhttp; other transports reject it.
+// Vision flow is only valid on raw/xhttp; the panel blanks it on the rest.
 export const FLOW_COMPATIBLE_TRANSPORTS = ['raw', 'xhttp'];
+// REALITY is carried by these only; xray refuses ws/httpupgrade/kcp under it.
+export const REALITY_COMPATIBLE_TRANSPORTS = ['raw', 'xhttp', 'grpc'];
+
+/** Whether `network` may be chosen under `security` (only REALITY restricts). */
+export function transportAllowedUnder(security: string, network: string): boolean {
+  return security !== 'reality' || REALITY_COMPATIBLE_TRANSPORTS.includes(network);
+}
 // path + host header apply to these transports (same URI param names).
 export const PATH_HOST_TRANSPORTS = ['ws', 'xhttp', 'httpupgrade'];

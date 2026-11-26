@@ -8,6 +8,7 @@ import { checkSniConsistency } from '../profiles/host-fields.js';
 import {
   assertBindingFitsNode,
   assertPortFreeOfOthers,
+  InvalidBindingConfigError,
   NodeNotFoundError,
   ProfileDoesNotRunOnNodeError,
   ProfileEngineNotForTransportError,
@@ -63,6 +64,7 @@ export class BindingNotFoundError extends Error {
 // module, which it otherwise has no business knowing about.
 export {
   AdapterSlotTakenError,
+  InvalidBindingConfigError,
   MieruMtuMismatchError,
   NodeNotFoundError,
   ProfileDoesNotRunOnNodeError,

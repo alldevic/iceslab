@@ -52,6 +52,10 @@ const XRAY_CONFIG = {
   network: 'raw',
 };
 
+// kcp and ws are not REALITY transports (xray refuses them under it), so the
+// cases that put a binding or an edit onto them run without REALITY.
+const XRAY_NO_SECURITY = { ...XRAY_CONFIG, security: 'none' };
+
 /**
  * The node reports no cores on purpose.
  *
@@ -166,7 +170,7 @@ describe('one port, two sockets', () => {
     // and it is the merged value the node ends up listening with. Reading the
     // profile alone would file this row under TCP and let a UDP collision in.
     const node = await makeNode();
-    const xray = await makeProfile('xray', XRAY_CONFIG);
+    const xray = await makeProfile('xray', XRAY_NO_SECURITY);
     const hysteria = await makeProfile('hysteria', {});
 
     await bind(hysteria.id, node.id, 8443);
@@ -189,7 +193,7 @@ describe('a binding says which transport its port is on', () => {
     const node = await makeNode();
     const vless = await makeProfile('xray', XRAY_CONFIG);
     const hy2 = await makeProfile('hysteria', {});
-    const kcp = await makeProfile('xray', { ...XRAY_CONFIG, network: 'kcp' });
+    const kcp = await makeProfile('xray', { ...XRAY_NO_SECURITY, network: 'kcp' });
     const b = {
       vless: await bind(vless.id, node.id, 443),
       hy2: await bind(hy2.id, node.id, 443),
@@ -228,7 +232,7 @@ describe('a profile edit that moves the socket', () => {
       { port: 8443, transport: 'tcp' },
     ]);
 
-    await editProfile(xray.id, { ...XRAY_CONFIG, network: 'kcp' });
+    await editProfile(xray.id, { ...XRAY_NO_SECURITY, network: 'kcp' });
 
     // Both, not the first one. A row left saying TCP while the node listens on
     // UDP is the exact lie the column exists to prevent.
@@ -246,7 +250,7 @@ describe('a profile edit that moves the socket', () => {
     await bind(xray.id, node.id, 443);
     await bind(hysteria.id, node.id, 443);
 
-    const refused = await editProfile(xray.id, { ...XRAY_CONFIG, network: 'kcp' }, 409);
+    const refused = await editProfile(xray.id, { ...XRAY_NO_SECURITY, network: 'kcp' }, 409);
     expect(refused.error).toBe('TRANSPORT_MOVE_BLOCKED');
     expect(refused.message).toContain('frankfurt-2');
     expect(refused.message).toContain('443');
@@ -268,7 +272,7 @@ describe('a profile edit that moves the socket', () => {
     await bind(xray.id, node.id, 443);
     await bind(hysteria.id, node.id, 443);
 
-    await editProfile(xray.id, { ...XRAY_CONFIG, network: 'kcp' }, 409);
+    await editProfile(xray.id, { ...XRAY_NO_SECURITY, network: 'kcp' }, 409);
 
     const after = await prisma.profile.findUniqueOrThrow({ where: { id: xray.id } });
     expect((after.config as { network?: string }).network).toBe('raw');
@@ -280,8 +284,47 @@ describe('a profile edit that moves the socket', () => {
     const xray = await makeProfile('xray', XRAY_CONFIG);
     await bind(xray.id, node.id, 443);
 
-    await editProfile(xray.id, { ...XRAY_CONFIG, network: 'ws', path: '/live' });
+    await editProfile(xray.id, { ...XRAY_NO_SECURITY, network: 'ws', path: '/live' });
 
     expect(await transportsOf(xray.id)).toEqual([{ port: 443, transport: 'tcp' }]);
+  });
+});
+
+describe('the merged config is judged on the routes (INVALID_CONFIG)', () => {
+  it('POST /api/bindings and PUT /api/bindings/:id: 400 with the list of violations', async () => {
+    const node = await makeNode();
+    const xray = await makeProfile('xray', XRAY_CONFIG);
+
+    const refused = await bind(xray.id, node.id, 443, { expected: 400, overrides: { network: 'ws' } });
+    expect(refused.error).toBe('INVALID_CONFIG');
+    expect(refused.issues).toHaveLength(1);
+    expect(refused.issues[0]).toContain('network');
+
+    const b = await bind(xray.id, node.id, 443);
+    const patch = await app.inject({
+      method: 'PUT',
+      url: `/api/bindings/${b.id}`,
+      headers: auth(),
+      payload: { overrides: { network: 'kcp' } },
+    });
+    expect(patch.statusCode, patch.body).toBe(400);
+    expect(JSON.parse(patch.body).error).toBe('INVALID_CONFIG');
+  });
+
+  it('PUT /api/profiles/:id that breaks a binding: 400 naming the node', async () => {
+    const node = await makeNode('overridden-node');
+    const profile = await makeProfile('xray', XRAY_NO_SECURITY);
+    await bind(profile.id, node.id, 443, { overrides: { network: 'ws' } });
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/profiles/${profile.id}`,
+      headers: auth(),
+      payload: { config: { ...XRAY_CONFIG, network: 'raw' } },
+    });
+    expect(res.statusCode, res.body).toBe(400);
+    const body = JSON.parse(res.body);
+    expect(body.error).toBe('INVALID_CONFIG');
+    expect(body.message).toContain('overridden-node');
   });
 });

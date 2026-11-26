@@ -26,23 +26,46 @@ const FIELDS_BY_NETWORK: Record<string, readonly string[]> = {
   grpc: ['serviceName', 'grpcMultiMode'],
 };
 
+/**
+ * `flow` is not owned by a transport, but its VALIDITY is decided by one:
+ * Vision splices the TLS record layer and works only where the stream is the TLS
+ * stream (RAW and XHTTP).
+ *
+ * `flow` DEFAULTS to `xtls-rprx-vision`, so moving an inbound to gRPC and not
+ * thinking about flow left a server account demanding Vision while every client
+ * link the panel emits answers without it (`core-adapters/xray/uri.ts` drops it
+ * there): xray then rejects every client, "client flow is empty". Measured on
+ * xray 26.3.27. xray refuses REALITY on ws/kcp outright, so gRPC is the case
+ * this is really for; TLS on ws/httpupgrade/kcp is covered too.
+ */
+export const NETWORKS_CARRYING_VISION = ['raw', 'xhttp'] as const;
+
 /** Every field owned by some transport, i.e. the set we are allowed to drop. */
 const ALL_TRANSPORT_FIELDS = [...new Set(Object.values(FIELDS_BY_NETWORK).flat())];
 
 /**
  * Drop the transport settings that do not belong to `config.network`.
  *
- * Pure, and returns a new object only when something was actually removed, so an
+ * Pure, and returns a new object only when something was actually removed or blanked, so an
  * unchanged profile keeps its object identity (and its stored JSON byte-stable).
  */
 export function stripInapplicableTransportFields<T extends Record<string, unknown>>(
   config: T,
 ): T {
-  const network = typeof config.network === 'string' ? config.network : 'raw';
+  // `tcp` is the pre-24.9.30 spelling of `raw` that old rows still carry.
+  const named = typeof config.network === 'string' ? config.network : 'raw';
+  const network = named === 'tcp' ? 'raw' : named;
   const keep = new Set(FIELDS_BY_NETWORK[network] ?? []);
   const drop = ALL_TRANSPORT_FIELDS.filter((f) => !keep.has(f) && f in config);
-  if (drop.length === 0) return config;
-  const out = { ...config };
+  // Blanked rather than deleted: '' is the canonical "no flow" wire value the
+  // schema accepts, and unlike the transport settings the field is not optional.
+  const blankFlow =
+    !(NETWORKS_CARRYING_VISION as readonly string[]).includes(network) &&
+    typeof config.flow === 'string' &&
+    config.flow !== '';
+  if (drop.length === 0 && !blankFlow) return config;
+  const out: Record<string, unknown> = { ...config };
   for (const f of drop) delete out[f];
-  return out;
+  if (blankFlow) out.flow = '';
+  return out as T;
 }

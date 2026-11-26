@@ -62,6 +62,26 @@ describe('useProfileForm: реакции на смену поля', () => {
     expect(result.current.form.values.xraySecurity).toBe('tls');
   });
 
+  it('REALITY выбрана на ws: транспорт возвращается к raw; на xhttp остаётся', () => {
+    const { result } = render(
+      xrayProfile({ config: { subprotocol: 'vless', security: 'tls', network: 'ws', flow: '' } as never }),
+    );
+    act(() => result.current.form.setFieldValue('xraySecurity', 'reality'));
+    expect(result.current.form.values.xrayNetwork).toBe('raw');
+
+    act(() => result.current.form.setFieldValue('xraySecurity', 'tls'));
+    act(() => result.current.form.setFieldValue('xrayNetwork', 'xhttp'));
+    act(() => result.current.form.setFieldValue('xraySecurity', 'reality'));
+    expect(result.current.form.values.xrayNetwork).toBe('xhttp');
+  });
+
+  it('при TLS ws выбирается и остаётся; сохранённый REALITY+ws при открытии не переписывается молча', () => {
+    const tls = render(xrayProfile({ config: { subprotocol: 'vless', security: 'tls', network: 'ws' } as never }));
+    expect(tls.result.current.form.values.xrayNetwork).toBe('ws');
+    const legacy = render(xrayProfile({ config: { subprotocol: 'vless', security: 'reality', network: 'ws' } as never }));
+    expect(legacy.result.current.form.values.xrayNetwork).toBe('ws');
+  });
+
   it('новый объект профиля с тем же id (refetch) не пересевает форму: правка на месте', () => {
     const { result, rerender } = render(xrayProfile());
     act(() => result.current.form.setFieldValue('name', 'edited-by-me'));
@@ -86,6 +106,11 @@ describe('xrayFieldReactions', () => {
   it('без смены своего поля реакции нет', () => {
     expect(xrayFieldReactions(base, base)).toBeNull();
     expect(xrayFieldReactions({ ...base, xrayNetwork: grpc }, { ...base, xrayNetwork: grpc, xrayServiceName: 'X' })).toBeNull();
+  });
+  it('security стала REALITY на недопустимом транспорте: транспорт raw; без смены security нет', () => {
+    const tls = { ...base, xrayNetwork: 'kcp' as F['xrayNetwork'], xraySecurity: 'tls' as F['xraySecurity'], xrayFlow: '' };
+    expect(xrayFieldReactions({ ...tls, xraySecurity: 'reality' }, tls)).toEqual({ xrayNetwork: 'raw' });
+    expect(xrayFieldReactions({ ...tls, xraySecurity: 'none' }, tls)).toBeNull();
   });
   it('засев (previous null) применяет всё, как прежние эффекты на первом рендере', () => {
     expect(xrayFieldReactions({ ...base, xrayNetwork: grpc }, null)).toEqual({ xrayServiceName: 'GunService', xrayFlow: '' });
