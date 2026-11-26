@@ -123,6 +123,7 @@ export const subscription = {
     formatsTitle: 'Formats',
     format: {
       plain: 'base64 URI list, works everywhere, no routing',
+      raw: 'the same links as plain, one per line, without base64',
       xrayjson: 'single Xray config with routing and fragment',
       singbox: 'sing-box config for Hiddify and friends',
       clash: 'the Mihomo address for links already handed out, the same answer byte for byte',
@@ -131,6 +132,7 @@ export const subscription = {
       'clash-legacy': 'Clash YAML for the legacy Clash core: ss, vmess, trojan, socks, http only',
       xkeen: 'router flavour of the Xray config',
       wgconf: 'wg-quick file, AmneziaWG hosts only',
+      amneziavpn: 'AmneziaVPN config, AmneziaWG hosts only',
       outline: 'Outline / SIP008, Shadowsocks only',
       surge: 'Surge profile',
       quantumultx: 'Quantumult X profile',

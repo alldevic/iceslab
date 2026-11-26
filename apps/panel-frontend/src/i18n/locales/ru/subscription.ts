@@ -124,6 +124,7 @@ export const subscription = {
     formatsTitle: 'Форматы',
     format: {
       plain: 'base64-список ссылок, работает везде, роутинга нет',
+      raw: 'те же ссылки, что в plain, по одной в строке, без base64',
       xrayjson: 'один xray-конфиг с роутингом и фрагментацией',
       singbox: 'sing-box для Hiddify и родственников',
       clash: 'адрес Mihomo для уже выданных ссылок, тот же ответ байт в байт',
@@ -132,6 +133,7 @@ export const subscription = {
       'clash-legacy': 'Clash YAML для старого ядра Clash: только ss, vmess, trojan, socks, http',
       xkeen: 'роутерная разновидность конфига Xray',
       wgconf: 'файл wg-quick, только для awg-хостов',
+      amneziavpn: 'конфиг AmneziaVPN, только для awg-хостов',
       outline: 'Outline / SIP008, только Shadowsocks',
       surge: 'профиль Surge',
       quantumultx: 'профиль Quantumult X',
