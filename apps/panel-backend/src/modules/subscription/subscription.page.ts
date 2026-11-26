@@ -555,14 +555,16 @@ function renderSteps(
   icons: GlyphSheet,
   /** Клиент, под который нарисованы кнопки шагов: тот, что загорится первым. */
   first?: AppDef,
+  /** Все клиенты панели: шаг про локальный прокси рисуется для каждого с отметкой. */
+  apps: AppDef[] = [],
 ): string {
   const step = (
     icon: GlyphKey,
     s: StepText | undefined,
-    opts: { tone?: string; box?: string; body?: string } = {},
+    opts: { tone?: string; box?: string; body?: string; attrs?: string } = {},
   ) =>
     s
-      ? `<div class="step${opts.box ?? ''}">` +
+      ? `<div class="step${opts.box ?? ''}"${opts.attrs ?? ''}>` +
         `<div class="step__num${opts.tone ?? ''}">${icons.draw(icon, { cls: 'ic' })}</div>` +
         `<div class="step__col"><div class="step__title">${esc(s.title)}</div>` +
         `<div class="step__text">${esc(s.text)}</div>${opts.body ?? ''}</div></div>`
@@ -623,11 +625,35 @@ function renderSteps(
           { cls: 'ic' },
         )}<span>${esc(t.stepAdd)} <b data-app-label>${esc(first.name)}</b></span></a></div>`
       : `<div class="step__buttons" hidden><a class="step-btn" data-app-put href="#">${icons.draw('Plus', { cls: 'ic' })}<span>${esc(t.stepAdd)} <b data-app-label></b></span></a></div>`;
+  // Предупреждение о локальном прокси зависит от клиента: по шагу на каждого с
+  // отметкой «выключена по умолчанию», видим тот, что у выбранной карточки.
+  // Выбор карточки скрывает и показывает их в скрипте, по имени клиента.
+  const proxyWarn = apps
+    .filter((a) => a.localProxyAuth === 'off-by-default')
+    .map((a) =>
+      step(
+        'alert',
+        {
+          title: t.localProxy.title,
+          text:
+            t.localProxy.lead.replace('{app}', a.name) +
+            ((a.client && t.localProxyPath[a.client]) || t.localProxy.pathless) +
+            t.localProxy.tail,
+        },
+        {
+          box: ' step--warn',
+          tone: ' step__num--warn',
+          attrs: ` data-local-proxy="${esc(a.name)}"${a === first ? '' : ' hidden'}`,
+        },
+      ),
+    )
+    .join('');
   return (
     step('DownloadIcon', s[0], { body: dlBtn }) +
     step('Plus', s[1], { body: addBtn }) +
     step('help', s[2], { tone: ' step__num--info' }) +
-    step('Check', s[3], { tone: ' step__num--ok' })
+    step('Check', s[3], { tone: ' step__num--ok' }) +
+    proxyWarn
   );
 }
 
@@ -648,7 +674,7 @@ function renderPanel(
     renderTelegramRow(platform, data.protocols, t, icons) +
     `</div>` +
     renderAllApps(platform, apps, rest, data.subUrl, t, icons) +
-    renderSteps(platform, data, hasAwg, t, icons, row[0])
+    renderSteps(platform, data, hasAwg, t, icons, row[0], apps)
   );
 }
 

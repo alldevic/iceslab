@@ -316,6 +316,10 @@ export function pageScript(o: PageScriptOpts): string {
         if (site) { get.setAttribute('href', site); get.parentNode.hidden = false; }
         else { get.removeAttribute('href'); get.parentNode.hidden = true; }
       }
+      // Предупреждение о локальном прокси есть только у клиента с отметкой.
+      [].slice.call(panel.querySelectorAll('[data-local-proxy]')).forEach(function (el) {
+        el.hidden = el.getAttribute('data-local-proxy') !== name;
+      });
       var put = panel.querySelector('[data-app-put]');
       if (put) {
         var add = card.getAttribute('data-app-add');

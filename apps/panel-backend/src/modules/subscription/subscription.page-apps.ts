@@ -33,7 +33,10 @@ export type { PlatformId } from '@iceslab/shared';
  *  and what the store says about it (the availability fields). */
 function fromCatalog(
   id: ClientId,
-): Pick<AppDef, 'client' | 'name' | 'platforms' | 'site' | 'storeGap' | 'storePrice' | 'storeNameAlike'> {
+): Pick<
+  AppDef,
+  'client' | 'name' | 'platforms' | 'site' | 'storeGap' | 'storePrice' | 'storeNameAlike' | 'localProxyAuth'
+> {
   const c: ClientDef = CLIENTS[id];
   return {
     client: id,
@@ -43,6 +46,7 @@ function fromCatalog(
     ...(c.storeGap ? { storeGap: c.storeGap } : {}),
     ...(c.storePrice ? { storePrice: c.storePrice } : {}),
     ...(c.storeNameAlike ? { storeNameAlike: c.storeNameAlike } : {}),
+    ...(c.localProxyAuth ? { localProxyAuth: c.localProxyAuth } : {}),
   };
 }
 
@@ -157,6 +161,8 @@ export interface AppDef {
   storeGap?: ClientDef['storeGap'];
   storePrice?: ClientDef['storePrice'];
   storeNameAlike?: ClientDef['storeNameAlike'];
+  /** The catalog's mark on the app's local proxy; the page warns on `off-by-default`. */
+  localProxyAuth?: ClientDef['localProxyAuth'];
 }
 
 export const APPS: AppDef[] = [

@@ -80,6 +80,14 @@ export interface ClientDef {
   /** The Russian storefront carries OTHER apps under this name (a search for it
    *  finds somebody else's client). Dated in the entry's comment. */
   storeNameAlike?: true;
+  /**
+   * Whether the app's local SOCKS/HTTP proxy asks for a login out of the box:
+   * `off-by-default` it listens on the device without one, so any other app can
+   * go out through the buyer's tunnel; `on-by-default` it asks. Absent: not
+   * measured, and the page says nothing about it. Dated in the entry's comment.
+   * Only an `off-by-default` client gets a step on the subscription page.
+   */
+  localProxyAuth?: 'off-by-default' | 'on-by-default';
 }
 
 export const CLIENTS = {
@@ -91,6 +99,10 @@ export const CLIENTS = {
     // VPN Official, Happ VPN ++, Happ Lite).
     storeGap: { ios: 'ru-storefront', macos: 'ru-storefront' },
     storeNameAlike: true,
+    // Local proxy measured 2026-09-05 off the customer's own device (fork
+    // catalog, carried over): the SOCKS inbound is Disabled until it is set to
+    // Auto. Re-measure on the current version before trusting it (MANUAL-CHECKS.md).
+    localProxyAuth: 'off-by-default',
     name: 'Happ',
     site: 'https://happ.su',
     platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'androidtv', 'appletv'],

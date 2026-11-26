@@ -1,6 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { CLIENTS, PLATFORM_IDS, XRAY_SUBPROTOCOLS, doorOf, formatCarries, type ProtocolName } from '@iceslab/shared';
-import { APPS, appFormat, type AppDef } from './subscription.page-apps.js';
+import {
+  CLIENTS,
+  PLATFORM_IDS,
+  PROTOCOL_NAMES,
+  FORMAT_NAMES,
+  XRAY_SUBPROTOCOLS,
+  doorOf,
+  formatCarries,
+  type ProtocolName,
+} from '@iceslab/shared';
+import { APPS, appFormat, deeplinkHref, type AppDef } from './subscription.page-apps.js';
 import { appsFor } from './subscription.page.js';
 
 /** The doors a protocol's endpoints come through. xray is the one protocol with
@@ -99,5 +108,92 @@ describe('the availability fields of the catalog', () => {
   it('are read from CLIENTS: V2Box is out of the Russian store, Shadowrocket costs money', () => {
     expect(CLIENTS.v2box.storeGap).toEqual({ ios: 'ru-storefront' });
     expect(CLIENTS.shadowrocket.storePrice).toEqual({ ios: '249 ₽', appletv: '249 ₽' });
+  });
+});
+
+describe('the registry invariants (what an entry may promise, held to the entry itself)', () => {
+  // A file or a key handed per tunnel node, not a subscription link.
+  const PER_NODE_PROTOCOLS: Partial<Record<AppDef['action']['kind'], ProtocolName[]>> = {
+    'awg-vpn': ['amneziawg'],
+    'awg-conf': ['amneziawg'],
+    'wg-conf': ['wireguard'],
+    download: ['amneziawg', 'wireguard'],
+    outline: ['shadowsocks'],
+  };
+
+  it('links to https only, and to no page pinned to one release', () => {
+    for (const a of APPS) {
+      if (!a.site) continue;
+      expect(a.site, a.name).toMatch(/^https:\/\//);
+      expect(a.site, `${a.name} pins a release`).not.toContain('/releases/download/');
+      expect(a.site, `${a.name} pins a version`).not.toMatch(/\d+\.\d+\.\d+/);
+    }
+  });
+
+  it('never offers an entry on a platform its catalog client is not on', () => {
+    for (const a of APPS) {
+      const c = CLIENTS[a.client!];
+      for (const pl of a.platforms) expect(c.platforms as readonly string[], `${a.name} on ${pl}`).toContain(pl);
+    }
+  });
+
+  // INCY is offered with a paste-the-link action while the catalog gives it no
+  // format ("not researched yet"): the page cannot say what it will be handed.
+  // Left as the base has it; needs a decision (give it a researched format, or
+  // drop it from the link actions).
+  const NO_FORMAT = new Set(['INCY']);
+
+  it('gives a deeplink or manual entry at least one protocol its format carries', () => {
+    for (const a of APPS) {
+      if (a.action.kind !== 'deeplink' && a.action.kind !== 'manual') continue;
+      if (!appFormat(a)) {
+        // A router recipe is a person pasting the link by hand: no format by design.
+        if (a.platforms.every((pl) => pl === 'router')) continue;
+        expect(NO_FORMAT.has(a.name), `${a.name} takes a subscription link but has no format`).toBe(true);
+        continue;
+      }
+      expect(a.protocols.some((p) => carries(a, p)), a.name).toBe(true);
+    }
+  });
+
+  it('gives a per-node action only the tunnel (or Outline) protocols and no subscription format', () => {
+    for (const a of APPS) {
+      const allowed = PER_NODE_PROTOCOLS[a.action.kind];
+      if (!allowed) continue;
+      // Outline's own `outline` format is the per-node key, not a subscription.
+      expect([undefined, 'outline'], `${a.name} has a per-node action and a subscription format`).toContain(appFormat(a));
+      for (const p of a.protocols) expect(allowed, `${a.name}: ${p}`).toContain(p);
+    }
+  });
+
+  it('puts the encoded subscription address into every deeplink scheme', () => {
+    const sub = 'https://panel.example.com/sub/a b&c=d';
+    const schemes = new Set(APPS.flatMap((a) => (a.action.kind === 'deeplink' ? [a.action.scheme] : [])));
+    expect(schemes.size).toBeGreaterThan(0);
+    for (const scheme of schemes) {
+      const href = deeplinkHref(scheme, sub);
+      const carried =
+        href.includes(encodeURIComponent(sub)) ||
+        href.includes(Buffer.from(sub, 'utf8').toString('base64')) ||
+        // hiddify://, streisand://, happ://, v2raytun:// take the address whole.
+        href.endsWith(sub);
+      expect(carried, `${scheme}: ${href}`).toBe(true);
+    }
+  });
+
+  // Carried by a format or handed per node, and so something a buyer could be
+  // sent to a client for. Every one has an entry except what is named here.
+  const NO_ENTRY: Partial<Record<ProtocolName, string>> = {
+    naive: 'no client of the page was checked to take it (decision of 26.11.2026); the formats that carry it carry it in a whole config',
+    mtproto: 'a Telegram proxy, not a subscription client: the page draws it as its own Telegram row',
+  };
+
+  it('has an entry for every protocol a format or a per-node handout carries', () => {
+    const served = (p: ProtocolName) =>
+      FORMAT_NAMES.some((f) => doorsOf(p).some((d) => formatCarries(f, d).carried)) ||
+      Object.values(PER_NODE_PROTOCOLS).some((ps) => ps!.includes(p));
+    const missing = PROTOCOL_NAMES.filter((p) => served(p) && !NO_ENTRY[p] && !APPS.some((a) => a.protocols.includes(p)));
+    expect(missing).toEqual([]);
+    for (const p of Object.keys(NO_ENTRY)) expect(APPS.some((a) => a.protocols.includes(p as ProtocolName)), `${p} is not an exception any more`).toBe(false);
   });
 });

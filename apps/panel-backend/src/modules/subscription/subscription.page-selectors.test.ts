@@ -135,3 +135,21 @@ describe('a link that names a tunnel', () => {
     expect(app(doc)).toBe('vpn');
   });
 });
+
+describe('the local proxy step follows the chosen client', () => {
+  const shown = (doc: Document) =>
+    [...doc.querySelectorAll('section.panel.is-on [data-local-proxy]')]
+      .filter((el) => !(el as HTMLElement).hidden)
+      .map((el) => el.getAttribute('data-local-proxy'));
+  const card = (doc: Document, name: string) =>
+    doc.querySelector(`section.panel.is-on .app-card[data-app="${name}"]`);
+
+  it('is hidden by another card and back with Happ', () => {
+    const doc = page({ protocols: ['xray'] });
+    expect(shown(doc)).toEqual(['Happ']);
+    click(card(doc, 'v2RayTun') ?? card(doc, 'Karing'));
+    expect(shown(doc)).toEqual([]);
+    click(card(doc, 'Happ'));
+    expect(shown(doc)).toEqual(['Happ']);
+  });
+});

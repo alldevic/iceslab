@@ -745,3 +745,59 @@ describe('the scan block opens on the tunnel a link named', () => {
     expect(html).toBe(plain);
   });
 });
+
+describe('the local proxy step of the install guide', () => {
+  const panelOf = (html: string, p: string) => {
+    const from = html.slice(html.indexOf(`data-platform="${p}"`));
+    return from.slice(0, from.indexOf('</section>'));
+  };
+  const steps = (body: string) => (body.match(/<div class="step[ "]/g) ?? []).length;
+  const warn = (body: string) => [...body.matchAll(/<div class="step step--warn" data-local-proxy="([^"]+)"( hidden)?>/g)];
+
+  it('is there when Happ leads the row, with the menu path, and is the only step added', () => {
+    const body = panelOf(buildSubscriptionPage(base({ protocols: ['xray'] })), 'android');
+    expect(body).toContain('class="app-card__name">Happ<');
+    expect(body.indexOf('class="app-card__name">Happ<')).toBeLessThan(body.indexOf('app-card__name">v2RayTun<'));
+    const w = warn(body);
+    expect(w.map((m) => [m[1], m[2]])).toEqual([['Happ', undefined]]);
+    expect(body).toContain('Close the local proxy');
+    expect(body).toContain('Inbounds');
+    expect(steps(body)).toBe(5);
+  });
+
+  it('speaks the page language', () => {
+    const body = panelOf(buildSubscriptionPage(base({ lang: 'ru', protocols: ['xray'] })), 'android');
+    expect(body).toContain('Закройте локальный прокси');
+    expect(body).toContain('Входящие соединения');
+  });
+
+  it('is there for every platform that carries Happ outside the TV tab and keeps the four steps without it', () => {
+    const html = buildSubscriptionPage(base({ protocols: ['xray'] }));
+    for (const p of ['ios', 'android', 'windows', 'macos', 'linux']) {
+      expect(warn(panelOf(html, p)).length, p).toBe(1);
+    }
+    // No Happ among the clients (only a singbox-format fleet): four steps, no mark.
+    const noHapp = buildSubscriptionPage(base({ protocols: ['xray'], usableFormats: ['singbox'] }));
+    expect(panelOf(noHapp, 'android')).not.toContain('Happ');
+    expect(panelOf(noHapp, 'android')).not.toContain('data-local-proxy');
+    expect(steps(panelOf(noHapp, 'android'))).toBe(4);
+  });
+
+  it('is not on the television and router tabs', () => {
+    const html = buildSubscriptionPage(
+      base({ protocols: ['xray', 'amneziawg'], awgNodes: [{ nodeName: 'awg' }] }),
+    );
+    for (const p of ['androidtv', 'appletv', 'router']) {
+      expect(panelOf(html, p), p).not.toContain('data-local-proxy');
+    }
+  });
+
+  it('is hidden when another client leads the row, ready for the script to show it', () => {
+    // singbox and plain both usable but a fleet that only a non-Happ client leads is
+    // not constructible from data, so check the draw rule through the mark itself:
+    // the marker is hidden exactly when its client is not the first one.
+    const body = panelOf(buildSubscriptionPage(base({ protocols: ['xray'] })), 'ios');
+    const first = /class="app-card__name">([^<]+)</.exec(body)![1];
+    for (const m of warn(body)) expect(m[2] === ' hidden', m[1]).toBe(m[1] !== first);
+  });
+});

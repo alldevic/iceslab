@@ -8,6 +8,8 @@
  * а не читатель страницы.
  */
 
+import type { ClientId } from '@iceslab/shared';
+
 export interface StepText {
   title: string;
   text: string;
@@ -49,6 +51,14 @@ export interface Labels {
   groupAdvanced: string;
   /** Steps. The shape is in code (icon, tint, order); only the words are here. */
   stepsGeneric: readonly StepText[];
+  /**
+   * The extra step for a client whose local proxy is open by default (the
+   * catalog's `localProxyAuth`). `lead` takes the app's name for `{app}`; the
+   * menu path is read off a device, so it is its own table and a client with no
+   * entry gets `pathless` rather than a route made up to look complete.
+   */
+  localProxy: { title: string; lead: string; pathless: string; tail: string };
+  localProxyPath: Partial<Record<ClientId, string>>;
   stepsTv: readonly StepText[];
   stepsRouter: readonly StepText[];
   enterOnTv: string;
@@ -161,6 +171,16 @@ export const L: Record<'ru' | 'en', Labels> = {
     hideAll: 'Hide',
     groupPlain: 'INSTALL AND IT WORKS',
     groupAdvanced: 'FOR FINE CONTROL, HARDER',
+    localProxy: {
+      title: 'Close the local proxy',
+      lead: '{app} leaves the authorisation of its local SOCKS proxy OFF out of the box.',
+      pathless: ' Open the app settings, find the local SOCKS proxy and set its authorisation mode to "Auto".',
+      tail: ' The app then makes up a login and password and fills them in for itself, so there is nothing to type. With it off, any app on the device can go out through your tunnel, spending your traffic and using your address.',
+    },
+    // Happ: read off the customer's own device, 2026-09-05.
+    localProxyPath: {
+      happ: ' Open Settings (the gear), go to Inbounds, find the `socks` row and switch it from Disabled to Auto.',
+    },
     stepsGeneric: [
       {
         title: 'Install the app',
@@ -346,6 +366,16 @@ export const L: Record<'ru' | 'en', Labels> = {
     hideAll: 'Скрыть',
     groupPlain: 'ПОСТАВИЛ И РАБОТАЕТ',
     groupAdvanced: 'ДЛЯ ТОНКОЙ НАСТРОЙКИ, СЛОЖНЕЕ',
+    localProxy: {
+      title: 'Закройте локальный прокси',
+      lead: 'В {app} авторизация локального SOCKS-прокси по умолчанию ВЫКЛЮЧЕНА.',
+      pathless: ' Откройте настройки приложения, найдите локальный SOCKS-прокси и поставьте режим авторизации «Авто».',
+      tail: ' Приложение само придумает логин и пароль и подставит их себе, вводить ничего не нужно. При выключенной авторизации любое приложение на устройстве может выйти в сеть через ваш туннель, расходуя ваш трафик и выходя с вашего адреса.',
+    },
+    // Happ: снято с устройства заказчика, 2026-09-05.
+    localProxyPath: {
+      happ: ' Откройте настройки (шестерёнка) → «Входящие соединения» (Inbounds), найдите строку socks и вместо «Отключено» (Disabled) выберите режим «Авто» (Auto).',
+    },
     stepsGeneric: [
       {
         title: 'Установка приложения',

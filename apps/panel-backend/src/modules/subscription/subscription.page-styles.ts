@@ -274,6 +274,7 @@ export const PAGE_CSS = String.raw`
   /* Steps */
   .step{display:flex; align-items:flex-start; gap:16px; padding:20px; border-radius:14px;
     background:var(--card2); border:1px solid var(--hair2);}
+  .step[hidden]{display:none;}
   .step--highlight{border-color:var(--edge-accent2);}
   .step--warn{background:var(--warn-bg); border-color:var(--warn-edge);}
   .step__num{width:38px; height:38px; flex-shrink:0; border-radius:999px; display:flex;

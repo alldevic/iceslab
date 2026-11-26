@@ -53,4 +53,19 @@ describe('usableFormats', () => {
     expect(usable).toContain('wgconf');
     expect(usable).not.toContain('plain');
   });
+  // Cases of the fork's format-usable.test.ts that the base had no unit for.
+  it('gives a tunnel-only buyer no subscription format, only the tunnel file', () => {
+    const awg = { protocol: 'amneziawg', nodeName: 'n1', uri: '' } as unknown as SubscriptionEndpoint;
+    const usable = usableFormats([awg]);
+    for (const f of ['plain', 'mihomo', 'singbox', 'xrayjson'] as const) expect(usable, f).not.toContain(f);
+    expect(usable).toContain('wgconf');
+  });
+
+  it('judges a tunnel next to a proxy on the proxy: it does not take the proxy formats away', () => {
+    const awg = { protocol: 'amneziawg', nodeName: 'n2', uri: '' } as unknown as SubscriptionEndpoint;
+    const usable = usableFormats([awg, xray()]);
+    expect(usable).toContain('plain');
+    expect(usable).toContain('singbox');
+    expect(usable).toContain('wgconf');
+  });
 });
