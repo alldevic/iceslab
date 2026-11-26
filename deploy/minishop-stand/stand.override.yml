@@ -1,4 +1,4 @@
-# Three things the stand needs that the shop's own compose cannot know about,
+# Five things the stand needs that the shop's own compose cannot know about,
 # kept here rather than as edits to its files: the shop stays unmodified by
 # design. Used by the iceslab half only; the reference half runs the shop's own
 # two compose files (see stand.sh).
@@ -101,3 +101,48 @@ services:
     # to infer from the shop's behaviour.
     ports:
       - '127.0.0.1:${PANEL_FRONT_PORT:-8087}:80'
+
+  # 4. A REAL TLS reverse proxy in front of the shop's webhook endpoint, for
+  #    `webhook-probe`. The facade signs an HMAC over the raw body, and in
+  #    production there is a proxy between it and the shop; plain HTTP
+  #    host-to-container is the one topology that cannot show a proxy changing
+  #    those bytes. Its own profile: the ordinary run does not need it. The
+  #    certificate is made by stand.sh into .runtime/certs and is never committed.
+  webhook-tls:
+    image: nginx:1.27-alpine
+    container_name: remnawave-minishop-webhook-tls
+    profiles:
+      - tls
+    volumes:
+      - ${STAND_DIR:?stand.sh exports this}/webhook-tls.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${STAND_DIR:?stand.sh exports this}/.runtime/certs:/certs:ro
+    networks:
+      - remnawave-minishop
+    ports:
+      - '127.0.0.1:${WEBHOOK_TLS_PORT:-8444}:8443'
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # 5. A panel with exactly one route missing, for the capability route the shop
+  #    reaches only as a fallback. See panel-shim.conf for why this is a proxy
+  #    and not a setting: the shop decides a route is absent by OBSERVING a 404.
+  #    It forwards to `panel-front`, so it needs no panel port. Its own profile:
+  #    the ordinary run must keep talking to the panel through `panel-front`
+  #    alone, or every other probe would be measuring one more nginx.
+  panel-shim:
+    image: nginx:1.27-alpine
+    container_name: remnawave-minishop-panel-shim
+    profiles:
+      - shim
+    volumes:
+      - ${STAND_DIR:?stand.sh exports this}/panel-shim.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - remnawave-minishop
+    depends_on:
+      panel-front:
+        condition: service_started
+    # Published so the stand can check from the host what the shop will get from
+    # inside the network: same server block either way.
+    ports:
+      - '127.0.0.1:${PANEL_SHIM_PORT:-8086}:8080'
