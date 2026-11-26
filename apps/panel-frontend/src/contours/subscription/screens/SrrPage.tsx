@@ -297,8 +297,16 @@ export function SrrPage() {
                     {rule.uaPattern}
                   </Text>
 
-                  <Box style={{ width: 170, flexShrink: 0, display: 'flex' }}>
+                  <Box style={{ width: 170, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
                     <FormatChip format={rule.format} muted={off} />
+                    {rule.format === 'wgconf' && rule.proto && (
+                      <Text
+                        data-testid="srr-proto"
+                        style={{ fontFamily: MONO, fontSize: 11, lineHeight: '14px', color: off ? FAINT : MIST }}
+                      >
+                        {t(`delivery.proto.${rule.proto}`)}
+                      </Text>
+                    )}
                   </Box>
 
                   <Box style={{ width: 70, flexShrink: 0 }}>
@@ -388,6 +396,9 @@ export function SrrPage() {
                     {'->'}
                   </Text>
                   <FormatChip format={winner.format} />
+                  {winner.format === 'wgconf' && winner.proto && (
+                    <Text style={{ fontFamily: MONO, fontSize: 11, color: MIST }}>{t(`delivery.proto.${winner.proto}`)}</Text>
+                  )}
                   <Box style={{ flex: 1, minWidth: 0 }} />
                   {/* Everything below the winner never runs for this client. */}
                   {hits.length > 1 && (

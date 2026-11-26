@@ -186,3 +186,45 @@ describe('POST /api/srr/test', () => {
     expect(JSON.parse(res.body).format).toBeNull();
   });
 });
+
+describe('the wg flavour of a rule (12.4)', () => {
+  const send = (method: 'POST' | 'PUT', url: string, payload: object) =>
+    app.inject({ method, url, headers: auth(), payload });
+
+  it('is stored on a wgconf rule and listed', async () => {
+    const res = await send('POST', '/api/srr', { name: 'WG', uaPattern: 'wg', format: 'wgconf', proto: 'wireguard' });
+    expect(res.statusCode).toBe(201);
+    expect(JSON.parse(res.body).proto).toBe('wireguard');
+    const list = await app.inject({ method: 'GET', url: '/api/srr', headers: auth() });
+    expect(JSON.parse(list.body).rules[0].proto).toBe('wireguard');
+  });
+
+  it('is refused on create for another format', async () => {
+    const res = await send('POST', '/api/srr', { name: 'X', uaPattern: 'x', format: 'clash', proto: 'wireguard' });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('is refused on update when the merged rule is not wgconf, either way round', async () => {
+    const wg = await prisma.subscriptionResponseRule.create({
+      data: { name: 'WG', uaPattern: 'wg', format: 'wgconf', proto: 'wireguard' },
+    });
+    // The format alone moves away from the stored flavour.
+    const a = await send('PUT', `/api/srr/${wg.id}`, { format: 'clash' });
+    expect(a.statusCode).toBe(400);
+    expect(JSON.parse(a.body).field).toBe('proto');
+    // Moving the format and clearing the flavour together is fine.
+    const b = await send('PUT', `/api/srr/${wg.id}`, { format: 'clash', proto: null });
+    expect(b.statusCode).toBe(200);
+    // The flavour alone onto a rule that is not wgconf.
+    const c = await send('PUT', `/api/srr/${wg.id}`, { proto: 'amneziawg' });
+    expect(c.statusCode).toBe(400);
+  });
+
+  it('shows in the User-Agent check', async () => {
+    await prisma.subscriptionResponseRule.create({
+      data: { name: 'WG', uaPattern: 'wg', format: 'wgconf', proto: 'wireguard' },
+    });
+    const res = await send('POST', '/api/srr/test', { userAgent: 'wg/1' });
+    expect(JSON.parse(res.body)).toMatchObject({ format: 'wgconf', proto: 'wireguard' });
+  });
+});

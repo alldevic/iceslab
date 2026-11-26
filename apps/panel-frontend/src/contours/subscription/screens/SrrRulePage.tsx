@@ -11,6 +11,8 @@ import {
   listSrrRules,
   srrTemplateRefusal,
   updateSrrRule,
+  SRR_PROTOS,
+  type SrrProto,
   type SrrTemplateRefusal,
   type SubscriptionFormat,
 } from '@/lib/domain/srr';
@@ -61,6 +63,8 @@ interface Draft {
   enabled: boolean;
   /** A-236 step 4: the template the rule's clients get; null = the Default. */
   templateName: string | null;
+  /** 12.4: the wg file a wgconf rule hands out; null = none named. */
+  proto: SrrProto | null;
 }
 
 const BLANK: Draft = {
@@ -70,6 +74,7 @@ const BLANK: Draft = {
   format: 'plain',
   enabled: true,
   templateName: null,
+  proto: null,
 };
 
 export function SrrRulePage() {
@@ -105,6 +110,7 @@ export function SrrRulePage() {
       format: existing.format,
       enabled: existing.enabled,
       templateName: existing.templateName ?? null,
+      proto: existing.proto ?? null,
     });
   }
 
@@ -117,6 +123,8 @@ export function SrrRulePage() {
     enabled: templatesKnown,
     retry: (count, err) => !isNotImplemented(err) && count < 2,
   });
+  // The flavour field (12.4): a server older than 12.4 sends no `proto`.
+  const protoKnown = isNew ? rules.every((r) => r.proto !== undefined) : existing?.proto !== undefined;
   const [templateRefused, setTemplateRefused] = useState<SrrTemplateRefusal | null>(null);
 
   // The section is already in the breadcrumb prefix; this only adds the rule.
@@ -164,6 +172,8 @@ export function SrrRulePage() {
         priority,
         enabled: draft.enabled,
         // Only a chosen or changed template (srrTemplatePatch).
+        // Only a wgconf rule carries a flavour; any other format clears it.
+        ...(protoKnown ? { proto: draft.format === 'wgconf' ? draft.proto : null } : {}),
         ...(templatesKnown ? srrTemplatePatch(existing?.templateName, draft.templateName, !existing) : {}),
       };
       return existing ? updateSrrRule(existing.id, payload) : createSrrRule(payload);
@@ -410,7 +420,7 @@ export function SrrRulePage() {
                 <UnstyledButton
                   key={f}
                   type="button"
-                  onClick={() => patch({ format: f })}
+                  onClick={() => patch({ format: f, ...(f === 'wgconf' ? {} : { proto: null }) })}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -495,6 +505,9 @@ export function SrrRulePage() {
                 </UnstyledButton>
               );
             })}
+            {protoKnown && draft.format === 'wgconf' && (
+              <ProtoField value={draft.proto} onChange={(proto) => patch({ proto })} />
+            )}
             {templatesKnown && !isNotImplemented(templatesQuery.error) && (
               <TemplateField
                 format={draft.format}
@@ -638,6 +651,30 @@ function nextPriority(rules: { priority: number; uaPattern: string }[]): number 
 }
 
 /* ───── Pieces ──────────────────────────────────────────────────────────── */
+
+/**
+ * Which WireGuard file a `wgconf` rule hands out (12.4). Drawn only for that
+ * format; the page clears it on a change to another one.
+ */
+function ProtoField({ value, onChange }: { value: SrrProto | null; onChange: (proto: SrrProto | null) => void }) {
+  const { t } = useTranslation();
+  const NONE = '\u0000none';
+  return (
+    <Stack gap={6} style={{ padding: '14px 20px 18px', borderTop: `1px solid ${HAIRLINE}` }}>
+      <FieldLabel>{t('delivery.fieldProto')}</FieldLabel>
+      <Select
+        data={[
+          { value: NONE, label: t('delivery.protoNone') },
+          ...SRR_PROTOS.map((p) => ({ value: p, label: t(`delivery.proto.${p}`) })),
+        ]}
+        value={value ?? NONE}
+        allowDeselect={false}
+        onChange={(v) => onChange(v === null || v === NONE ? null : (v as SrrProto))}
+      />
+      <Hint>{t('delivery.fieldProtoHint')}</Hint>
+    </Stack>
+  );
+}
 
 /**
  * The template the rule's clients are framed by (A-236 step 4): the Default

@@ -48,19 +48,38 @@ const UaPatternField = z
     if (problem) ctx.addIssue({ code: 'custom', message: problem });
   });
 
+/**
+ * Which wg flavour `wgconf` renders for a matched client (12.4): the
+ * panel's own protocol names, so the rule and `?protocols=` say it alike.
+ * Meaningless on every other format and refused there: a flavour on a
+ * `singbox` rule would read as a setting that does something.
+ */
+export const SrrProto = z.enum(['amneziawg', 'wireguard']);
+
+/** The message for a flavour on a format that renders no wg file, or null. */
+export function protoProblem(format: string, proto: string | null | undefined): string | null {
+  return proto && format !== 'wgconf' ? `proto is only meaningful for the wgconf format, not "${format}"` : null;
+}
+
 const TemplateNameField = z.string().trim().min(1).max(64);
 
-export const CreateSrrSchema = z.object({
-  name: z.string().min(1).max(64),
-  uaPattern: UaPatternField,
-  format: SrrFormat,
-  priority: z.number().int().min(0).max(10000).optional().default(100),
-  enabled: z.boolean().optional().default(true),
-  /** A-236: the operator template the matched clients are framed by, of the
-   *  type the format is framed by; null or absent = the Default. Checked
-   *  against the templates in the route. */
-  templateName: TemplateNameField.nullish(),
-});
+export const CreateSrrSchema = z
+  .object({
+    name: z.string().min(1).max(64),
+    uaPattern: UaPatternField,
+    format: SrrFormat,
+    priority: z.number().int().min(0).max(10000).optional().default(100),
+    enabled: z.boolean().optional().default(true),
+    /** A-236: the operator template the matched clients are framed by, of the
+     *  type the format is framed by; null or absent = the Default. Checked
+     *  against the templates in the route. */
+    templateName: TemplateNameField.nullish(),
+    proto: SrrProto.nullish(),
+  })
+  .superRefine((v, ctx) => {
+    const problem = protoProblem(v.format, v.proto);
+    if (problem) ctx.addIssue({ code: 'custom', path: ['proto'], message: problem });
+  });
 
 export type CreateSrrInput = z.infer<typeof CreateSrrSchema>;
 
@@ -72,6 +91,9 @@ export const UpdateSrrSchema = z.object({
   enabled: z.boolean().optional(),
   // Absent = not an edit; null = back to the Default.
   templateName: TemplateNameField.nullable().optional(),
+  // Absent = not an edit; null = no flavour. Judged against the format in the
+  // route, on the merged rule: a PUT may carry either one alone.
+  proto: SrrProto.nullable().optional(),
 });
 
 export type UpdateSrrInput = z.infer<typeof UpdateSrrSchema>;

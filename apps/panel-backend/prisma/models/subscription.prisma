@@ -46,6 +46,10 @@ model SubscriptionResponseRule {
   // of the type the format is framed by. Null = the Default; a name that no
   // longer exists falls back to the Default too (not a foreign key).
   templateName String? @map("template_name") @db.VarChar(64)
+  // 12.4: which wg file a `wgconf` rule hands out, `amneziawg` or `wireguard`
+  // (PROTOCOL_NAMES); only valid with format `wgconf`. Null = the rule names
+  // none and the file takes the first tunnel the user holds.
+  proto     String?  @db.VarChar(16)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 

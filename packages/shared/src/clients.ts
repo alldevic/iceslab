@@ -461,6 +461,12 @@ export interface ClientRule {
   pattern: string;
   format: SubscriptionFormat;
   priority: number;
+  /**
+   * Which wg file a `wgconf` rule hands out (12.4). Only on `wgconf`: the two
+   * files are incompatible, and stock wireguard-tools refuses an AmneziaWG
+   * one (`Line unrecognized: 'Jc = 4'`). Absent = the rule names no flavour.
+   */
+  proto?: 'amneziawg' | 'wireguard';
   clients: ClientId[];
 }
 
@@ -485,8 +491,27 @@ export const CLIENT_RULES: ClientRule[] = [
   { name: 'Stash', pattern: '(?i)stash', format: 'stash', priority: 45, clients: ['stash'] },
   { name: 'v2rayN', pattern: 'v2rayN|v2rayNG', format: 'xrayjson', priority: 50, clients: ['v2rayn', 'v2rayng'] },
   // No AmneziaWG client fetches by link (see CLIENTS.amneziavpn); the rule stays
-  // because operators have had it since the first seed.
-  { name: 'AmneziaWG-app', pattern: '(?i)amneziavpn|amneziawg|wireguard', format: 'wgconf', priority: 60, clients: [] },
+  // because operators have had it since the first seed. Narrowed to its own
+  // names (12.4): `wireguard` went to the rule below, which hands out the file
+  // a stock client reads.
+  {
+    name: 'AmneziaWG-app',
+    pattern: '(?i)amneziavpn|amneziawg',
+    format: 'wgconf',
+    proto: 'amneziawg',
+    priority: 60,
+    clients: [],
+  },
+  // The pattern is the fork's (measured there: `wgtunnel/5.5.0 (Android)`,
+  // `WireGuard/1.0.16 (Android)`); WireSock is a guess from its name.
+  {
+    name: 'WireGuard',
+    pattern: '(?i)wireguard|wg-?tunnel|wiresock',
+    format: 'wgconf',
+    proto: 'wireguard',
+    priority: 65,
+    clients: ['wireguard', 'wgtunnel', 'wiresock'],
+  },
   { name: 'Karing', pattern: '(?i)karing', format: 'singbox', priority: 100, clients: ['karing'] },
   { name: 'Throne', pattern: '(?i)throne', format: 'singbox', priority: 110, clients: ['throne'] },
   { name: 'FoXray', pattern: '(?i)foxray', format: 'xrayjson', priority: 120, clients: ['foxray'] },

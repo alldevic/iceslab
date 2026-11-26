@@ -159,6 +159,11 @@ export const subscription = {
     templateNoneForFormat: 'Формат {{format}} шаблонов не берёт: клиенты получат его как есть.',
     templateNotForFormat: 'Не сохранено: формат {{format}} шаблонов не берёт, а у правила шаблон «{{name}}». Выберите Default или формат с шаблонами.',
     templateNotFound: 'Не сохранено: шаблона «{{name}}» у этого формата нет. Выберите другой или Default.',
+    // 12.4: the wg file a wgconf rule hands out.
+    fieldProto: 'Файл WireGuard',
+    fieldProtoHint: 'Какой файл WireGuard отдаёт это правило. Применяется, когда в ссылке нет своих протоколов, и только если у пользователя есть туннель такого вида; иначе файл выдаётся как обычно.',
+    protoNone: 'Не назван (первый туннель)',
+    proto: { amneziawg: 'AmneziaWG', wireguard: 'WireGuard' },
     fieldEnabled: 'Включено',
     fieldEnabledHint: 'Выключенное правило пропускается целиком и ничего под собой не перекрывает.',
     whatTitle: 'Что отдаём',

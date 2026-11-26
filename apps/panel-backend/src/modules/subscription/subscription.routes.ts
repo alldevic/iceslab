@@ -284,21 +284,24 @@ async function applySubscriptionHeaders(
 
 /**
  * The format, and the template the SRR rule that chose it names (A-236 step
- * 4; null when no rule chose, or the rule names none).
+ * 4; null when no rule chose, or the rule names none), and the wg flavour it
+ * names (12.4; same).
  */
 async function resolveFormat(
   query: z.infer<typeof QuerySchema>,
   acceptHeader: string,
   userAgent: string | null,
-): Promise<{ format: Format; ruleTemplate: string | null }> {
-  if (query.format) return { format: query.format, ruleTemplate: null };
+): Promise<{ format: Format; ruleTemplate: string | null; ruleProto: ProtocolName | null }> {
+  if (query.format) return { format: query.format, ruleTemplate: null, ruleProto: null };
   const matched = await matchRuleForUserAgent(userAgent);
-  if (matched && isFormat(matched.format)) return { format: matched.format, ruleTemplate: matched.templateName };
-  if (acceptHeader.toLowerCase().includes('application/json')) return { format: 'json', ruleTemplate: null };
+  if (matched && isFormat(matched.format)) {
+    return { format: matched.format, ruleTemplate: matched.templateName, ruleProto: matched.proto };
+  }
+  if (acceptHeader.toLowerCase().includes('application/json')) return { format: 'json', ruleTemplate: null, ruleProto: null };
   // Last resort, and since 2026-09-21 the operator's choice rather than ours.
   // plain stays the default of that setting: it is the one form every
   // client can read, so an operator who has not decided keeps what worked.
-  return { format: (await getSubscriptionSettings()).defaultFormat, ruleTemplate: null };
+  return { format: (await getSubscriptionSettings()).defaultFormat, ruleTemplate: null, ruleProto: null };
 }
 
 // Wave-14 #6: a browser navigating to /sub/<token> should see a human page,
@@ -565,9 +568,9 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         known: [...PROTOCOL_NAMES],
       });
     }
-    const onlyProtocols = protocolFilter.kind === 'some' ? protocolFilter.protocols : null;
+    const askedProtocols = protocolFilter.kind === 'some' ? protocolFilter.protocols : null;
     const query = QuerySchema.parse(request.query);
-    const { format, ruleTemplate } = await resolveFormat(
+    const { format, ruleTemplate, ruleProto } = await resolveFormat(
       query,
       (request.headers.accept ?? '').toString(),
       userAgent,
@@ -712,6 +715,12 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       const narrow = (eps: SubscriptionEndpoint[]) =>
         onlyProtocols ? eps.filter((e) => onlyProtocols.includes(e.protocol as ProtocolName)) : eps;
       const availableProtocols = protocolsOf(visible);
+      // 12.4: the wg flavour the matching rule names narrows the answer when the
+      // request narrowed nothing (an explicit ?protocols= wins), and only if the
+      // user holds a tunnel of that flavour: a rule by User-Agent must not leave
+      // the user without a file, so otherwise nothing is narrowed.
+      const onlyProtocols: ProtocolName[] | null =
+        askedProtocols ?? (ruleProto && availableProtocols.includes(ruleProto) ? [ruleProto] : null);
       const result = { ...generated, endpoints: narrow(visible) };
       const framed = frame && frameIncludesHidden(frame) ? narrow(every) : result.endpoints;
 
@@ -1036,7 +1045,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
        * asked for something specific, and an empty 200 would read as "the
        * panel is broken" rather than "you have none of those".
        */
-      if (onlyProtocols) {
+      if (askedProtocols) {
         const carriesNothing =
           format === 'plain'
             ? filteredPlain.every((u) => u.length === 0)
@@ -1052,14 +1061,14 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         if (carriesNothing) {
           // Not a file to save: the sentence is the answer.
           reply.removeHeader('Content-Disposition');
-          const words = emptyNarrowingWords(format, onlyProtocols, availableProtocols);
+          const words = emptyNarrowingWords(format, askedProtocols, availableProtocols);
           if (COMMENTED_FORMATS.has(format)) {
             return reply.type('text/plain; charset=utf-8').send(`# ${words}\n`);
           }
           return reply.code(404).send({
             error: 'SUBSCRIPTION_PROTOCOL_EMPTY',
             message: words,
-            protocols: onlyProtocols,
+            protocols: askedProtocols,
             available: availableProtocols,
           });
         }

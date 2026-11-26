@@ -6,8 +6,9 @@ import {
   UpdateSrrSchema,
   SrrIdParamSchema,
   TestSrrSchema,
+  protoProblem,
 } from './srr.schemas.js';
-import { matchFormatForUserAgent, invalidateSrrCache } from './srr.service.js';
+import { matchRuleForUserAgent, invalidateSrrCache } from './srr.service.js';
 import { FORMAT_NAMES, type SubscriptionFormat } from '@iceslab/shared';
 import { findTemplate, templateTypeForFormat } from '../subscription-templates/templates.service.js';
 
@@ -49,13 +50,22 @@ export async function srrRoutes(app: FastifyInstance): Promise<void> {
   app.put('/api/srr/:id', auth, async (request, reply) => {
     const params = SrrIdParamSchema.parse(request.params);
     const input = UpdateSrrSchema.parse(request.body);
-    if (input.format !== undefined || input.templateName !== undefined) {
+    if (input.format !== undefined || input.templateName !== undefined || input.proto !== undefined) {
       // The pair as it will stand: what the request changes over what is stored.
       const stored = await prisma.subscriptionResponseRule.findUnique({
         where: { id: params.id },
-        select: { format: true, templateName: true },
+        select: { format: true, templateName: true, proto: true },
       });
       if (stored) {
+        // The flavour belongs to wgconf on the MERGED rule: a PUT may change
+        // the format alone and strand the stored flavour on, say, clash.
+        const problem = protoProblem(
+          input.format ?? stored.format,
+          input.proto !== undefined ? input.proto : stored.proto,
+        );
+        if (problem) {
+          return reply.code(400).send({ error: 'VALIDATION_ERROR', message: problem, field: 'proto' });
+        }
         const refusal = await templateRefusal(
           input.format ?? stored.format,
           input.templateName !== undefined ? input.templateName : stored.templateName,
@@ -104,8 +114,8 @@ export async function srrRoutes(app: FastifyInstance): Promise<void> {
   // POST /api/srr/test: evaluate a UA against the current rule set
   app.post('/api/srr/test', auth, async (request, reply) => {
     const input = TestSrrSchema.parse(request.body);
-    const matched = await matchFormatForUserAgent(input.userAgent);
-    return reply.send({ format: matched, userAgent: input.userAgent });
+    const matched = await matchRuleForUserAgent(input.userAgent);
+    return reply.send({ format: matched?.format ?? null, proto: matched?.proto ?? null, userAgent: input.userAgent });
   });
 }
 

@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
-import { checkStoredRules, invalidateSrrCache, matchFormatForUserAgent } from './srr.service.js';
+import { checkStoredRules, invalidateSrrCache, matchFormatForUserAgent, matchRuleForUserAgent } from './srr.service.js';
 
 interface RuleSeed {
   name: string;
@@ -106,5 +106,18 @@ describe('matchFormatForUserAgent', () => {
     ]);
     expect(await matchFormatForUserAgent('WireGuard/Android 1.2')).toBe('wgconf');
     expect(await matchFormatForUserAgent('wireguard-cli')).toBe('wgconf');
+  });
+});
+
+describe('matchRuleForUserAgent: the wg flavour (12.4)', () => {
+  it('carries the flavour of the rule that won, null when it names none', async () => {
+    await prisma.subscriptionResponseRule.createMany({
+      data: [
+        { name: 'WG', uaPattern: 'WireGuard', format: 'wgconf', proto: 'wireguard', priority: 10 },
+        { name: 'Plain', uaPattern: '.*', format: 'plain', priority: 900 },
+      ],
+    });
+    expect(await matchRuleForUserAgent('WireGuard/1.0')).toMatchObject({ name: 'WG', proto: 'wireguard' });
+    expect(await matchRuleForUserAgent('Other')).toMatchObject({ name: 'Plain', proto: null });
   });
 });

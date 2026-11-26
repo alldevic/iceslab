@@ -1,6 +1,7 @@
 import { prisma } from '../../prisma.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { notifyTelegramAsync, escapeMarkdown } from '../../lib/notify/telegram-notify.js';
+import type { ProtocolName } from '@iceslab/shared';
 import { compileLinearRule, testLinearRule, type LinearRule } from './linear-regex.js';
 
 /**
@@ -19,18 +20,26 @@ const UA_MAX_LENGTH = 256;
  * short TTL as a backstop.
  */
 const SRR_CACHE_TTL_MS = 60_000;
+export type WgFlavour = Extract<ProtocolName, 'amneziawg' | 'wireguard'>;
+
 interface CompiledRule {
   re: LinearRule;
   format: string;
   name: string;
   /** A-236: the template the rule's clients are framed by; null = Default. */
   templateName: string | null;
+  /** 12.4: the wg flavour a `wgconf` rule names; null = none. */
+  proto: WgFlavour | null;
 }
 let srrCache: { rules: CompiledRule[]; expiresAt: number } | null = null;
 
 /** Clear the SRR rule cache. Call after any rule create / update / delete. */
 export function invalidateSrrCache(): void {
   srrCache = null;
+}
+
+function asFlavour(v: string | null): WgFlavour | null {
+  return v === 'amneziawg' || v === 'wireguard' ? v : null;
 }
 
 async function getCompiledRules(): Promise<CompiledRule[]> {
@@ -41,12 +50,12 @@ async function getCompiledRules(): Promise<CompiledRule[]> {
     // The name rides along for the admin side: "this user gets singbox" is an
     // assertion nobody can check, "rule Happ matched their User-Agent" is one
     // an operator can act on. The serving path ignores it.
-    select: { name: true, uaPattern: true, format: true, templateName: true },
+    select: { name: true, uaPattern: true, format: true, templateName: true, proto: true },
   });
   const rules: CompiledRule[] = [];
   for (const r of raw) {
     try {
-      rules.push({ re: compileRule(r.uaPattern), format: r.format, name: r.name, templateName: r.templateName });
+      rules.push({ re: compileRule(r.uaPattern), format: r.format, name: r.name, templateName: r.templateName, proto: asFlavour(r.proto) });
     } catch {
       // Bad regex, or one the linear engine cannot run (a rule stored before
       // A-019): not served. checkStoredRules names it at start.
@@ -80,12 +89,12 @@ export async function matchFormatForUserAgent(
  */
 export async function matchRuleForUserAgent(
   userAgent: string | null | undefined,
-): Promise<{ name: string; format: string; templateName: string | null } | null> {
+): Promise<{ name: string; format: string; templateName: string | null; proto: WgFlavour | null } | null> {
   if (!userAgent) return null;
   const ua = userAgent.slice(0, UA_MAX_LENGTH);
   for (const rule of await getCompiledRules()) {
     if (testLinearRule(rule.re, ua)) {
-      return { name: rule.name, format: rule.format, templateName: rule.templateName };
+      return { name: rule.name, format: rule.format, templateName: rule.templateName, proto: rule.proto };
     }
   }
   return null;

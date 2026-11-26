@@ -158,6 +158,11 @@ export const subscription = {
     templateNoneForFormat: 'The {{format}} format takes no template: clients get it as it is.',
     templateNotForFormat: 'Not saved: the {{format}} format takes no template, and the rule names «{{name}}». Pick Default or a format with templates.',
     templateNotFound: 'Not saved: this format has no template «{{name}}». Pick another one or Default.',
+    // 12.4: the wg file a wgconf rule hands out.
+    fieldProto: 'WireGuard file',
+    fieldProtoHint: 'Which WireGuard file this rule hands out. Applied when the link names no protocols itself, and only if the user has a tunnel of that kind; otherwise the user gets the file as usual.',
+    protoNone: 'Not named (first tunnel)',
+    proto: { amneziawg: 'AmneziaWG', wireguard: 'WireGuard' },
     fieldEnabled: 'Enabled',
     fieldEnabledHint: 'A disabled rule is skipped entirely and blocks nothing below it.',
     whatTitle: 'What it serves',

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { UpdateSrrSchema, ruleProblem } from './srr.schemas.js';
+import { CreateSrrSchema, UpdateSrrSchema, protoProblem, ruleProblem } from './srr.schemas.js';
 import { compileLinearRule, foldPatternCase, testLinearRule } from './linear-regex.js';
 
 /**
@@ -44,5 +44,26 @@ describe('matching on the linear engine', () => {
     expect(foldPatternCase('A\\D[B-Z]\\p{Lu}')).toBe('a\\D[b-z]\\p{Lu}');
     const plain = compileLinearRule('Happ');
     expect(testLinearRule(plain, 'happ')).toBe(false);
+  });
+});
+
+describe('the wg flavour of a rule (12.4)', () => {
+  const base = { name: 'x', uaPattern: 'x' };
+  it('is taken on wgconf, with or without, and refused on any other format on create', () => {
+    expect(CreateSrrSchema.safeParse({ ...base, format: 'wgconf', proto: 'wireguard' }).success).toBe(true);
+    expect(CreateSrrSchema.safeParse({ ...base, format: 'wgconf', proto: null }).success).toBe(true);
+    expect(CreateSrrSchema.safeParse({ ...base, format: 'wgconf' }).success).toBe(true);
+    expect(CreateSrrSchema.safeParse({ ...base, format: 'clash', proto: 'wireguard' }).success).toBe(false);
+    expect(CreateSrrSchema.safeParse({ ...base, format: 'clash', proto: null }).success).toBe(true);
+  });
+  it('names only the panel wg protocols', () => {
+    expect(CreateSrrSchema.safeParse({ ...base, format: 'wgconf', proto: 'xray' }).success).toBe(false);
+    expect(UpdateSrrSchema.safeParse({ proto: 'amneziawg' }).success).toBe(true);
+    expect(UpdateSrrSchema.safeParse({ proto: 'hysteria' }).success).toBe(false);
+  });
+  it('protoProblem judges a merged pair', () => {
+    expect(protoProblem('wgconf', 'amneziawg')).toBeNull();
+    expect(protoProblem('singbox', null)).toBeNull();
+    expect(protoProblem('singbox', 'amneziawg')).toMatch(/only meaningful for the wgconf/);
   });
 });

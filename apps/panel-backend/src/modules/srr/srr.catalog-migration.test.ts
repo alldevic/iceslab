@@ -47,15 +47,18 @@ const seed = () => run(SEEDS.flatMap((d) => statements(d, /^INSERT INTO/)));
 // The catalog migration, then A-236's move to the core families (its data
 // statement only: the column it adds is already in the test database).
 const FAMILIES = '20261024183834_srr_core_families';
+// 12.4: the wg flavour (its column exists already: only the data statements).
+const WG_FLAVOUR = '20261126140000_srr_wg_flavour';
 const migrate = async () => {
   await run(statements(CATALOG));
   await run(statements(FAMILIES, /^UPDATE/));
+  await run(statements(WG_FLAVOUR, /^(UPDATE|INSERT)/));
 };
 
 async function rules() {
   return prisma.subscriptionResponseRule.findMany({
     orderBy: [{ priority: 'asc' }, { name: 'asc' }],
-    select: { name: true, uaPattern: true, format: true, priority: true },
+    select: { name: true, uaPattern: true, format: true, priority: true, proto: true },
   });
 }
 
@@ -73,7 +76,7 @@ describe('the seed migrations and the catalog', () => {
     await seed();
     await migrate();
     const want = [...CLIENT_RULES]
-      .map((r) => ({ name: r.name, uaPattern: r.pattern, format: r.format, priority: r.priority }))
+      .map((r) => ({ name: r.name, uaPattern: r.pattern, format: r.format, priority: r.priority, proto: r.proto ?? null }))
       .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name));
     expect(await rules()).toEqual(want);
   });
@@ -122,6 +125,26 @@ describe('the seed migrations and the catalog', () => {
     await migrate();
     const stash = await prisma.subscriptionResponseRule.findUnique({ where: { name: 'Stash' } });
     expect(stash).toMatchObject({ uaPattern: 'MyStash', format: 'surge', priority: 5 });
+  });
+
+  it('splits the wg rule and adds WireGuard when AmneziaWG-app is as seeded', async () => {
+    await seed();
+    await migrate();
+    const byName = Object.fromEntries((await rules()).map((r) => [r.name, r]));
+    expect(byName['AmneziaWG-app']).toMatchObject({ uaPattern: '(?i)amneziavpn|amneziawg', proto: 'amneziawg', priority: 60 });
+    expect(byName.WireGuard).toMatchObject({ format: 'wgconf', proto: 'wireguard', priority: 65 });
+  });
+
+  it('leaves an edited AmneziaWG-app alone and adds no WireGuard rule beside it', async () => {
+    await seed();
+    await prisma.subscriptionResponseRule.update({
+      where: { name: 'AmneziaWG-app' },
+      data: { uaPattern: '(?i)amneziavpn|amneziawg|wireguard|mywg' },
+    });
+    await migrate();
+    const byName = Object.fromEntries((await rules()).map((r) => [r.name, r]));
+    expect(byName['AmneziaWG-app']).toMatchObject({ uaPattern: '(?i)amneziavpn|amneziawg|wireguard|mywg', proto: null });
+    expect(byName.WireGuard).toBeUndefined();
   });
 
   it('can run twice', async () => {

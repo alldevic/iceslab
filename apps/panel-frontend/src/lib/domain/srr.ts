@@ -11,6 +11,10 @@ import { api } from '@/lib/net/client';
  */
 export type SubscriptionFormat = SharedFormat;
 
+/** Какой файл WireGuard отдаёт правило с форматом `wgconf` (12.4). */
+export type SrrProto = 'amneziawg' | 'wireguard';
+export const SRR_PROTOS: readonly SrrProto[] = ['amneziawg', 'wireguard'];
+
 export interface SrrRule {
   id: string;
   name: string;
@@ -24,6 +28,12 @@ export interface SrrRule {
    * это «не знаю», и поле шаблона на экране тогда не рисуется.
    */
   templateName?: string | null;
+  /**
+   * 12.4: разновидность WireGuard; осмысленна только при формате `wgconf`.
+   * `null` = правило её не называет. Поля нет (`undefined`) у сервера старше
+   * 12.4: поле на экране тогда не рисуется.
+   */
+  proto?: SrrProto | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -35,6 +45,7 @@ export interface CreateSrrInput {
   priority?: number;
   enabled?: boolean;
   templateName?: string | null;
+  proto?: SrrProto | null;
 }
 
 export interface UpdateSrrInput {
@@ -45,6 +56,8 @@ export interface UpdateSrrInput {
   enabled?: boolean;
   /** Нет ключа = не правка; `null` = вернуть Default. */
   templateName?: string | null;
+  /** Нет ключа = не правка; `null` = без разновидности. */
+  proto?: SrrProto | null;
 }
 
 /**
