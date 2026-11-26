@@ -127,6 +127,8 @@ export const traffic = {
     entryUnknown: 'Neither a name nor an address: {{entries}}. Such entries are marked in the rules.',
     entryUnknownRow: 'Neither a name nor an address: {{entries}}.',
     notePlaceholder: 'why this rule exists',
+    matchLabel: 'Match expressions',
+    noteLabel: 'Rule note',
     shadowedBy: 'never fires: {{match}} is claimed by a rule above, which takes this traffic first',
     shadowedByBlock: 'never fires: {{match}} is blocked too, and on the node block always comes before direct',
     shadowedTwice: 'repeat: {{match}} is already in another row with the same action',

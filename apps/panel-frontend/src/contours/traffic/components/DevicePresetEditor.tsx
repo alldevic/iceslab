@@ -75,6 +75,7 @@ export function DevicePresetEditor({
         ) : (
           <TextInput
             value={name}
+            aria-label={t('routes.presetNamePlaceholder')}
             onChange={(e) => setName(e.currentTarget.value)}
             placeholder={t('routes.presetNamePlaceholder')}
             error={nameError}

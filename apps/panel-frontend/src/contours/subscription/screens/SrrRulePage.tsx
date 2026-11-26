@@ -319,6 +319,7 @@ export function SrrRulePage() {
                 <FieldLabel required>{t('delivery.fieldName')}</FieldLabel>
                 <TextInput
                   placeholder="Happ"
+                  aria-label={t('delivery.fieldName')}
                   value={draft.name}
                   onChange={(e) => patch({ name: e.currentTarget.value })}
                 />
@@ -329,6 +330,7 @@ export function SrrRulePage() {
                 <NumberInput
                   min={0}
                   max={10000}
+                  aria-label={t('delivery.fieldPriority')}
                   allowDecimal={false}
                   allowNegative={false}
                   value={draft.priority}
@@ -342,6 +344,7 @@ export function SrrRulePage() {
               <FieldLabel required>{t('delivery.fieldPattern')}</FieldLabel>
               <TextInput
                 placeholder="(?i)happ"
+                aria-label={t('delivery.fieldPattern')}
                 value={draft.uaPattern}
                 error={draft.uaPattern.length > 0 && !patternOk}
                 onChange={(e) => patch({ uaPattern: e.currentTarget.value })}
@@ -370,6 +373,7 @@ export function SrrRulePage() {
             >
               <Switch
                 checked={draft.enabled}
+                aria-label={t('delivery.fieldEnabled')}
                 onChange={(e) => patch({ enabled: e.currentTarget.checked })}
                 style={{ flexShrink: 0 }}
               />
@@ -535,6 +539,7 @@ export function SrrRulePage() {
             </Box>
             <TextInput
               placeholder="Happ/1.42.0 (iPhone; iOS 18.2)"
+              aria-label={t('delivery.tryTitle')}
               value={testUa}
               onChange={(e) => setTestUa(e.currentTarget.value)}
               styles={{ input: { fontFamily: MONO, fontSize: 12, height: 38 } }}
@@ -663,6 +668,7 @@ function ProtoField({ value, onChange }: { value: SrrProto | null; onChange: (pr
     <Stack gap={6} style={{ padding: '14px 20px 18px', borderTop: `1px solid ${HAIRLINE}` }}>
       <FieldLabel>{t('delivery.fieldProto')}</FieldLabel>
       <Select
+        aria-label={t('delivery.fieldProto')}
         data={[
           { value: NONE, label: t('delivery.protoNone') },
           ...SRR_PROTOS.map((p) => ({ value: p, label: t(`delivery.proto.${p}`) })),
@@ -704,6 +710,7 @@ function TemplateField({
     <Stack gap={6} style={{ padding: '14px 20px 18px', borderTop: `1px solid ${HAIRLINE}` }}>
       <FieldLabel>{t('delivery.fieldTemplate')}</FieldLabel>
       <Select
+        aria-label={t('delivery.fieldTemplate')}
         data={[{ value: DEFAULT, label: t('delivery.templateDefault') }, ...names.map((n) => ({ value: n, label: n }))]}
         value={value ?? DEFAULT}
         allowDeselect={false}

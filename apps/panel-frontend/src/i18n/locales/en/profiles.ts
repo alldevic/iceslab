@@ -519,6 +519,7 @@ export const profiles = {
         notes: [
           "Obfs password generated randomly - don't lose it, clients need it",
           'Brutal CC 100/100 Mbps - adjust to your node\'s real bandwidth',
+          'Port hopping 20000-50000 is on; without it RU TSPU cuts QUIC. install-iceslab-node.sh has already set the iptables NAT for this range',
         ],
       },
       'awg-default': {

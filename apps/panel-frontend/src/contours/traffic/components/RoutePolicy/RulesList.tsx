@@ -56,6 +56,7 @@ export function RulesList({
             <Box className="routes-rule-match" style={{ position: 'relative' }}>
               <TextInput
                 value={rule.match.join(' ')}
+                aria-label={t('routes.matchLabel')}
                 placeholder={t('routes.matchPlaceholder')}
                 onChange={(e) => setRule(i, { match: splitMatch(e.currentTarget.value) })}
                 onFocus={() => setFocused(rule.id)}

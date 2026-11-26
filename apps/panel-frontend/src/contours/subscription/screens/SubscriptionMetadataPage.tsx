@@ -265,6 +265,7 @@ export function SubscriptionMetadataPage() {
               <FieldLabel>{t('metadata.profileTitle')}</FieldLabel>
               <TextInput
                 placeholder={settingsQuery.data?.brandName ?? 'Iceslab'}
+                aria-label={t('metadata.profileTitle')}
                 value={draft.profileTitle}
                 onChange={(e) => patch({ profileTitle: e.currentTarget.value })}
               />
@@ -277,6 +278,7 @@ export function SubscriptionMetadataPage() {
                 <NumberInput
                   min={1}
                   max={168}
+                  aria-label={t('metadata.interval')}
                   allowDecimal={false}
                   allowNegative={false}
                   value={draft.intervalHours}
@@ -301,6 +303,7 @@ export function SubscriptionMetadataPage() {
                 <FieldLabel>{t('metadata.supportUrl')}</FieldLabel>
                 <TextInput
                   placeholder="https://t.me/your_support"
+                  aria-label={t('metadata.supportUrl')}
                   value={draft.supportUrl}
                   onChange={(e) => patch({ supportUrl: e.currentTarget.value })}
                 />
@@ -337,6 +340,7 @@ export function SubscriptionMetadataPage() {
               </Box>
               <Textarea
                 ref={announceRef}
+                aria-label={t('metadata.announce')}
                 autosize
                 minRows={2}
                 maxRows={5}
@@ -411,6 +415,7 @@ export function SubscriptionMetadataPage() {
               <Box style={{ flex: 1, minWidth: 0 }} />
               <Switch
                 checked={draft.tlsFragment}
+                aria-label={t('metadata.fragmentTitle')}
                 onChange={(e) => patch({ tlsFragment: e.currentTarget.checked })}
               />
             </Box>
@@ -432,6 +437,7 @@ export function SubscriptionMetadataPage() {
               <FieldLabel>{t('metadata.wgDns')}</FieldLabel>
               <TextInput
                 placeholder={t('metadata.wgDnsPlaceholder')}
+                aria-label={t('metadata.wgDns')}
                 value={draft.wgDns}
                 error={wgDnsBad ? t('metadata.wgDnsInvalid', { value: wgDnsBad }) : undefined}
                 onChange={(e) => patch({ wgDns: e.currentTarget.value })}
@@ -443,6 +449,7 @@ export function SubscriptionMetadataPage() {
               <Box style={{ flex: 1, minWidth: 0 }} />
               <Switch
                 checked={draft.wgDropIpv6}
+                aria-label={t('metadata.wgDropIpv6')}
                 onChange={(e) => patch({ wgDropIpv6: e.currentTarget.checked })}
               />
             </Box>
@@ -454,6 +461,7 @@ export function SubscriptionMetadataPage() {
               <Box style={{ flex: 1, minWidth: 0 }} />
               <Switch
                 checked={draft.wgShowUnusedTunnels}
+                aria-label={t('metadata.wgShowUnusedTunnels')}
                 onChange={(e) => patch({ wgShowUnusedTunnels: e.currentTarget.checked })}
               />
             </Box>

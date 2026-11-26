@@ -84,6 +84,7 @@ export const nodes = {
       coreVersionsOthers_one: 'остальные ядра ({{count}})',
       coreVersionsOthers_few: 'остальные ядра ({{count}})',
       coreVersionsOthers_many: 'остальные ядра ({{count}})',
+      coreVersionsOthers_other: 'остальные ядра ({{count}})',
       coreVersionsNote: 'Эти версии уедут в установку вместе с bootstrap-токеном. Дальше их можно менять на странице ноды.',
       singboxEngineDesc: 'Добавит --with-singbox в install-команду - тогда нода сможет обслуживать и профили vless/vmess/trojan/hy2/ss с движком sing-box.',
       hardeningSection: 'Защита (hardening)',

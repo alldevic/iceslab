@@ -68,6 +68,7 @@ export const dashboard = {
       profilesCount_one: '{{count}} профиль',
       profilesCount_few: '{{count}} профилей',
       profilesCount_many: '{{count}} профилей',
+      profilesCount_other: '{{count}} профиля',
       users: 'пользователей',
     },
     topUsers: {

@@ -150,6 +150,7 @@ export function RulesList({
               <TextInput
                 className="routes-rule-match"
                 value={rule.match.join(' ')}
+                aria-label={t('routes.matchLabel')}
                 placeholder={t('routes.matchPlaceholder')}
                 onChange={(e) => setRule(i, { match: splitMatch(e.currentTarget.value) })}
                 styles={{
@@ -210,6 +211,7 @@ export function RulesList({
               <TextInput
                 style={{ flex: 1, minWidth: 0 }}
                 value={rule.note}
+                aria-label={t('routes.noteLabel')}
                 placeholder={t('routes.notePlaceholder')}
                 onChange={(e) => setRule(i, { note: e.currentTarget.value })}
                 styles={{

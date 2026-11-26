@@ -139,6 +139,7 @@ export const settings = {
     nodesCount_one: '{{count}} нода',
     nodesCount_few: '{{count}} ноды',
     nodesCount_many: '{{count}} нод',
+    nodesCount_other: '{{count}} ноды',
     add: 'Добавить',
     deleteTitle: 'Удалить регион «{{name}}»?',
     deleteWithNodes: '{{count}} нод останутся, но потеряют привязку к региону (поле обнулится).',

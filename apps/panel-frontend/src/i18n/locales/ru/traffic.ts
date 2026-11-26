@@ -140,6 +140,8 @@ export const traffic = {
     entryUnknown: 'Не имя и не адрес: {{entries}}. Такие записи отмечены в правилах.',
     entryUnknownRow: 'Не имя и не адрес: {{entries}}.',
     notePlaceholder: 'зачем это правило',
+    matchLabel: 'Выражения совпадения',
+    noteLabel: 'Заметка к правилу',
     shadowedBy: 'никогда не сработает: {{match}} уже забирает правило выше',
     shadowedByBlock: 'не сработает: {{match}} стоит и в блоке, а блок на ноде всегда выше прямого',
     shadowedTwice: 'повтор: {{match}} уже есть в другой строке с тем же действием',

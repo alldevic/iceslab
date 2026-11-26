@@ -124,6 +124,7 @@ export function FormColumn({
           >
             <input
               {...form.getInputProps('username')}
+              aria-label={t('userDrawer.username')}
               placeholder={t('userDrawer.usernamePlaceholder')}
               style={{
                 flex: 1,

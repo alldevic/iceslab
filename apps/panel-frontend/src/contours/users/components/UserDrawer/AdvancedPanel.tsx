@@ -170,6 +170,7 @@ export function AdvancedPanel({
               they configure. */}
           <AdvancedGroup icon={<IconNote size={13} />} title={t('userDrawer.note')}>
             <Textarea
+              aria-label={t('userDrawer.note')}
               placeholder={t('userDrawer.notePlaceholder')}
               autosize
               minRows={3}
@@ -185,6 +186,7 @@ export function AdvancedPanel({
             badge={t('userDrawer.supportTool')}
           >
             <Select
+              aria-label={t('userDrawer.routingOverride')}
               // The built-ins from the shared list the backend validates
               // against, then the operator's own presets (A-229).
               data={presetChoiceRows(form.values.routingPreset, presetsQuery.data?.presets, {

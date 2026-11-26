@@ -61,6 +61,7 @@ export function RoutePolicyEditor({
       <Box style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 20px', width: '100%' }}>
         <TextInput
           value={name}
+          aria-label={t('routes.policyNamePlaceholder')}
           onChange={(e) => setName(e.currentTarget.value)}
           error={nameTaken ?? undefined}
           placeholder={t('routes.policyNamePlaceholder')}
