@@ -51,7 +51,7 @@ refuse() { echo "stand: $*" >&2; exit 2; }
 # The commands that need no shop checkout (and, but for mint-token, no panel).
 offline() {
   case "${1:-}" in
-    compare|mark|mint-token|'') return 0 ;;
+    compare|compare-admin|verdict|selftest|mark|mint-token|'') return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -259,6 +259,113 @@ purge_panel_leftovers() {
   done <<< "$(stand_owned_emails)"
 }
 
+# The panel squads the tariff catalogue names, on OUR panel. The reference
+# panel arrives with `MiniShop Standard` and `MiniShop Premium` from the shop's
+# own seed-remnawave.sql, so only this half needs them made. If a later shop
+# release stops seeding them there, seed_tariffs.py refuses by name rather than
+# storing a catalogue that points nowhere.
+#
+# The names come from the template, not from a second list here: a catalogue
+# naming a squad this never creates would fail at seed time, and one creating a
+# squad no tariff names would be litter on a panel the stand does not own.
+ensure_panel_squads() {
+  local tok names name code
+  tok="$(tr -d '[:space:]' < "$TOKEN_FILE")"
+  names="$(python3 -I "$HERE/squad_names.py" "$HERE/tariffs.template.json")" \
+    || die "could not read the squad names out of tariffs.template.json"
+  [[ -n "$names" ]] || die "tariffs.template.json names no squad, so no tariff can move one"
+  while read -r name; do
+    [[ -n "$name" ]] || continue
+    code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+      -H "authorization: Bearer $tok" -H 'content-type: application/json' \
+      -d "$(python3 -I -c 'import json,sys; print(json.dumps({"name": sys.argv[1]}))' "$name")" \
+      "$PANEL_URL/api/squads")"
+    case "$code" in
+      201) echo "stand: created panel squad '$name'" ;;
+      409) echo "stand: panel squad '$name' already there" ;;
+      *)   die "could not create the panel squad '$name': HTTP $code
+The tariff catalogue names it, and without it seed_tariffs.py refuses - which is
+correct, but the fix belongs here." ;;
+    esac
+  done <<< "$names"
+  clear_squad_profiles
+}
+
+# Put the stand's squads back to granting NOTHING, every time a half comes up.
+# Our panel is not a stand volume, so a profile attached to a squad by an earlier
+# run (the premium probe does it) outlives that run, and the next differential
+# would have our half metering a squad the reference half - whose panel has no
+# nodes to grant - skips. Unconditional rather than "only if attached": reading
+# first and writing only on a difference would make the common path silent about
+# what it did.
+clear_squad_profiles() {
+  local tok sid code
+  tok="$(tr -d '[:space:]' < "$TOKEN_FILE")"
+  while read -r sid; do
+    [[ -n "$sid" ]] || continue
+    code="$(curl -sS -o /dev/null -w '%{http_code}' -X PUT -H "authorization: Bearer $tok" \
+      -H 'content-type: application/json' -d '{"profileIds":[]}' \
+      "$PANEL_URL/api/squads/$sid")" || die "could not clear profiles on squad $sid"
+    [[ "$code" == 2* ]] || die "clearing profiles on squad $sid answered HTTP $code"
+  done <<< "$(stand_squad_ids)"
+  echo "stand: squad profiles cleared"
+}
+
+# The uuids of the squads the tariff template names, on this panel, read through
+# the facade. With --premium, only the squads a tariff hands out as its premium
+# segment.
+stand_squad_ids() {
+  local tok names
+  tok="$(tr -d '[:space:]' < "$TOKEN_FILE")"
+  names="$(python3 -I "$HERE/squad_names.py" "$HERE/tariffs.template.json" "$@" | tr '\n' '|')" \
+    || die "could not read the squad names out of the tariff template"
+  curl -sS -H "authorization: Bearer $tok" "$PANEL_URL/$PREFIX/api/internal-squads" \
+    | python3 -I "$HERE/squad_ids.py" "$names"
+}
+
+# The tariff catalogue itself, through the shop's own admin API. Both halves,
+# same code, resolved against whichever panel the shop is pointed at. The shop
+# caches the squad list for 300 s: callers restart backend and worker (and then
+# the frontend) afterwards.
+seed_tariffs() {
+  python3 -I "$HERE/seed_tariffs.py" --shop "$SHOP_URL" \
+    || die "the tariff catalogue was not configured; the two admin actions that
+reach the panel through a tariff would answer 400 and 502 on both halves, and
+the differential would compare two refusals."
+}
+
+# The walk reads the worker's log window, and the worker's own background sync
+# calls land in it unless it has gone quiet. Idleness is read as "the worker's
+# log tail did not change for N consecutive seconds", not as a particular line:
+# a marker would tie this to one release's wording of a dependency we do not
+# control. Not fatal on timeout: a worker that never quiets is said out loud
+# and the trace carries the noise it always did.
+wait_for_worker_idle() {
+  local which="$1" quiet="${2:-4}" timeout="${3:-90}"
+  local container="remnawave-minishop-worker"
+  local waited=0 stable=0 prev="" now
+  while (( waited < timeout )); do
+    # `|| true`: docker logs exits non-zero for a restarting container, and
+    # under `set -e` that would kill the run for a state about to pass.
+    now="$(docker logs --tail 5 "$container" 2>&1 | md5sum || true)"
+    if [[ "$now" == "$prev" ]]; then
+      stable=$(( stable + 1 ))
+      if (( stable >= quiet )); then
+        echo "stand: $which worker idle after ${waited}s"
+        return 0
+      fi
+    else
+      stable=0
+    fi
+    prev="$now"
+    sleep 1
+    waited=$(( waited + 1 ))
+  done
+  echo "stand: WARNING - $which worker still talking after ${timeout}s; the admin" >&2
+  echo "       trace may carry background sync calls the walk did not make" >&2
+  return 0
+}
+
 # The shop is reachable through its own nginx, and nginx resolves its upstream
 # once at startup: restart the backend alone and the frontend keeps proxying to
 # an address that no longer exists, answering with an empty body. So the
@@ -385,6 +492,8 @@ case "${1:-}" in
       || echo "stand: the shop's own demo seed exited non-zero; the admin row decides (below)" >&2
     assert_admin_seeded iceslab
     assert_worker_authenticated iceslab
+    ensure_panel_squads
+    seed_tariffs
     # `restart` returns when the container is running, not when the app inside
     # it answers; `up --wait` waits for healthy.
     "${compose_iceslab[@]}" restart backend worker
@@ -411,6 +520,7 @@ case "${1:-}" in
       || echo "stand: the shop's own demo seed exited non-zero; the admin row decides (below)" >&2
     assert_admin_seeded ref
     assert_worker_authenticated ref
+    seed_tariffs
     # The shop cached "could not detect version" while the panel was unseeded.
     "${compose_ref[@]}" restart backend worker
     "${compose_ref[@]}" up -d --wait backend worker
@@ -434,6 +544,131 @@ case "${1:-}" in
     # stand volume; up-iceslab purges its leftovers.
     "${compose_iceslab[@]}" "${STAND_PROFILES[@]}" down -v --remove-orphans || true
     "${compose_ref[@]}" --profile seed down -v --remove-orphans || true
+    ;;
+
+  check)
+    # The preconditions `up-*` asserts, against a stand that is already up.
+    # Exists so the guards can be exercised without a twenty-minute run.
+    shift
+    which="${1:?usage: stand.sh check <iceslab|ref>}"
+    assert_admin_seeded "$which"
+    assert_worker_authenticated "$which"
+    ;;
+
+  seed-tariffs)
+    # The catalogue step alone, against whichever half is up. Restart backend,
+    # worker and then frontend afterwards if a page must see it at once: the
+    # shop caches the squad list for 300 s.
+    seed_tariffs
+    ;;
+
+  half)
+    # One half of the differential, start to finish, from dropped volumes.
+    #
+    # Both halves go through this one code path on purpose: the comparison is
+    # worth what the sameness of the two runs is worth, and two hand-typed
+    # sequences drift in ways that then show up as findings. The buyer's address
+    # is fixed for the same reason - the shop keys its user off it. Our panel's
+    # leftovers are purged by up-iceslab.
+    shift
+    which="${1:-}"; outdir="${2:-}"
+    [[ -n "$which" && -n "$outdir" ]] || die "usage: stand.sh half <iceslab|ref> <outdir>"
+    mkdir -p "$outdir"
+    case "$which" in
+      iceslab) env_for_half="$RUNTIME_ENV" ;;
+      ref)     env_for_half="$RUNTIME_REF_ENV" ;;
+      *) die "half: expected iceslab or ref, got $which" ;;
+    esac
+    buyer="${STAND_BUYER:-stand-buyer@example.com}"
+    "$0" reset
+    "$0" "up-$which"
+    # Node traffic, so the walk compares two FILLED `topNodes` lists. Without it
+    # both halves report an empty one and the claim that we always fill it is
+    # never exercised (see seed_node_traffic.py).
+    python3 -I "$HERE/seed_node_traffic.py" "$which"
+    SHOP_URL="$SHOP_URL" SHOP_PORT="$SHOP_PORT" STAND_ENV="$env_for_half" \
+      "$HERE/buy.sh" "$buyer" > "$outdir/$which-buy.log" 2>&1 \
+      || { tail -20 "$outdir/$which-buy.log" >&2; die "the purchase failed on the $which half"; }
+    "$0" trace "$outdir/$which-buy.trace"
+    # Open the trace window on a quiet worker: see wait_for_worker_idle.
+    wait_for_worker_idle "$which"
+    mark="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; sleep 1
+    # admin.sh exits non-zero when a MUST_SUCCEED step failed; the pipe must not
+    # hide that behind tee's status.
+    SHOP_URL="$SHOP_URL" STAND_ENV="$env_for_half" \
+      "$HERE/admin.sh" "$outdir/$which-admin.jsonl" "$buyer" 2>&1 | tee "$outdir/$which-admin.log"
+    [[ "${PIPESTATUS[0]}" -eq 0 ]] || die "the admin walk failed on the $which half (see $outdir/$which-admin.log)"
+    "$0" trace "$outdir/$which-admin.trace" "$mark"
+    echo "stand: $which half done -> $outdir"
+    ;;
+
+  verdict)
+    # The three comparisons on the files a differential left in <outdir>; needs
+    # no stand and no docker. Exit 0: they agree. 1: a comparison found a
+    # divergence. 2: a comparison refused (empty or unusable input) or a file is
+    # missing - the run proved nothing, and that is not a finding.
+    shift
+    outdir="${1:?usage: stand.sh verdict <outdir>}"
+    diverged=0; invalid=0
+    for f in ref-buy.trace iceslab-buy.trace ref-admin.trace iceslab-admin.trace \
+             ref-admin.jsonl iceslab-admin.jsonl; do
+      [[ -f "$outdir/$f" ]] || { echo "stand: $outdir/$f is missing" >&2; invalid=1; }
+    done
+    [[ $invalid -eq 0 ]] || refuse "the differential left no complete set of files in $outdir; it proved nothing"
+    compare_step() { # heading, script, args...
+      local heading="$1" script="$2" rc=0
+      shift 2
+      echo; echo "===== $heading ====="
+      python3 -I "$HERE/$script" "$@" || rc=$?
+      case "$rc" in
+        0) ;;
+        1) diverged=1 ;;
+        *) invalid=1 ;;
+      esac
+    }
+    # Every comparison runs even after an earlier one found something: all three
+    # are worth reading. A REFUSAL is not a finding, though - it must not end in
+    # a zero (or a one) just because the message scrolled past.
+    compare_step "call traces: the purchase" compare_traces.py \
+      "$outdir/ref-buy.trace" "$outdir/iceslab-buy.trace"
+    compare_step "call traces: the admin walk" compare_traces.py \
+      "$outdir/ref-admin.trace" "$outdir/iceslab-admin.trace"
+    compare_step "what the admin pages rendered" compare_admin.py \
+      "$outdir/ref-admin.jsonl" "$outdir/iceslab-admin.jsonl"
+    echo
+    [[ $invalid -eq 0 ]] || refuse "a comparison refused to run - the differential proved nothing"
+    if [[ $diverged -ne 0 ]]; then
+      echo "stand: the halves differ (exit 1)"
+      exit 1
+    fi
+    echo "stand: the halves agree (exit 0)"
+    ;;
+
+  differential)
+    # Both halves, then the three comparisons, in one command. The halves cannot
+    # run at once (the shop's container names are fixed), so this is a sequence,
+    # and worth having for that: two halves typed hours apart are two different
+    # experiments. Exit code as for `verdict`.
+    shift
+    outdir="${1:?usage: stand.sh differential <outdir>}"
+    mkdir -p "$outdir"
+    "$0" half iceslab "$outdir"
+    "$0" half ref "$outdir"
+    exec "$0" verdict "$outdir"
+    ;;
+
+  compare-admin)
+    shift
+    [[ $# -eq 2 ]] || die "usage: stand.sh compare-admin <reference.jsonl> <candidate.jsonl>"
+    exec python3 -I "$HERE/compare_admin.py" "$1" "$2"
+    ;;
+
+  selftest)
+    # The comparators against walks whose answer is known. Needs no stand, no
+    # docker and no shop checkout: a comparator is a check, and an unchecked
+    # check is how a differential reports something every run with nothing to
+    # say whether it is true.
+    exec python3 -I "$HERE/compare_admin.py" --selftest
     ;;
 
   subpage)
@@ -524,6 +759,19 @@ usage: $(basename "$0") <command>
                dump the shop's panel-API call trace (operation labels + status);
                the optional RFC3339 stamp (e.g. from 'mark') scopes it to one step
   compare a b  diff two traces as multisets, by the shop's contract registry
+  check <iceslab|ref>
+               re-check what up-* asserts (admin seeded, worker has a panel key)
+  seed-tariffs store the tariff catalogue on the half that is up (up-* does it)
+  half <iceslab|ref> <outdir>
+               one half end to end: reset, up, node traffic, buy, admin walk;
+               writes <half>-buy.{log,trace} and <half>-admin.{log,jsonl,trace}
+  differential <outdir>
+               both halves, then verdict. Exit 0 agree, 1 differ, 2 refused
+  verdict <outdir>
+               the three comparisons on a differential's files (no docker)
+  compare-admin a b
+               diff two admin walks (what the pages rendered)
+  selftest     the comparators against known answers (no stand, no docker)
   subpage <subscription-token>...
                the panel's install document through the shop's own validator
                (needs the shop checkout and the panel; no docker)
