@@ -104,6 +104,9 @@ type Config struct {
 	Env []string
 	// Logger receives one entry per line of stdout/stderr (Info/Error level).
 	Logger *slog.Logger
+	// StderrLevel, when set, picks the log level of one stderr line (default
+	// Error), for an engine that writes routine notices to stderr.
+	StderrLevel func(line string) slog.Level
 	// N9 - restart-on-crash policy. MaxRestarts == 0 (the default) disables
 	// auto-restart: a crash leaves the process down until something calls Start
 	// again (legacy behaviour). When > 0, the crash watcher respawns the process
@@ -206,7 +209,7 @@ func (s *Subprocess) spawnLocked(ctx context.Context) error {
 		cmd.Env = append(os.Environ(), s.cfg.Env...)
 	}
 	cmd.Stdout = newLogWriter(s.cfg.Logger, slog.LevelInfo, s.cfg.Name)
-	stderr := &logWriter{logger: s.cfg.Logger, level: slog.LevelError, source: s.cfg.Name}
+	stderr := &logWriter{logger: s.cfg.Logger, level: slog.LevelError, source: s.cfg.Name, levelOf: s.cfg.StderrLevel}
 	cmd.Stderr = stderr
 	// N5 - put the child in its own process group so Stop (and ctx-cancel) can
 	// signal the WHOLE group (-pgid), reaping any grandchildren the core forks
@@ -654,8 +657,10 @@ type logWriter struct {
 	logger *slog.Logger
 	level  slog.Level
 	source string
-	mu     sync.Mutex
-	buf    []byte
+	// levelOf overrides level per line when set.
+	levelOf func(line string) slog.Level
+	mu      sync.Mutex
+	buf     []byte
 	// last is the most recent non-empty complete line, for ExitReason.
 	last string
 }
@@ -674,7 +679,11 @@ func (w *logWriter) Write(p []byte) (int, error) {
 		if t := strings.TrimSpace(line); t != "" {
 			w.last = t
 		}
-		w.logger.Log(context.Background(), w.level, line, "source", w.source)
+		level := w.level
+		if w.levelOf != nil {
+			level = w.levelOf(line)
+		}
+		w.logger.Log(context.Background(), level, line, "source", w.source)
 	}
 	return len(p), nil
 }

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -404,7 +405,7 @@ func processFixture(t *testing.T, stayUp bool) fixture {
 	ok := func(context.Context, string, ...string) ([]byte, error) { return []byte("cryptography\n"), nil }
 	f.a = New(Config{
 		PythonPath: "/bin/sh", ScriptPath: script, ConfigPath: filepath.Join(dir, "config.py"),
-		Inbound: InboundConfig{ListenPort: 2083}, RunCmd: ok,
+		Inbound: InboundConfig{ListenPort: 2083}, RunCmd: ok, ReadyAfter: time.Millisecond,
 	}, quiet())
 	t.Cleanup(func() { _ = f.a.Stop(context.Background()) })
 	return f
@@ -631,5 +632,84 @@ func TestRestartsAreTalliedAndAPortIsReserved(t *testing.T) {
 	}
 	if a.Engine() != "mtprotoproxy" || a.Name() != "mtproto" {
 		t.Errorf("routing key = %s/%s", a.Name(), a.Engine())
+	}
+}
+
+// A python that installs its USR2 handler only after a delay: a signal before
+// it is the process's death (the default action), as on the stand.
+func lateHandlerAdapter(t *testing.T, delay time.Duration, readyAfter time.Duration) (*Adapter, string) {
+	t.Helper()
+	dir := t.TempDir()
+	signals := filepath.Join(dir, "signals")
+	script := filepath.Join(dir, "mtprotoproxy.sh")
+	body := "sleep " + strconv.FormatFloat(delay.Seconds(), 'f', 2, 64) + "\n" +
+		"trap 'echo usr2 >> " + signals + "' USR2\n" +
+		"while :; do sleep 0.05; done\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ok := func(context.Context, string, ...string) ([]byte, error) { return []byte("cryptography\n"), nil }
+	a := New(Config{
+		PythonPath: "/bin/sh", ScriptPath: script, ConfigPath: filepath.Join(dir, "config.py"),
+		Inbound: InboundConfig{ListenPort: 2083}, RunCmd: ok, ReadyAfter: readyAfter,
+	}, quiet())
+	t.Cleanup(func() { _ = a.Stop(context.Background()) })
+	return a, signals
+}
+
+func TestTheFirstUserRightAfterStartDoesNotKillTheProcess(t *testing.T) {
+	a, signals := lateHandlerAdapter(t, 700*time.Millisecond, 1200*time.Millisecond)
+	if err := a.ApplyInbound(2083, domainPush); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if !a.Healthy() {
+		t.Fatal("the signal reached the process before its handler and killed it")
+	}
+	if b, _ := os.ReadFile(signals); !strings.Contains(string(b), "usr2") {
+		t.Error("the user was written but the process was never told to re-read")
+	}
+	if n := a.RestartStats().Crash; n != 0 {
+		t.Errorf("the process was restarted %d times", n)
+	}
+}
+
+func TestRemovingTheLastUserKeepsTheProcessAndTheNextAddReloadsIt(t *testing.T) {
+	f := processFixture(t, true)
+	a := f.a
+	if err := a.ApplyInbound(2083, domainPush); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA}); err != nil {
+		t.Fatal(err)
+	}
+	f.waitSignals(t, 1) // the shell coalesces signals that arrive together
+	if err := a.RemoveUser("u1"); err != nil {
+		t.Fatal(err)
+	}
+	f.waitSignals(t, 2)
+	if !a.Healthy() || !a.Provisioned() {
+		t.Fatalf("an inbound with no users stopped: healthy %v provisioned %v", a.Healthy(), a.Provisioned())
+	}
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA}); err != nil {
+		t.Fatal(err)
+	}
+	f.waitSignals(t, 3)
+	b, _ := os.ReadFile(a.cfg.ConfigPath)
+	if !strings.Contains(string(b), secretA) {
+		t.Error("the new user is not in the config the process reloads")
+	}
+	if n := f.count(t, f.starts, "run"); n != 1 {
+		t.Errorf("ran %d times, want 1 (no push, no restart)", n)
+	}
+}
+
+func TestReloadNoticeOnStderrIsNotAnError(t *testing.T) {
+	if stderrLevel("Config reloaded") != slog.LevelInfo || stderrLevel("address already in use") != slog.LevelError {
+		t.Error("stderr line classification")
 	}
 }

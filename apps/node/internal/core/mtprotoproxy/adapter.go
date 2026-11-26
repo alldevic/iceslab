@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -33,6 +36,11 @@ type Config struct {
 	ConfigPath string
 
 	Inbound InboundConfig
+
+	// ReadyAfter is how long a freshly started process is left alone before
+	// SIGUSR2: python installs its handler a moment after the fork, and the
+	// signal before that kills it (default action). 0 → defaultReadyAfter.
+	ReadyAfter time.Duration
 
 	// RunCmd is the injectable command runner for the crypto probe. Defaults to
 	// os/exec; tests inject a fake.
@@ -62,6 +70,8 @@ type Adapter struct {
 	lastRendered string
 
 	proc *subprocess.Subprocess
+	// procStarted is when proc was spawned. Under mu.
+	procStarted time.Time
 	// lastStartFailed: the last start did not take (the crypto guard refused,
 	// proc.Start failed, or the core died inside subprocess.StartupGrace). While
 	// set, an identical push is not skipped as "unchanged": the core is down
@@ -339,12 +349,46 @@ func (a *Adapter) regenerateAndReload(ctx context.Context) error {
 	if proc == nil {
 		return nil // config-only mode, or not started yet: it is read on start
 	}
+	a.waitReady(ctx)
 	if err := proc.Signal(syscall.SIGUSR2); err != nil {
 		a.logger.Warn("mtprotoproxy: reload signal not delivered, restarting", "err", err)
 		return a.restartLocked(ctx)
 	}
 	a.logger.Info("mtprotoproxy: user set reloaded without restart")
 	return nil
+}
+
+// defaultReadyAfter bounds the wait for the handler of a fresh process; the
+// wait ends earlier as soon as the listen port accepts (the handlers are
+// installed before the servers start).
+const defaultReadyAfter = 3 * time.Second
+
+// waitReady holds a signal back until the process is past its startup: the
+// listen port answers, or ReadyAfter has passed since the spawn. The config is
+// already written, so a user added in the window is read by the signal that
+// follows (a read at start could predate the write). Caller holds restartMu.
+func (a *Adapter) waitReady(ctx context.Context) {
+	a.mu.Lock()
+	ready := a.cfg.ReadyAfter
+	if ready == 0 {
+		ready = defaultReadyAfter
+	}
+	deadline := a.procStarted.Add(ready)
+	port := a.cfg.Inbound.ListenPort
+	a.mu.Unlock()
+	for time.Now().Before(deadline) {
+		if port != 0 {
+			if c, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 100*time.Millisecond); err == nil {
+				_ = c.Close()
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 // renderAndWrite renders the current state and writes it. Returns whether it
@@ -433,7 +477,9 @@ func (a *Adapter) restartLocked(ctx context.Context) error {
 	if old != nil {
 		_ = old.Stop(ctx)
 	}
+	started := time.Now()
 	proc := subprocess.New(subprocess.Config{
+		StderrLevel:    stderrLevel,
 		Name:           "mtprotoproxy",
 		Binary:         a.cfg.PythonPath,
 		Args:           []string{a.cfg.ScriptPath, a.cfg.ConfigPath},
@@ -456,6 +502,7 @@ func (a *Adapter) restartLocked(ctx context.Context) error {
 	alive := proc.AliveAfter(ctx, subprocess.StartupGrace)
 	a.mu.Lock()
 	a.proc = proc
+	a.procStarted = started
 	a.started = true
 	a.lastStartFailed = !alive
 	a.refusal = ""
@@ -467,6 +514,15 @@ func (a *Adapter) restartLocked(ctx context.Context) error {
 	}
 	a.logger.Info("mtprotoproxy (re)started", "domain", domain)
 	return nil
+}
+
+// stderrLevel: python's logging writes everything to stderr, the routine
+// notice of a SIGUSR2 reload included; that one is not an error.
+func stderrLevel(line string) slog.Level {
+	if strings.Contains(line, "Config reloaded") {
+		return slog.LevelInfo
+	}
+	return slog.LevelError
 }
 
 // errSlowCrypto is what assertFastCrypto's error wraps, for the boot path.
