@@ -173,6 +173,8 @@ if [[ -f "$SINGBOX_DIR/cert.pem" && -f "$SINGBOX_DIR/key.pem" ]]; then
   log "TLS cert already present, keeping it"
 else
   log "generating self-signed cert CN=${SINGBOX_SNI} (10y, EC P-256)"
+  # The key file is 0600 before the key is in it.
+  install -m 0600 /dev/null "$SINGBOX_DIR/key.pem"
   openssl ecparam -genkey -name prime256v1 -out "$SINGBOX_DIR/key.pem"
   openssl req -new -x509 -days 3650 -key "$SINGBOX_DIR/key.pem" \
     -out "$SINGBOX_DIR/cert.pem" -subj "/CN=${SINGBOX_SNI}" \

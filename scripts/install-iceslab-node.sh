@@ -1391,6 +1391,9 @@ if [[ -n "$PAYLOAD" || ! -f "$ENV_FILE" ]]; then
   # file and no binary but an old tls/ beside them.
   rm -rf "$ENV_DIR/tls"
   log "Writing $ENV_FILE"
+  # Created 0600 BEFORE the payload goes in: a cat into a new file makes it
+  # 0644 under the default umask, readable by anyone until the chmod below.
+  install -m 0600 /dev/null "$ENV_FILE"
   cat > "$ENV_FILE" <<EOF
 NODE_PAYLOAD=${PAYLOAD}
 NODE_HOST=${NODE_HOST}

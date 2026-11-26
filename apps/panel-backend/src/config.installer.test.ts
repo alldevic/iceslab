@@ -126,8 +126,9 @@ describe('the installer writes an env file this schema accepts', () => {
 /**
  * The ACME email, validated twice.
  *
- * `install-iceslab.sh` asks for it at a prompt and checks it with a bash
- * regular expression (`ACME_EMAIL_RE`); the panel checks the same value with
+ * `install-iceslab.sh` asks for it at a prompt (or takes it from the
+ * environment) and checks it with an ERE (`ACME_EMAIL_RE`, `grep -E` under
+ * LC_ALL=C, from a here-string); the panel checks the same value with
  * `z.email()` when it boots. The two are one decision written in two languages.
  * On 2026-08-10 an operator typed one Cyrillic letter, the installer took it,
  * and the panel refused to boot on it eleven minutes later, at step 9 of 9,
@@ -139,10 +140,10 @@ describe('the installer writes an env file this schema accepts', () => {
  * so it is only reported.
  *
  * The expression is not copied: it is read out of the script and run by bash
- * with `[[ =~ ]]`, the way the script runs it. Character ranges there match by
- * collation, so the case runs under LC_ALL=C (ASCII) and, as a second case,
- * under whatever UTF-8 locale the machine has, to record what the script
- * accepts for an operator whose shell is not C.
+ * the way the script runs it. Character ranges match by collation, so the
+ * script matches under LC_ALL=C (ASCII); the case runs the same way and, as a
+ * second case, under whatever UTF-8 locale the machine has, to show that the
+ * locale is what keeps an accented address out.
  */
 describe('the ACME email is validated the same way twice', () => {
   const CORPUS = [
@@ -175,7 +176,7 @@ describe('the ACME email is validated the same way twice', () => {
   }
 
   function installerAccepts(re: string, value: string, locale = 'C'): boolean {
-    const r = spawnSync('bash', ['-c', '[[ "$2" =~ $1 ]]', '_', re, value], {
+    const r = spawnSync('bash', ['-c', 'grep -qE "$1" <<<"$2"', '_', re, value], {
       stdio: 'ignore',
       env: { ...process.env, LC_ALL: locale },
     });
@@ -184,8 +185,36 @@ describe('the ACME email is validated the same way twice', () => {
 
   const panelAccepts = (v: string) => z.email().safeParse(v).success;
 
-  it('the installer condition uses the extracted expression', () => {
-    expect(installerSource()).toMatch(/=~ \$ACME_EMAIL_RE \]\]/);
+  // The check has to run under LC_ALL=C: without it A-Za-z matches by collation
+  // and an accented latin letter gets through to .env.production.
+  it('matches under LC_ALL=C, from a here-string, with the extracted expression', () => {
+    const check = installerSource()
+      .split('\n')
+      .find((l) => l.includes('grep') && l.includes('$ACME_EMAIL_RE'));
+    expect(check, 'the ACME email check no longer uses the extracted expression').toBeDefined();
+    expect(check, 'without LC_ALL=C the ranges match by collation, not by byte').toContain('LC_ALL=C grep -qE');
+    expect(check, 'a pipe into grep -q can kill the writer with SIGPIPE under pipefail').toContain('<<<');
+  });
+
+  // The environment is no way round it: the same check runs on the value from
+  // the prompt and on the one given as ACME_DEFAULT_EMAIL.
+  it('checks the address whichever way it came in', () => {
+    const src = installerSource();
+    const read = src.indexOf('read -r ACME_DEFAULT_EMAIL');
+    const check = src.indexOf('grep -qE "$ACME_EMAIL_RE"');
+    expect(read).toBeGreaterThan(-1);
+    expect(check, 'the check must come after the prompt, outside of its if').toBeGreaterThan(read);
+    const between = src.slice(read, check);
+    expect(between, 'the check is still inside the prompt branch').toMatch(/\nfi\n/);
+  });
+
+  // The script sets LC_ALL=C itself, so the operator's locale does not matter:
+  // the diacritic and the doubled dot are refused as under C.
+  it('refuses a letter outside ASCII and a doubled dot', () => {
+    const re = installerRegex();
+    for (const v of ['üser@company.com', 'аdmin@company.com', 'admin@примép.com', 'a..b@company.com']) {
+      expect(installerAccepts(re, v), `${v} is accepted`).toBe(false);
+    }
   });
 
   // Addresses the installer took and the panel then refused to boot on (dots at

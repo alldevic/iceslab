@@ -330,33 +330,42 @@ if [[ -z "$ACME_DEFAULT_EMAIL" && -r /dev/tty ]]; then
   printf '\033[1;33mEmail:\033[0m '
   read -r ACME_DEFAULT_EMAIL </dev/tty || ACME_DEFAULT_EMAIL=""
 
-  if [[ -n "$ACME_DEFAULT_EMAIL" ]]; then
-    # ASCII-only on purpose, and this has to stay in step with what the panel
-    # accepts. The old check was `[^@[:space:]]+@...`, which happily took a
-    # Cyrillic character: caught live 2026-08-10, an operator whose keyboard
-    # layout had not switched yet typed one Russian letter into the address.
-    # The installer accepted it, wrote it to .env.production, and the panel then
-    # refused to boot on it eleven minutes later, at step 9 of 9, reported as
-    # "container is unhealthy". Reject it here, where the operator can just
-    # retype it.
-    # The expression is a variable so config.installer.test.ts can read it out of
-    # this file and run it against the panel's z.email().
-    ACME_EMAIL_RE='^[A-Za-z0-9_%+-]+(\.[A-Za-z0-9_%+-]+)*@([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$'
-    if [[ ! "$ACME_DEFAULT_EMAIL" =~ $ACME_EMAIL_RE ]]; then
-      printf '\033[1;31m"%s" не похож на email. Установка прервана.\033[0m\n' "$ACME_DEFAULT_EMAIL" >&2
-      printf '\033[1;33mПроверь раскладку: одна русская буква в адресе выглядит\n' >&2
-      printf 'как латинская, но панель такой адрес не примет.\033[0m\n' >&2
-      exit 1
-    fi
-    if [[ "${ACME_DEFAULT_EMAIL,,}" =~ @(example\.com|example\.net|example\.org)$ ]]; then
-      printf '\033[1;31m"%s": LE отвергает example.* как forbidden test domain. Введи реальный.\033[0m\n' "$ACME_DEFAULT_EMAIL" >&2
-      exit 1
-    fi
-    log "Email для ACME: ${ACME_DEFAULT_EMAIL}"
-  else
+  if [[ -z "$ACME_DEFAULT_EMAIL" ]]; then
     log "Email не указан: Hysteria-ноды получат сертификат без контакта (A-276)"
   fi
   printf '\n'
+fi
+
+# The address is checked wherever it came from: typed at the prompt above or
+# given in the environment (ACME_DEFAULT_EMAIL=... bash install-iceslab.sh),
+# which used to go into .env.production unchecked.
+if [[ -n "$ACME_DEFAULT_EMAIL" ]]; then
+  # ASCII-only on purpose, and this has to stay in step with what the panel
+  # accepts. The old check was `[^@[:space:]]+@...`, which happily took a
+  # Cyrillic character: caught live 2026-08-10, an operator whose keyboard
+  # layout had not switched yet typed one Russian letter into the address.
+  # The installer accepted it, wrote it to .env.production, and the panel then
+  # refused to boot on it eleven minutes later, at step 9 of 9, reported as
+  # "container is unhealthy". Reject it here, where the operator can just
+  # retype it.
+  # The matching runs under LC_ALL=C: a bracket range matches by collation, so
+  # under a UTF-8 locale A-Za-z took accented letters (üser@) and the panel
+  # refused them just the same. The dots and hyphens are constrained too (the
+  # panel refuses a..b@, .a@, a@-b.com). The here-string is not a pipe (E33).
+  # The expression is a variable so config.installer.test.ts can read it out of
+  # this file and run it against the panel's z.email().
+  ACME_EMAIL_RE='^[A-Za-z0-9_%+-]+(\.[A-Za-z0-9_%+-]+)*@([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$'
+  if [[ "$ACME_DEFAULT_EMAIL" == *$'\n'* ]] || ! LC_ALL=C grep -qE "$ACME_EMAIL_RE" <<<"$ACME_DEFAULT_EMAIL"; then
+    printf '\033[1;31m"%s" не похож на email. Установка прервана.\033[0m\n' "$ACME_DEFAULT_EMAIL" >&2
+    printf '\033[1;33mПроверь раскладку: русская или любая буква с диакритикой\n' >&2
+    printf 'выглядит как латинская, но панель такой адрес не примет.\033[0m\n' >&2
+    exit 1
+  fi
+  if [[ "${ACME_DEFAULT_EMAIL,,}" =~ @(example\.com|example\.net|example\.org)$ ]]; then
+    printf '\033[1;31m"%s": LE отвергает example.* как forbidden test domain. Введи реальный.\033[0m\n' "$ACME_DEFAULT_EMAIL" >&2
+    exit 1
+  fi
+  log "Email для ACME: ${ACME_DEFAULT_EMAIL}"
 fi
 
 step "Prerequisites"
@@ -547,10 +556,98 @@ if [[ -n "${ICESLAB_REF_SHA:-}" ]]; then
 fi
 cd "$ICESLAB_DIR"
 
+# Reconcile the values of an existing .env.production that are derived from the
+# MODE rather than from secrets. A function so the tests can cut it out of this
+# file and run it over a temporary env file (scriptFunc in apps/node).
+#
+# A re-run is exactly how the mode changes: the closing message tells the
+# operator "Plain HTTP ... For TLS: re-run with PANEL_DOMAIN=...". The file is
+# kept on a re-run, so until this existed that advice moved nothing:
+#
+#   FRONTEND_BIND stayed 0.0.0.0, so the SPA kept answering plain HTTP to the
+#   whole internet beside the TLS site. ufw cannot take that back: docker
+#   publishes through nat/PREROUTING, which runs before ufw's filter chains.
+#   FRONTEND_BIND is the only thing that closes it.
+#
+#   PUBLIC_URL and CORS_ORIGIN stayed http://<bare-ip>:<port>, so every node
+#   bootstrap command, subscription link and the panelUrl in node payloads kept
+#   pointing at plain HTTP on a raw address.
+#
+#   TRUST_PROXY_HOPS stayed 1, but in domain mode Caddy is one more proxy in
+#   front of the backend: the panel took Caddy's address for the client's.
+#
+# Only a value this script wrote in bare-IP mode is corrected (the exact
+# `http://<host>:<FRONTEND_PORT>` shape; hops 1), so an operator's own origin or
+# count is left alone, and the warning says so. A value given in the
+# environment always wins. A re-run in the same mode changes nothing.
+reconcile_mode_values() {
+  local ENV_FILE="$1" PANEL_DOMAIN="$2" FRONTEND_PORT="$3"
+  local k cur explicit want esc bare_shape bind_cur bind_want hops_cur hops_want
+  # No `| head -1`: sed quits at the first match by itself.
+  env_value() { sed -n "/^${1}=/{s///;p;q;}" "$ENV_FILE"; }
+  if [[ -n "$PANEL_DOMAIN" ]]; then
+    # Refused before anything is edited: the backend exits on a count outside 0..8.
+    hops_want="${TRUST_PROXY_HOPS:-3}"
+    [[ "$hops_want" =~ ^[0-8]$ ]] || fail "TRUST_PROXY_HOPS must be a number from 0 to 8, got '$hops_want'"
+    bare_shape="^http://[^/]+:${FRONTEND_PORT}\$"
+
+    for k in PUBLIC_URL CORS_ORIGIN; do
+      cur="$(env_value "$k")"
+      explicit=""
+      [[ "$k" == "PUBLIC_URL"  ]] && explicit="${PUBLIC_URL:-}"
+      [[ "$k" == "CORS_ORIGIN" ]] && explicit="${CORS_ORIGIN:-}"
+      want="${explicit:-https://${PANEL_DOMAIN}}"
+      if [[ "$cur" != "$want" && ( -n "$explicit" || "$cur" =~ $bare_shape ) ]]; then
+        esc="${want//\\/\\\\}"; esc="${esc//|/\\|}"; esc="${esc//&/\\&}"
+        sed -i "s|^${k}=.*|${k}=${esc}|" "$ENV_FILE"
+        warn "${k}: ${cur} -> ${want} (domain mode)"
+      elif [[ -n "$cur" && "$cur" != "$want" ]]; then
+        warn "${k} is ${cur}, not the bare-IP form this script writes: left as it is."
+        warn "For domain mode it would be ${want}; pass ${k}=... to set it."
+      fi
+    done
+
+    bind_cur="$(env_value FRONTEND_BIND)"
+    bind_want="${FRONTEND_BIND:-127.0.0.1}"
+    if [[ "$bind_cur" == "0.0.0.0" && "$bind_want" != "0.0.0.0" ]]; then
+      sed -i "s|^FRONTEND_BIND=.*|FRONTEND_BIND=${bind_want}|" "$ENV_FILE"
+      warn "FRONTEND_BIND was 0.0.0.0 from a bare-IP install: the SPA port was open to"
+      warn "the internet in plain HTTP, and ufw cannot close a docker-published port."
+      warn "Set to ${bind_want}; Caddy reaches it from this same machine."
+      warn "Pass FRONTEND_BIND=0.0.0.0 explicitly if you really want it published."
+    fi
+
+    # Domain mode is 3 hops (nginx, Caddy, a Cloudflare if there is one). Only
+    # the bare-IP 1 is raised: any other number is the operator's (2 is also
+    # what docker-compose.prod.yml defaults to), and is only reported.
+    hops_cur="$(env_value TRUST_PROXY_HOPS)"
+    if [[ "$hops_cur" != "$hops_want" && ( -n "${TRUST_PROXY_HOPS:-}" || "$hops_cur" == "1" ) ]]; then
+      sed -i "s|^TRUST_PROXY_HOPS=.*|TRUST_PROXY_HOPS=${hops_want}|" "$ENV_FILE"
+      warn "TRUST_PROXY_HOPS: ${hops_cur} -> ${hops_want} (domain mode: nginx, Caddy and a Cloudflare if there is one)"
+    elif [[ -n "$hops_cur" && "$hops_cur" != "$hops_want" ]]; then
+      warn "TRUST_PROXY_HOPS is ${hops_cur}; domain mode behind Caddy expects ${hops_want}."
+      warn "Left as it is (it may be yours): set it in ${ENV_FILE} if it is not."
+    fi
+  else
+    # The other direction is not fixed automatically: opening a port or lowering
+    # a count is never something this script should do on an inference.
+    if [[ "$(env_value FRONTEND_BIND)" == "127.0.0.1" ]]; then
+      warn "FRONTEND_BIND is 127.0.0.1 from a domain-mode install and no PANEL_DOMAIN"
+      warn "was given, so the SPA will not be reachable directly on :${FRONTEND_PORT}."
+      warn "Set FRONTEND_BIND=0.0.0.0 in ${ENV_FILE} if that is what you want."
+    fi
+    if [[ "$(env_value PUBLIC_URL)" == https://* ]]; then
+      warn "PUBLIC_URL is $(env_value PUBLIC_URL) from a domain-mode install and no PANEL_DOMAIN"
+      warn "was given: PUBLIC_URL, CORS_ORIGIN and TRUST_PROXY_HOPS are left as they are."
+    fi
+  fi
+}
+
 step "Configuration (.env.production)"
 ENV_FILE="$ICESLAB_DIR/.env.production"
 if [[ -f "$ENV_FILE" ]]; then
   ok ".env.production already exists, keeping current secrets"
+  reconcile_mode_values "$ENV_FILE" "$PANEL_DOMAIN" "$FRONTEND_PORT"
 else
   log "Generating with fresh secrets (openssl rand -hex)"
   "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y openssl >/dev/null 2>&1 || true
@@ -595,6 +692,8 @@ else
   # The backend refuses to start on anything outside 0..8 (config.ts); say so
   # here, before the panel is half up.
   [[ "$TRUST_PROXY_HOPS" =~ ^[0-8]$ ]] || fail "TRUST_PROXY_HOPS must be a number from 0 to 8, got '$TRUST_PROXY_HOPS'"
+  # 0600 before the secrets go in, not after: a new file is 0644 until the chmod.
+  install -m 0600 /dev/null "$ENV_FILE"
   cat > "$ENV_FILE" <<EOF
 # Generated by install-iceslab.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ)
 POSTGRES_USER=iceslab
@@ -660,13 +759,13 @@ step "Pre-pull base images"
 # progress instead of a silent first-run delay.
 # Tags MUST match the Dockerfile ARGs / compose images, else the pre-pull
 # caches an image the build never uses (we once had node:22-alpine vs the
-# Dockerfile's 22.22-alpine, and golang:1.23 vs 1.22: both dead pulls).
-log "Caching postgres:16-alpine, redis:7-alpine, nginx:1.27-alpine, node:22.22-alpine, golang:1.22-alpine"
+# Dockerfile's 22.22-alpine, and golang:1.23 vs 1.22: both dead pulls; the Go
+# image is built only for a node, never on the panel host).
+log "Caching postgres:16-alpine, redis:7-alpine, nginx:1.27-alpine, node:22.22-alpine"
 docker pull postgres:16-alpine >/dev/null 2>&1 &
 docker pull redis:7-alpine >/dev/null 2>&1 &
 docker pull nginx:1.27-alpine >/dev/null 2>&1 &
 docker pull node:22.22-alpine >/dev/null 2>&1 &
-docker pull golang:1.22-alpine >/dev/null 2>&1 &
 wait
 ok "base images cached locally"
 
