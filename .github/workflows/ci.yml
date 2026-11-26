@@ -106,6 +106,16 @@ jobs:
               - 'apps/panel-backend/src/modules/users/users.delivery.ts'
               - 'apps/panel-backend/src/modules/profiles/profiles.key-impact.ts'
               - 'apps/panel-backend/src/modules/hosts/hosts.freshness.ts'
+              # What the schemas import, which the form tests (backendSchemas.test.ts)
+              # load as code through the @backend alias: the one-preset rule of
+              # users and squads, the SRR linear-regex check, the shared uuid and
+              # header-url atoms. The test asserts this list is complete.
+              - 'apps/panel-backend/src/modules/routing-presets/routing-presets.choice.ts'
+              - 'apps/panel-backend/src/modules/srr/linear-regex.ts'
+              - 'apps/panel-backend/src/modules/cascades/policy-entries.ts'
+              - 'apps/panel-backend/src/modules/geo-sets/geo-names.ts'
+              - 'apps/panel-backend/src/lib/util/uuid-schema.ts'
+              - 'apps/panel-backend/src/lib/util/header-url.ts'
             node:
               - *common
               - 'apps/node/**'

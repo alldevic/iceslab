@@ -1,26 +1,17 @@
 import { prisma } from '../../prisma.js';
+import type { PresetChoice } from './routing-presets.choice.js';
 
 /**
  * A-229: a user or a squad takes at most one routing preset, either a built-in
  * key (`routingPreset`) or the operator's own (`customRoutingPresetId`). The
  * database says it with a CHECK (users_one_routing_preset,
  * groups_one_routing_preset); this file is the same rule on the request side,
- * shared by users and squads so the two cannot drift.
+ * shared by users and squads so the two cannot drift. The request-side half
+ * (bothPresetsGiven) is in routing-presets.choice.ts, which needs no database,
+ * and is re-exported here for the callers that import it from this file.
  */
 
-export interface PresetChoice {
-  routingPreset?: string | null;
-  customRoutingPresetId?: string | null;
-}
-
-export const BOTH_PRESETS_MESSAGE =
-  'routingPreset and customRoutingPresetId are both set: a user or a squad takes one preset, a built-in or an own one';
-
-/** Schema-side refusal: both set to a value in one request. Either one with
- *  null next to it is a clear, and fine. */
-export function bothPresetsGiven(v: PresetChoice): boolean {
-  return v.routingPreset != null && v.customRoutingPresetId != null;
-}
+export { BOTH_PRESETS_MESSAGE, bothPresetsGiven, type PresetChoice } from './routing-presets.choice.js';
 
 export class RoutingPresetNotFoundError extends Error {
   readonly code = 'ROUTING_PRESET_NOT_FOUND';

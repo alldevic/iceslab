@@ -20,7 +20,13 @@ export default defineConfig({
   resolve: {
     // Тот же алиас, что у сборки: тесты импортируют код так же, как экраны,
     // иначе первый же перенос файла разойдётся с линтом.
-    alias: { '@': resolve(__dirname, 'src') },
+    // `@backend` is the backend's `src`, for the form tests that hand a request
+    // to the zod schema the API parses it with (milestone 17.5). Only tests
+    // import it; the build never reaches it (see eslint.config.js).
+    alias: {
+      '@backend': resolve(__dirname, '../panel-backend/src'),
+      '@': resolve(__dirname, 'src'),
+    },
   },
   test: {
     globals: false,

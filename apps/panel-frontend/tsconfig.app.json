@@ -22,5 +22,19 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  /* The form tests load the backend's schemas through `@backend`; the image holds no backend
+     sources, so they are type-checked by tsconfig.forms.json (in `tsc -b`, not in `build`). */
+  "exclude": [
+    "src/test-support/backendSchemas.test.ts",
+    "src/test/cascadeForms.test.tsx",
+    "src/test/hostForms.test.tsx",
+    "src/test/namedOutboundForms.test.ts",
+    "src/test/nodeForms.test.tsx",
+    "src/test/nodePolicyForms.test.tsx",
+    "src/test/settingsForms.test.tsx",
+    "src/test/squadForms.test.tsx",
+    "src/test/subscriptionForms.test.tsx",
+    "src/test/userForms.test.tsx"
+  ]
 }

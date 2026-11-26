@@ -1,5 +1,6 @@
 import type { GeoSet } from '@/lib/domain/geoSets';
 import type { InboundConfig } from '@/lib/domain/inbounds';
+import type { Node } from '@/lib/domain/nodes';
 import type { NodePolicy } from '@/lib/domain/nodePolicies';
 import type { Profile } from '@/lib/domain/profiles';
 import type { RoutePolicy, RoutingPreset } from '@/lib/domain/routePolicies';
@@ -105,3 +106,26 @@ export const nodePolicyRecord = (over: Partial<NodePolicy> = {}): NodePolicy => 
   updatedAt: T0,
   ...over,
 });
+
+/** A node as an edit form takes it. `Partial`-typed on purpose: the cores, the cert and the like are read optionally. */
+export const nodeRecord = (over: Partial<Node> = {}): Node =>
+  ({
+    id: 'n1',
+    name: 'min-node',
+    address: 'node.example.test:8443',
+    protocol: 'xray',
+    countryCode: null,
+    status: 'online',
+    lastStatusChange: null,
+    lastStatusMessage: null,
+    coreRestarts: null,
+    coreVersion: null,
+    consumptionMultiplier: 1,
+    regionId: null,
+    maxUsers: null,
+    domain: null,
+    warpEnabled: false,
+    singboxEngine: false,
+    policyId: null,
+    ...over,
+  }) as Node;

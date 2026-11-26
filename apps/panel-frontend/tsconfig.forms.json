@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.forms.tsbuildinfo",
+    "paths": { "@/*": ["./src/*"], "@backend/*": ["../panel-backend/src/*"] }
+  },
+  "include": ["src"],
+  "exclude": []
+}

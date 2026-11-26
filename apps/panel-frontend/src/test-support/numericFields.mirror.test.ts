@@ -91,8 +91,8 @@ const SITES: Site[] = [
   { form: 'contours/squads/screens/SquadEditPage.tsx', anchor: 'value={hwidLimit}', schema: 'squads/squads.schemas.ts', field: 'hwidDeviceLimit' },
   // Routing, subscription, geo
   { form: 'contours/subscription/screens/SrrRulePage.tsx', anchor: 'value={draft.priority}', schema: 'srr/srr.schemas.ts', field: 'priority' },
-  { form: 'contours/subscription/screens/SubscriptionMetadataPage.tsx', anchor: 'value={draft.intervalHours}', schema: 'settings/settings.routes.ts', field: 'subscriptionUpdateIntervalHours' },
-  { form: 'contours/subscription/screens/SubscriptionMetadataPage.tsx', anchor: 'value={draft.entryPoolSize}', schema: 'settings/settings.routes.ts', field: 'subscriptionEntryPoolSize' },
+  { form: 'contours/subscription/screens/SubscriptionMetadataPage.tsx', anchor: 'value={draft.intervalHours}', schema: 'settings/settings.schemas.ts', field: 'subscriptionUpdateIntervalHours' },
+  { form: 'contours/subscription/screens/SubscriptionMetadataPage.tsx', anchor: 'value={draft.entryPoolSize}', schema: 'settings/settings.schemas.ts', field: 'subscriptionEntryPoolSize' },
   { form: 'contours/traffic/screens/GeoSetsPage.tsx', anchor: 'value={hours}', schema: 'geo-sets/geo-sets.routes.ts', field: 'refreshHours' },
 ];
 

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ROUTING_PRESET_IDS } from '@iceslab/shared';
 import { PermissiveUuid } from '../../lib/util/uuid-schema.js';
-import { BOTH_PRESETS_MESSAGE, bothPresetsGiven } from '../routing-presets/routing-presets.assign.js';
+import { BOTH_PRESETS_MESSAGE, bothPresetsGiven } from '../routing-presets/routing-presets.choice.js';
 
 const NameSchema = z
   .string()

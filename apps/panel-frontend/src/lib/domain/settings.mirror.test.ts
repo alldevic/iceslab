@@ -14,10 +14,11 @@ import settingsSource from './settings.ts?raw';
  *
  * Read off both sources as text, not exercised: there is no request that would
  * reveal a stripped key. Where the schema lives is these two constants and
- * nothing else (milestone 17.5 moves it to settings.schemas.ts).
+ * nothing else. (settings.forms.test.tsx runs a saved form through the real
+ * schema; this one is the direction a form that never sends a key cannot show.)
  */
-const SCHEMA_FILE = 'settings/settings.routes.ts';
-const SCHEMA_CONST = 'UpsertInput';
+const SCHEMA_FILE = 'settings/settings.schemas.ts';
+const SCHEMA_CONST = 'UpdateSettingsSchema';
 
 /**
  * Keys one side has and the other does not ON PURPOSE, each with the reason. A
