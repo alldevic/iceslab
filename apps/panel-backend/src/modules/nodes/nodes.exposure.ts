@@ -1,4 +1,5 @@
 import type { InboundDto, UfwPortDto, UfwPortsResponse } from '@iceslab/shared';
+import { DEFAULT_NODE_AGENT_PORT, parseNodeAddress } from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
 import { fetchEnabledInbounds } from '../inbounds/inbounds.queue.js';
 import { NodeTransport, NodeRequestError } from './nodes.transport.js';
@@ -17,6 +18,11 @@ import { NodeTransport, NodeRequestError } from './nodes.transport.js';
 /** Proto(s) ufw opens for a protocol, mirroring the node-agent's protoForInbound
  *  (server.go): hysteria/amneziawg/wireguard/tuic = udp (tuic rides QUIC), shadowsocks/
  *  mieru = tcp+udp, else tcp (xray/naive/mtproto/anytls/shadowtls). */
+/** The agent's mTLS port out of a node address (host[:port], [v6]:port); the default when it names none. */
+export function agentPortOf(address: string): number {
+  return parseNodeAddress(address)?.port ?? DEFAULT_NODE_AGENT_PORT;
+}
+
 export function protosForProtocol(protocol: string): ('tcp' | 'udp')[] {
   switch (protocol) {
     case 'hysteria':
@@ -94,9 +100,7 @@ export async function checkNodePortExposure(nodeId: string): Promise<PortExposur
 
   // node.address is host[:port]; the agent mTLS port defaults to 1337 (see
   // nodes.transport buildUrl) when no port is set.
-  const agentPort = node.address.includes(':')
-    ? Number(node.address.split(':').pop()) || 1337
-    : 1337;
+  const agentPort = agentPortOf(node.address);
   const inbounds = await fetchEnabledInbounds(nodeId);
   const expected = buildExpectedPortSet(inbounds, agentPort);
   const extras = computePortExposure(resp.ports, expected);

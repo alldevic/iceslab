@@ -29,7 +29,7 @@ import {
   IconStack2,
   IconX,
 } from '@tabler/icons-react';
-import { HOST_SERVER_DESCRIPTION_MAX } from '@iceslab/shared';
+import { HOST_SERVER_DESCRIPTION_MAX, parseNodeAddress } from '@iceslab/shared';
 import { descriptionProblem, visibilityKnown, visibilityPatch } from '@/contours/hosts/lib/hostVisibility';
 import {
   createHost,
@@ -126,6 +126,10 @@ const LABEL = {
   color: MIST,
   lineHeight: '12px',
 };
+
+/** The node's host out of its stored address: no port, an IPv6 without brackets. */
+const nodeHostOf = (address: string | undefined): string =>
+  (address ? parseNodeAddress(address)?.host ?? address.split(':')[0] : '') ?? '';
 
 export function HostEditPage() {
   const { t } = useTranslation();
@@ -1063,7 +1067,7 @@ export function HostEditPage() {
                   label={t('hostEdit.address')}
                   placeholder={
                     inherited('addressOverride') ||
-                    currentNode?.address.split(':')[0] ||
+                    nodeHostOf(currentNode?.address) ||
                     'ams.example.net'
                   }
                   value={address}
@@ -1100,7 +1104,7 @@ export function HostEditPage() {
                         {t('hostEdit.aRecordTitle')}
                       </Text>
                       <Text style={{ fontFamily: MONO, fontSize: 12, color: SNOW }}>
-                        {address.trim()} → {currentNode?.address.split(':')[0] ?? '-'}
+                        {address.trim()} → {nodeHostOf(currentNode?.address) || '-'}
                       </Text>
                     </>
                   ) : (

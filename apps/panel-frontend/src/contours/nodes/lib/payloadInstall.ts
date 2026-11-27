@@ -1,3 +1,4 @@
+import { parseNodeAddress } from '@iceslab/shared';
 /**
  * A-295: installing a node from the payload file, the only way on a panel
  * without https. The installer redeems a bootstrap token over https only, so
@@ -30,6 +31,8 @@ export function payloadFileName(nodeName: string): string {
  * The host is the node's address without the agent port.
  */
 export function scpCommand(nodeName: string, address: string, target: string): string {
-  const host = address.replace(/:\d+$/, '');
+  const parsed = parseNodeAddress(address);
+  // scp reads `host:path` at the first colon, so an IPv6 host needs its brackets.
+  const host = parsed ? (parsed.kind === 'ipv6' ? `[${parsed.host}]` : parsed.host) : address.replace(/:\d+$/, '');
   return `scp ./${payloadFileName(nodeName)} root@${host}:${target}`;
 }

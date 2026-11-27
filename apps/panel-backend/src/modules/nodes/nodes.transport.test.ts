@@ -6,7 +6,7 @@ import {
   generateNodeCert,
   generatePanelClientCert,
 } from '../keygen/keygen.crypto.js';
-import { NodeTransport, NodeRequestError, type MtlsOverride } from './nodes.transport.js';
+import { NodeTransport, NodeRequestError, agentHostPort, type MtlsOverride } from './nodes.transport.js';
 
 interface ServerHandle {
   server: Server;
@@ -204,5 +204,27 @@ describe('NodeTransport (mTLS)', () => {
     const err = await transport.listAssets().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(NodeRequestError);
     expect((err as NodeRequestError).status).toBe(404);
+  });
+});
+
+describe('agentHostPort', () => {
+  it('keeps what a name and an IPv4 always gave', () => {
+    expect(agentHostPort('node1.example.com')).toBe('node1.example.com:1337');
+    expect(agentHostPort('node1.example.com:8443')).toBe('node1.example.com:8443');
+    expect(agentHostPort('203.0.113.7')).toBe('203.0.113.7:1337');
+    expect(agentHostPort('203.0.113.7:2000')).toBe('203.0.113.7:2000');
+  });
+
+  it('brackets an IPv6 and gives it the agent port when it has none', () => {
+    expect(agentHostPort('2001:db8::1')).toBe('[2001:db8::1]:1337');
+    expect(agentHostPort('[2001:db8::1]')).toBe('[2001:db8::1]:1337');
+    expect(agentHostPort('[2001:db8::1]:2000')).toBe('[2001:db8::1]:2000');
+  });
+
+  it('the URL the transport builds is https://[v6]:1337/...', () => {
+    const t = new NodeTransport({ address: '2001:db8::1' }) as unknown as { buildUrl(p: string): string };
+    expect(t.buildUrl('/healthz')).toBe('https://[2001:db8::1]:1337/healthz');
+    const n = new NodeTransport({ address: 'node1.example.com' }) as unknown as { buildUrl(p: string): string };
+    expect(n.buildUrl('/healthz')).toBe('https://node1.example.com:1337/healthz');
   });
 });

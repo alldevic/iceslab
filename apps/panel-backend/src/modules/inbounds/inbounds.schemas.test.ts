@@ -3,6 +3,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   AmneziawgConfigSchema,
+  CreateInboundSchema,
+  UpdateInboundSchema,
   InboundConfigByProtocol,
   PROTOCOL_CONFIG_SCHEMAS,
   REALITY_TRANSPORTS,
@@ -222,5 +224,39 @@ describe('presharedKey flag (9.5)', () => {
   it('is a boolean only', () => {
     expect(AmneziawgConfigSchema.safeParse({ ...base, obfuscation: {}, presharedKey: 'yes' }).success).toBe(false);
     expect(WireguardConfigSchema.safeParse({ ...wg, presharedKey: 1 }).success).toBe(false);
+  });
+});
+
+describe('publicHost', () => {
+  const create = (publicHost: string) =>
+    CreateInboundSchema.safeParse({
+      nodeId: '00000000-0000-4000-8000-000000000001',
+      name: 'in',
+      port: 8443,
+      protocol: 'shadowsocks',
+      config: {},
+      publicHost,
+    });
+
+  it('takes an IPv6 literal and keeps it bare and canonical', () => {
+    for (const typed of ['2001:db8::1', '[2001:db8::1]', '[2001:DB8:0:0:0:0:0:1]']) {
+      const r = create(typed);
+      expect(r.success, typed).toBe(true);
+      expect(r.data?.publicHost).toBe('2001:db8::1');
+    }
+  });
+
+  it('still takes a name and an IPv4 as typed, and refuses what is neither', () => {
+    expect(create('Node1.Example.com').data?.publicHost).toBe('Node1.Example.com');
+    expect(create('203.0.113.7').data?.publicHost).toBe('203.0.113.7');
+    for (const bad of ['2001:db8::zz', '[2001:db8::1]:443', 'host:443', 'a b', '-x.example']) {
+      expect(create(bad).success, bad).toBe(false);
+    }
+  });
+
+  it('the update clears with null or an empty string, and takes IPv6', () => {
+    expect(UpdateInboundSchema.parse({ publicHost: null }).publicHost).toBeNull();
+    expect(UpdateInboundSchema.parse({ publicHost: '' }).publicHost).toBeNull();
+    expect(UpdateInboundSchema.parse({ publicHost: '[2001:db8::1]' }).publicHost).toBe('2001:db8::1');
   });
 });

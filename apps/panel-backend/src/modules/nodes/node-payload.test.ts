@@ -12,6 +12,7 @@ import { getPanelClientFingerprint } from '../keygen/keygen.service.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { NODE_PAYLOAD_FILE, installOf } from './nodes.service.js';
+import { buildSans } from './node-payload.js';
 
 /**
  * A-295: the payload of node create carried the certificate and nothing
@@ -144,5 +145,21 @@ describe('the install command on a panel without https', () => {
     });
     expect(refreshed.statusCode, refreshed.body).toBe(201);
     expect(JSON.parse(refreshed.body).payloadOnly).toBe(!https);
+  });
+});
+
+describe('buildSans', () => {
+  it('names a DNS host as dns and an IPv4 as ip, the port dropped', () => {
+    expect(buildSans('node1.example.com:1337')).toEqual([{ type: 'dns', value: 'node1.example.com' }]);
+    expect(buildSans('203.0.113.7')).toEqual([{ type: 'ip', value: '203.0.113.7' }]);
+    expect(buildSans('203.0.113.7:2000')).toEqual([{ type: 'ip', value: '203.0.113.7' }]);
+  });
+
+  it('names an IPv6 as ip, bare, in whichever of the forms it is stored', () => {
+    const want = [{ type: 'ip', value: '2001:db8::1' }];
+    expect(buildSans('2001:db8::1')).toEqual(want);
+    expect(buildSans('[2001:db8::1]')).toEqual(want);
+    expect(buildSans('[2001:db8::1]:2000')).toEqual(want);
+    expect(buildSans('[2001:DB8:0:0:0:0:0:1]:2000')).toEqual(want);
   });
 });

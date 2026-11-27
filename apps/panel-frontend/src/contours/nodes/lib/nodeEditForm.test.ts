@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Node } from '@/lib/domain/nodes';
-import { domainOk, defaults, domainPatch, egressOf, statusPut } from '@/contours/nodes/lib/nodeEditForm';
+import { addressFromForm, domainOk, defaults, domainPatch, egressOf, nodeHostOk, splitAddress, statusPut } from '@/contours/nodes/lib/nodeEditForm';
 
 describe('домен ноды в PUT (A-057)', () => {
   it('уходит только изменённый; пустое снимает домен null', () => {
@@ -51,5 +51,37 @@ describe('statusPut («В работе»)', () => {
   it('форма читает disabled как «не в работе», остальное как «в работе»', () => {
     expect(defaults({ status: 'disabled', address: 'a:1' } as Node).inService).toBe(false);
     expect(defaults({ status: 'degraded', address: 'a:1' } as Node).inService).toBe(true);
+  });
+});
+
+describe('адрес ноды в форме: IPv6', () => {
+  it('splitAddress читает все записи, хост без скобок', () => {
+    expect(splitAddress('node.example.com')).toEqual({ host: 'node.example.com', port: 1337 });
+    expect(splitAddress('203.0.113.7:2600')).toEqual({ host: '203.0.113.7', port: 2600 });
+    expect(splitAddress('2001:db8::1')).toEqual({ host: '2001:db8::1', port: 1337 });
+    expect(splitAddress('[2001:db8::1]:2600')).toEqual({ host: '2001:db8::1', port: 2600 });
+  });
+
+  it('поле хоста принимает имя, IPv4, IPv6 с скобками и без; порт и схему не принимает', () => {
+    for (const ok of ['node.example.com', '203.0.113.7', '2001:db8::1', '[2001:db8::1]', '2001:DB8:0:0:0:0:0:1']) {
+      expect(nodeHostOk(ok), ok).toBe(true);
+    }
+    for (const bad of ['node.example.com:1337', '[2001:db8::1]:1337', 'https://a.example', '2001:db8::zz', 'a b', '']) {
+      expect(nodeHostOk(bad), bad).toBe(false);
+    }
+  });
+
+  it('адрес из формы: порт после скобок у IPv6, прежняя строка у имени и IPv4', () => {
+    expect(addressFromForm('node.example.com', 1337)).toBe('node.example.com:1337');
+    expect(addressFromForm(' 203.0.113.7 ', 2600)).toBe('203.0.113.7:2600');
+    expect(addressFromForm('2001:db8::1', 1337)).toBe('[2001:db8::1]:1337');
+    expect(addressFromForm('[2001:db8::1]', 2600)).toBe('[2001:db8::1]:2600');
+  });
+
+  it('форма правки показывает IPv6 ноды и собирает его обратно в тот же адрес', () => {
+    const form = defaults({ address: '2001:db8::1' } as Node);
+    expect(form.host).toBe('2001:db8::1');
+    expect(form.port).toBe(1337);
+    expect(addressFromForm(form.host, Number(form.port))).toBe('[2001:db8::1]:1337');
   });
 });

@@ -1,5 +1,7 @@
 import { fetch, Agent } from 'undici';
 import { checkServerIdentity, type PeerCertificate } from 'node:tls';
+import { DEFAULT_NODE_AGENT_PORT, parseNodeAddress } from '@iceslab/shared';
+import { hostPort } from '../../lib/util/ip.js';
 import type {
   ConfirmCertResponse,
   RotateCertRequest,
@@ -162,6 +164,17 @@ interface RequestOptions {
  * Tests can pass an `MtlsOverride` to inject a synthetic bundle without
  * touching the live `keygen_ca` table.
  */
+/**
+ * `host:port` of the agent for a stored address: the default agent port when
+ * the address names none, brackets round an IPv6 literal. A name or IPv4 comes
+ * out as it always did.
+ */
+export function agentHostPort(address: string): string {
+  const p = parseNodeAddress(address);
+  if (!p) return address.includes(':') ? address : `${address}:${DEFAULT_NODE_AGENT_PORT}`;
+  return hostPort(p.host, p.port ?? DEFAULT_NODE_AGENT_PORT);
+}
+
 export class NodeTransport {
   constructor(
     private readonly node: NodeTransportTarget,
@@ -178,9 +191,7 @@ export class NodeTransport {
     // mTLS port) or a different service entirely (Caddy on the panel host
     // can be on the same domain). Result: cron healthcheck "unreachable"
     // with no clue why.
-    const host = this.node.address.includes(':')
-      ? this.node.address
-      : `${this.node.address}:1337`;
+    const host = agentHostPort(this.node.address);
     return `https://${host}${path}`;
   }
 

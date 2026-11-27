@@ -35,7 +35,7 @@ import { listSquads } from '@/lib/domain/squads';
 import { useOverview } from '@/lib/domain/dashboard';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { dnsPatch, dnsProblems } from '@/contours/nodes/lib/nodeDnsForm';
-import { defaults, domainOk, domainPatch, egressOf, nodeEnginesPut, statusPut, type FormValues } from '@/contours/nodes/lib/nodeEditForm';
+import { addressFromForm, defaults, domainOk, domainPatch, egressOf, nodeEnginesPut, nodeHostOk, statusPut, type FormValues } from '@/contours/nodes/lib/nodeEditForm';
 import { loadFailure, loadView } from '@/lib/ui/loadView';
 import { nodeEnginesRefusal, type NodeEnginesRefusal } from '@/contours/nodes/lib/nodeCreateForm';
 import { AMBER, DIM, MOSS } from '@/contours/nodes/lib/colors';
@@ -121,7 +121,7 @@ export function useNodeEditForm() {
       host: (v) => {
         const trimmed = v.trim();
         if (trimmed.length === 0) return t('validation.addressRequired');
-        if (!/^[a-zA-Z0-9.-]+$/.test(trimmed)) return t('validation.addressHostOnly');
+        if (!nodeHostOk(trimmed)) return t('validation.addressHostOnly');
         return null;
       },
       port: (v) => {
@@ -208,7 +208,7 @@ export function useNodeEditForm() {
       const port = form.values.port === '' ? DEFAULT_NODE_PORT : Number(form.values.port);
       return updateNode(id!, {
         name: form.values.name.trim(),
-        address: `${form.values.host.trim()}:${port}`,
+        address: addressFromForm(form.values.host, port),
         countryCode: form.values.countryCode || null,
         regionId: form.values.regionId || null,
         // A-057: only when changed, the server re-pushes the node on a new one.

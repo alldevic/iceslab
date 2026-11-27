@@ -32,6 +32,7 @@ import { apiErrorMessage } from '@/lib/net/client';
 import { loadFailure, loadView } from '@/lib/ui/loadView';
 import { adapterRefusal, adapterRefusalWords, addOnePerSlot, slotHeldBy } from '@/lib/domain/adapterSlot';
 import { buildHardening } from '@/contours/nodes/lib/nodeInstall';
+import { addressFromForm, nodeHostOk } from '@/contours/nodes/lib/nodeEditForm';
 import { isPayloadOnly, payloadFileName } from '@/contours/nodes/lib/payloadInstall';
 import { copyToClipboard } from '@/lib/ui/clipboard';
 import { nodeFieldKnown } from '@/lib/domain/nodeFields';
@@ -84,7 +85,7 @@ export function useNodeCreateForm() {
       host: (v) => {
         const trimmed = v.trim();
         if (trimmed.length === 0) return t('validation.addressRequired');
-        if (!/^[a-zA-Z0-9.-]+$/.test(trimmed)) return t('validation.addressHostOnly');
+        if (!nodeHostOk(trimmed)) return t('validation.addressHostOnly');
         return null;
       },
       port: (v) => {
@@ -269,7 +270,7 @@ export function useNodeCreateForm() {
       const coreVersions = createCoreVersions(coreVersionsKnown, form.values.coreVersions);
       const node: NodeWithPayload = await createNode({
         name: form.values.name.trim(),
-        address: `${form.values.host.trim()}:${port}`,
+        address: addressFromForm(form.values.host, port),
         countryCode: form.values.countryCode || null,
         // Step 1 refuses a value that does not parse (A-143); none is guessed here.
         ...multiplierPatch(form.values.consumptionMultiplier),

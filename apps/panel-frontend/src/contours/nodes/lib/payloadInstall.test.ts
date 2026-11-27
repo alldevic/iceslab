@@ -31,6 +31,12 @@ describe('A-295: установка ноды из payload на панели бе
     expect(scpCommand('de-1', 'node.example.com', '/root/x')).toBe('scp ./de-1-payload.txt root@node.example.com:/root/x');
   });
 
+  it('scp: IPv6 нужен в скобках, в любой из форм записи; порт агента снят', () => {
+    for (const address of ['2001:db8::1', '[2001:db8::1]', '[2001:db8::1]:2600']) {
+      expect(scpCommand('de-1', address, '/root/x'), address).toBe('scp ./de-1-payload.txt root@[2001:db8::1]:/root/x');
+    }
+  });
+
   it('слова окна и страницы ноды есть в обеих локалях', () => {
     const keys = [
       'nodeCreate.payloadOnce',

@@ -1,7 +1,9 @@
 import { prisma } from '../../prisma.js';
+import { canonicalIpv6 } from '@iceslab/shared';
 import { bootstrapCa } from '../keygen/keygen.service.js';
 import { certFingerprintSha256, certNotAfter, generateNodeCert } from '../keygen/keygen.crypto.js';
 import { NodeRequestError, NodeTransport } from './nodes.transport.js';
+import { sanOf as nodeSanOf } from './node-payload.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { notifyTelegramAsync, escapeMarkdown } from '../../lib/notify/telegram-notify.js';
 
@@ -63,7 +65,7 @@ export function sansOf(subjectAltName: string): { type: 'dns' | 'ip'; value: str
   return out;
 }
 
-const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
+const sameName = (a: string, b: string): boolean => (canonicalIpv6(a) ?? a) === (canonicalIpv6(b) ?? b);
 
 export async function rotateNodeCert(nodeId: string, opts: RotateNodeCertOptions = {}): Promise<RotatedNodeCert> {
   const node = await prisma.node.findFirst({
@@ -79,9 +81,11 @@ export async function rotateNodeCert(nodeId: string, opts: RotateNodeCertOptions
   } catch (err) {
     throw new NodeCertRotationError(`node ${node.name} is not reachable: ${errorText(err)}`, 'UNREACHABLE');
   }
-  const host = node.address.split(':')[0]!;
+  const want = nodeSanOf(node.address);
   const sans = sansOf(presented.subjectAltName);
-  if (!sans.some((s) => s.value === host)) sans.push({ type: IPV4_RE.test(host) ? 'ip' : 'dns', value: host });
+  // Node prints an IPv6 SAN expanded and upper-case (`IP Address:2001:DB8:0:0:0:0:0:1`),
+  // so the two sides are compared in one spelling, or the name would be added twice.
+  if (!sans.some((s) => sameName(s.value, want.value))) sans.push(want);
 
   const pair = await generateNodeCert(await bootstrapCa(), {
     commonName: node.name,

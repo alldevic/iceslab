@@ -113,3 +113,14 @@ describe('the ufw proto contract with the node agent', () => {
     expect(listed).toEqual([...PROTOCOL_NAMES].sort());
   });
 });
+
+describe('the agent port of a node address', () => {
+  it('is read from host:port and [v6]:port, 1337 when the address has none', async () => {
+    const { agentPortOf } = await import('./nodes.exposure.js');
+    expect(agentPortOf('node.example.com')).toBe(1337);
+    expect(agentPortOf('node.example.com:8443')).toBe(8443);
+    expect(agentPortOf('2001:db8::1')).toBe(1337);
+    expect(agentPortOf('[2001:db8::1]')).toBe(1337);
+    expect(agentPortOf('[2001:db8::1]:8443')).toBe(8443);
+  });
+});

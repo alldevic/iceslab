@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AWG_PROTOCOLS, ENGINE_OPTIONS, XRAY_PLAIN_SUBPROTOCOLS } from '@iceslab/shared';
+import { AWG_PROTOCOLS, ENGINE_OPTIONS, XRAY_PLAIN_SUBPROTOCOLS, canonicalIpv6Host } from '@iceslab/shared';
 import {
   PROTOCOL_CONFIG_SCHEMAS,
   type CreateInboundInput,
@@ -19,14 +19,19 @@ const NameSchema = z
 
 const PortSchema = z.number().int().min(1).max(65535);
 
+const HOSTNAME_RE =
+  /^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
+
 const PublicHostSchema = z
   .string()
   .min(1)
   .max(253)
-  .regex(
-    /^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/,
-    'Must be a valid hostname or IPv4',
-  );
+  .refine(
+    (v) => canonicalIpv6Host(v) !== null || HOSTNAME_RE.test(v),
+    'Must be a valid hostname, IPv4 or IPv6 address',
+  )
+  // An IPv6 literal is stored bare (no brackets) in the canonical spelling.
+  .transform((v) => canonicalIpv6Host(v) ?? v);
 
 export const ProtocolEnum = z.enum([
   'hysteria',

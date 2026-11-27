@@ -3,6 +3,7 @@ import {
   REALITY_TRANSPORTS,
   XRAY_PLAIN_SUBPROTOCOLS,
   XRAY_SUBPROTOCOLS,
+  canonicalIpv6Host,
   type AmneziawgInboundCfg,
   type WireguardInboundCfg,
 } from '@iceslab/shared';
@@ -599,14 +600,19 @@ export const InboundConfigByProtocol = z.discriminatedUnion('protocol', [
 
 // Public-facing host the panel emits in client URIs. Must be a hostname or
 // IP: RFC 1123 hostname or IPv4 dotted-quad. Length capped at 253 (RFC).
+const HOSTNAME_RE =
+  /^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
+
 const PublicHostSchema = z
   .string()
   .min(1)
   .max(253)
-  .regex(
-    /^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/,
-    'Must be a valid hostname or IPv4',
-  );
+  .refine(
+    (v) => canonicalIpv6Host(v) !== null || HOSTNAME_RE.test(v),
+    'Must be a valid hostname, IPv4 or IPv6 address',
+  )
+  // An IPv6 literal is stored bare (no brackets) in the canonical spelling.
+  .transform((v) => canonicalIpv6Host(v) ?? v);
 
 const BaseFields = z.object({
   nodeId: z.uuid(),

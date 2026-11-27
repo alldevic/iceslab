@@ -1,4 +1,4 @@
-import type { BootstrapCoreVersions } from '@iceslab/shared';
+import { parseNodeAddress, type BootstrapCoreVersions } from '@iceslab/shared';
 import { encodeNodePayload, getPanelClientFingerprint, issueNodeCert } from '../keygen/keygen.service.js';
 import { config } from '../../config.js';
 import { signHeartbeatToken } from './heartbeat-token.js';
@@ -53,10 +53,15 @@ export function bootstrapUsable(panelUrl: string): boolean {
   }
 }
 
-const IPV4_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+/** The certificate's name for the host of a node's address (port dropped, IPv6 bare). */
+export function sanOf(address: string): { type: 'dns' | 'ip'; value: string } {
+  const p = parseNodeAddress(address);
+  // Not a shape the schemas let in; keep the old cut at the colon for such a row.
+  if (!p) return { type: 'dns', value: address.split(':')[0]! };
+  return { type: p.kind === 'name' ? 'dns' : 'ip', value: p.host };
+}
 
 /** The certificate's name for the node's address: an IP, or a DNS name. */
 export function buildSans(address: string): { type: 'dns' | 'ip'; value: string }[] {
-  const host = address.split(':')[0]!;
-  return [{ type: IPV4_RE.test(host) ? 'ip' : 'dns', value: host }];
+  return [sanOf(address)];
 }

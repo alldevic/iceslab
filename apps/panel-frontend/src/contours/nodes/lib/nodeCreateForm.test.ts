@@ -13,7 +13,7 @@ import {
   toggleEngine,
   wizardCoreComponents,
 } from '@/contours/nodes/lib/nodeCreateForm';
-import { formProtocolOf, nodeEnginesPut } from '@/contours/nodes/lib/nodeEditForm';
+import { addressFromForm, formProtocolOf, nodeEnginesPut, nodeHostOk } from '@/contours/nodes/lib/nodeEditForm';
 import { intendedEnginesWords, nodeIntentWords } from '@/lib/domain/engines';
 
 describe('selectedThatCan (A-146)', () => {
@@ -201,5 +201,17 @@ describe('freshNodeReason (A-146 p. 3.1, A-160)', () => {
     expect(freshNodeReason({ effectiveEngine: 'singbox', protocol: 'tuic' }, carried)).toBe('noSingbox');
     expect(freshNodeReason({ effectiveEngine: 'hysteria', protocol: 'hysteria' }, carried)).toBe('noCore');
     expect(freshNodeReason({ effectiveEngine: 'amneziawg', protocol: 'amneziawg', awgProtocol: 3 }, new Set(['xray']))).toBe('noCore');
+  });
+});
+
+describe('адрес новой ноды: IPv6', () => {
+  it('шаг «Параметры» принимает IPv6 в обеих записях; в запросе он в скобках с портом', () => {
+    for (const typed of ['2001:db8::1', '[2001:db8::1]']) {
+      expect(nodeHostOk(typed), typed).toBe(true);
+      expect(addressFromForm(typed, 1337), typed).toBe('[2001:db8::1]:1337');
+    }
+    // Имя и IPv4 уходят прежней строкой.
+    expect(addressFromForm('node.example.com', 1337)).toBe('node.example.com:1337');
+    expect(addressFromForm('203.0.113.7', 1337)).toBe('203.0.113.7:1337');
   });
 });

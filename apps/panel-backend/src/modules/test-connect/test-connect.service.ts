@@ -3,7 +3,7 @@ import { connect as tlsConnect } from 'node:tls';
 import { lookup } from 'node:dns/promises';
 import { prisma } from '../../prisma.js';
 import { hostFromAddress } from '../subscription/subscription.formats.js';
-import { isPublicRoutableIp } from '../../lib/util/ip.js';
+import { isPublicRoutableIp, normalizeHost } from '../../lib/util/ip.js';
 import { measureRealityFlight, realityFlightRefusal, type ServerFlight } from './reality-dest-flight.js';
 
 export interface ProbeResult {
@@ -301,7 +301,8 @@ export async function testProfileConnect(profileId: string): Promise<ProbeResult
 
     const hostRows = b.hosts.length > 0 ? b.hosts : [null];
     for (const h of hostRows) {
-      const endpoint = h?.addressOverride ?? baseHost;
+      // Bare host: the probe dials it with net/tls, which take no brackets.
+      const endpoint = normalizeHost(h?.addressOverride ?? baseHost);
       const port = h?.portOverride ?? basePort;
       const sni = h?.sniOverride ?? profileSni ?? endpoint;
       targets.push({

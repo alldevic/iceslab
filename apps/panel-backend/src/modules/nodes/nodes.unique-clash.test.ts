@@ -64,6 +64,19 @@ describe('a create that reaches the unique index', () => {
     expect((err as NodeAlreadyExistsError).field).toBe('address');
   });
 
+  it('an IPv6 typed in another form is the same address: two rows of it clash', async () => {
+    // The three forms reach the index as one string, so it sees one address.
+    await createNode(input('v6-one', '2001:db8::1'), ctx);
+    for (const typed of ['[2001:db8::1]', '[2001:db8::1]:1337', '2001:DB8:0:0:0:0:0:1']) {
+      blind.on = false;
+      await expect(createNode(input('v6-two', typed), ctx)).rejects.toBeInstanceOf(NodeAlreadyExistsError);
+      blind.on = true;
+      const err = await createNode(input('v6-two', typed), ctx).catch((e: unknown) => e);
+      expect((err as NodeAlreadyExistsError).field).toBe('address');
+    }
+    expect(await prisma.node.count()).toBe(1);
+  });
+
   it('lets a soft-deleted node give its address away (the indexes are partial)', async () => {
     await createNode(input('old', 'reused.example.com:1337'), ctx);
     await prisma.node.updateMany({ data: { deletedAt: new Date() } });

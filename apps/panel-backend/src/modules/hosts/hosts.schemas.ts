@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FORMAT_NAMES, SERVER_DESCRIPTION_WORDS, serverDescriptionProblem } from '@iceslab/shared';
+import { FORMAT_NAMES, SERVER_DESCRIPTION_WORDS, canonicalIpv6Host, serverDescriptionProblem } from '@iceslab/shared';
 
 // Format names accepted in `disableForFormats[]`.
 //
@@ -9,6 +9,19 @@ import { FORMAT_NAMES, SERVER_DESCRIPTION_WORDS, serverDescriptionProblem } from
 // subscription has never served. So a host disabled for a format the operator
 // could see on the page was refused with a 400 here, and a host disabled for
 // `mieru-json` disabled nothing at all.
+/**
+ * The host a client dials in place of the node's: a name or an IPv4 as typed, an
+ * IPv6 literal in either spelling stored bare and canonical (the subscription
+ * puts the brackets where its syntax needs them). A colon in anything that is
+ * not an IPv6 literal is refused: no client can dial it.
+ */
+const AddressOverrideSchema = z
+  .string()
+  .min(1)
+  .max(253)
+  .refine((v) => !/[:[\]]/.test(v) || canonicalIpv6Host(v) !== null, 'Must be a hostname, IPv4 or IPv6 address')
+  .transform((v) => canonicalIpv6Host(v) ?? v);
+
 const FormatEnum = z.enum(FORMAT_NAMES);
 
 const SecurityLayerEnum = z.enum(['default', 'tls', 'none']);
@@ -57,7 +70,7 @@ export const CreateHostSchema = z
     remark: z.string().min(1).max(64).default('Default'),
   priority: z.number().int().min(0).max(1000).default(0),
   enabled: z.boolean().default(true),
-  addressOverride: z.string().min(1).max(253).nullable().optional(),
+  addressOverride: AddressOverrideSchema.nullable().optional(),
   portOverride: z.number().int().min(1).max(65535).nullable().optional(),
   sniOverride: z.string().min(1).max(253).nullable().optional(),
   hostHeaderOverride: z.string().min(1).max(253).nullable().optional(),
@@ -111,7 +124,7 @@ export const UpdateHostSchema = z
     portMove: z.enum(['host', 'binding']).optional(),
     /** A-150, kept for the screens that send it: `true` is portMove 'binding'. */
     confirmSharedPort: z.boolean().optional(),
-    addressOverride: z.string().min(1).max(253).nullable().optional(),
+    addressOverride: AddressOverrideSchema.nullable().optional(),
     /** The port CLIENTS dial when it differs from the one the node listens on
      *  (NAT, CDN). Only this writes portOverride; null clears it. */
     portOverride: z.number().int().min(1).max(65535).nullable().optional(),

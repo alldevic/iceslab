@@ -37,6 +37,8 @@ async function fakeAgent(opts: {
   liesAboutRotation?: boolean;
   /** An agent older than rotation: 404, and no certNotAfter in /healthz. */
   noRotation?: boolean;
+  /** The address the stand-in listens on (127.0.0.1 unless said). */
+  host?: string;
 }): Promise<FakeAgent> {
   const ca = await bootstrapCa();
   const pair = await generateNodeCert(ca, { commonName: 'fake', sans: opts.sans, lifetimeMs: opts.lifetimeMs });
@@ -87,16 +89,16 @@ async function fakeAgent(opts: {
       });
     },
   );
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  await new Promise<void>((r) => server.listen(0, opts.host ?? '127.0.0.1', r));
   return { server, port: (server.address() as AddressInfo).port, confirms, rotations };
 }
 
-async function nodeAt(port: number, extra: Record<string, unknown> = {}): Promise<string> {
+async function nodeAt(port: number, extra: Record<string, unknown> = {}, host = '127.0.0.1'): Promise<string> {
   return (
     await prisma.node.create({
       data: {
         name: `cert-${port}`,
-        address: `127.0.0.1:${port}`,
+        address: `${host}:${port}`,
         protocol: 'xray',
         heartbeatSecret: randomBytes(32),
         status: 'online',
@@ -146,6 +148,21 @@ describe('rotateNodeCert', () => {
     expect(lifetime).toBeLessThanOrEqual(3 * 24 * 3600_000);
     const row = await prisma.node.findUniqueOrThrow({ where: { id }, select: { certNotAfter: true } });
     expect(row.certNotAfter?.toISOString()).toBe(out.notAfter);
+  });
+
+  it('an IPv6 node: reached through the brackets, and its SAN is not added a second time', async () => {
+    const a = await fakeAgent({ sans: [{ type: 'ip', value: '::1' }], host: '::1' });
+    agents.push(a);
+    const id = await nodeAt(a.port, {}, '[::1]');
+
+    // Node lists the presented ::1 as `IP Address:0:0:0:0:0:0:0:1`.
+    const presented = await new NodeTransport({ address: `[::1]:${a.port}` }).presentedCert();
+    expect(presented.subjectAltName).toMatch(/IP Address:0:0:0:0:0:0:0:1/i);
+
+    const out = await rotateNodeCert(id);
+    const issued = new X509Certificate(a.rotations[0]!.certPem);
+    expect(issued.subjectAltName?.match(/IP Address:/g)).toHaveLength(1);
+    expect(a.confirms).toEqual([{ asked: out.fingerprint, servedOnThatConnection: out.fingerprint }]);
   });
 
   it('never confirms when the node keeps presenting the old leaf: the agent rolls back by itself', async () => {
@@ -244,6 +261,10 @@ describe('the status poll keeps the end the agent reports', () => {
 });
 
 describe('sansOf', () => {
+  it('reads an IPv6 name the way Node prints it', () => {
+    expect(sansOf('IP Address:2001:DB8:0:0:0:0:0:1')).toEqual([{ type: 'ip', value: '2001:DB8:0:0:0:0:0:1' }]);
+  });
+
   it('reads the names Node lists for a peer', () => {
     expect(sansOf('DNS:a.example, IP Address:1.2.3.4, URI:x')).toEqual([
       { type: 'dns', value: 'a.example' },

@@ -1,3 +1,4 @@
+import { canonicalIpv6Host, joinNodeAddress, parseNodeAddress } from '@iceslab/shared';
 import type { EngineName, NodeCoreVersions } from '@iceslab/shared';
 import type { Node, NodeLabel, NodeProtocol } from '@/lib/domain/nodes';
 import { DEFAULT_NODE_PORT } from '@/contours/nodes/lib/nodeProtocols';
@@ -87,7 +88,15 @@ export function domainOk(typed: string): boolean {
   return v === '' || (v.length <= 255 && /^[a-zA-Z0-9.-]+$/.test(v));
 }
 
+/**
+ * The form's host and port out of a stored address: `host[:port]`, `v6` or
+ * `[v6]:port`. The host is bare (no brackets), so the field shows what the
+ * operator would type; an address that parses as none of these (a legacy row)
+ * is cut at the last colon, as it always was.
+ */
 export function splitAddress(address: string): { host: string; port: number } {
+  const p = parseNodeAddress(address);
+  if (p) return { host: p.host, port: p.port ?? DEFAULT_NODE_PORT };
   const idx = address.lastIndexOf(':');
   if (idx === -1) return { host: address, port: DEFAULT_NODE_PORT };
   const port = Number.parseInt(address.slice(idx + 1), 10);
@@ -95,6 +104,17 @@ export function splitAddress(address: string): { host: string; port: number } {
     host: address.slice(0, idx),
     port: Number.isFinite(port) && port > 0 ? port : DEFAULT_NODE_PORT,
   };
+}
+
+/** The host field: a DNS name, an IPv4 or an IPv6 literal (bare or in brackets), and no port. */
+export function nodeHostOk(typed: string): boolean {
+  const v = typed.trim();
+  return /^[a-zA-Z0-9.-]+$/.test(v) || canonicalIpv6Host(v) !== null;
+}
+
+/** What the form sends as the node's address: `host:port`, an IPv6 host in brackets. */
+export function addressFromForm(host: string, port: number): string {
+  return joinNodeAddress(host, port);
 }
 
 export function defaults(node: Node | null, decimalComma = false): FormValues {

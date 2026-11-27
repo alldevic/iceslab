@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CORE_COMPONENTS, ENGINE_NAMES } from '@iceslab/shared';
+import { CORE_COMPONENTS, ENGINE_NAMES, canonicalNodeAddress } from '@iceslab/shared';
 
 const NameSchema = z
   .string()
@@ -7,15 +7,18 @@ const NameSchema = z
   .max(64, 'Name too long')
   .regex(/^[a-zA-Z0-9._-]+$/, 'Name may contain letters, digits, dot, underscore, hyphen');
 
+// host[:port]: host is IPv4, DNS or an IPv6 literal (`v6`, `[v6]`, `[v6]:port`);
+// an IPv6 is stored in one spelling (canonicalNodeAddress) so the unique index
+// sees one row per address.
 const AddressSchema = z
   .string()
   .min(3, 'Address is required')
   .max(255, 'Address too long')
-  // host[:port]: host is IPv4 or DNS, port optional integer
-  .regex(
-    /^[a-zA-Z0-9.-]+(:\d{1,5})?$/,
-    'Address must be host or host:port (IPv4 or DNS, no scheme)',
-  );
+  .refine(
+    (v) => canonicalNodeAddress(v) !== null,
+    'Address must be host, host:port, or an IPv6 literal (v6, [v6], [v6]:port), no scheme',
+  )
+  .transform((v) => canonicalNodeAddress(v)!);
 
 const CountryCodeSchema = z.string().length(2).regex(/^[A-Z]{2}$/);
 
