@@ -5,6 +5,7 @@ import {
   ipToInt,
   ipv4OfIpv6,
   ipv6OfIpv4,
+  ipv6OfIpv4InPrefix,
   isSubnet6,
   normalizeSubnet6,
   parseSubnet,
@@ -140,5 +141,20 @@ describe('ipv6OfIpv4: the client IPv6 from the IPv4 address', () => {
   it('refuses a prefix that is not a ULA /64 and an address that is not IPv4', () => {
     expect(() => ipv6OfIpv4('2001:db8:1:2::/64', '10.0.0.2')).toThrow();
     expect(() => ipv6OfIpv4(S6, '10.0.0')).toThrow();
+  });
+});
+
+describe('ipv6OfIpv4InPrefix: the same derivation in a real /64 (18.11)', () => {
+  it('puts the IPv4 in the low 32 bits of the node\'s /64, one-to-one with the ULA rule', () => {
+    expect(ipv6OfIpv4InPrefix('2001:db8:77:1::/64', '10.66.66.7')).toBe('2001:db8:77:1:0:0:a42:4207');
+    // The same address the ULA path gives for the same low bits.
+    expect(ipv6OfIpv4InPrefix('fd12:3456:789a:1::/64', '10.66.66.7')).toBe(ipv6OfIpv4('fd12:3456:789a:1::/64', '10.66.66.7'));
+    expect(ipv6OfIpv4InPrefix('2001:db8:77:1::/64', '10.66.66.7')).not.toBe(ipv6OfIpv4InPrefix('2001:db8:77:1::/64', '10.66.66.8'));
+    expect(ipv6OfIpv4InPrefix('2001:db8:77:1::/64', '10.66.66.7').startsWith('2001:db8:77:1:')).toBe(true);
+  });
+
+  it('refuses what is not a four-group /64', () => {
+    expect(() => ipv6OfIpv4InPrefix('2001:db8:77::/48', '10.0.0.2')).toThrow();
+    expect(() => ipv6OfIpv4InPrefix('2001:db8:77::/64', '10.0.0.2')).toThrow();
   });
 });

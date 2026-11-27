@@ -462,3 +462,10 @@ type AwgProtocolReporter interface {
 type AwgIpv6Reporter interface {
 	AwgIpv6() bool
 }
+
+// AwgNoNat6Reporter is the OPTIONAL fact that this agent reads the `noNat6`
+// flag of an AmneziaWG push (milestone 18.11): a real prefix routed to the node
+// with no NAT66.
+type AwgNoNat6Reporter interface {
+	AwgNoNat6() bool
+}

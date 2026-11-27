@@ -69,6 +69,19 @@ func (a *Adapter) hostCanNAT6() bool {
 	})
 }
 
+var _ interface{ AwgNoNat6() bool } = (*Adapter)(nil)
+
+// AwgNoNat6 is the `awgNoNat6` fact (milestone 18.11): this agent knows the
+// `noNat6` flag of a push, so a prefix routed to the node can be served with
+// no NAT66. An agent of 18.10 reports awgIpv6 and not this one, and would put
+// MASQUERADE on a real prefix: the panel then keeps that node on NAT66. The
+// host's NAT table is still asked for (the fact is awgIpv6's, plus the flag):
+// the rules of a real prefix need only the filter table, but one probe, one
+// answer, and a node that can do neither is no node for IPv6 in the tunnel.
+func (a *Adapter) AwgNoNat6() bool {
+	return a.AwgIpv6()
+}
+
 var _ interface{ AwgIpv6() bool } = (*Adapter)(nil)
 
 // AwgIpv6 is the `awgIpv6` fact: this agent brings up IPv6 in the tunnel and

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { NodeCores } from '@iceslab/shared';
 import type { Node } from '@/lib/domain/nodes';
 import { nodeIpv6ModeNote } from '@/contours/nodes/lib/nodeAdapterFacts';
-import { addressFromForm, domainOk, defaults, domainPatch, egressOf, ipv6ModePatch, nodeHostOk, splitAddress, statusPut } from '@/contours/nodes/lib/nodeEditForm';
+import { addressFromForm, domainOk, defaults, domainPatch, egressOf, ipv6ModePatch, nodeHostOk, splitAddress, statusPut, tunnelPrefixChanges, tunnelPrefixOk, tunnelPrefixPatch } from '@/contours/nodes/lib/nodeEditForm';
 
 describe('домен ноды в PUT (A-057)', () => {
   it('уходит только изменённый; пустое снимает домен null', () => {
@@ -121,5 +121,53 @@ describe('режим IPv6 ноды (18.6)', () => {
     expect(nodeIpv6ModeNote(cores(), 'off')).toBe('agentUnsupported');
     expect(nodeIpv6ModeNote(null, 'on')).toBe('agentUnsupported');
     expect(nodeIpv6ModeNote(cores(), 'auto')).toBeNull();
+  });
+});
+
+describe('IPv6-префикс туннеля (18.11)', () => {
+  it('в форме читается из ноды; нет значения (сервер старше поля) — пусто', () => {
+    expect(defaults({ tunnelIpv6Prefix: '2001:db8:77::/48' } as Node).tunnelIpv6Prefix).toBe('2001:db8:77::/48');
+    expect(defaults({ tunnelIpv6Prefix: null } as Node).tunnelIpv6Prefix).toBe('');
+    expect(defaults({} as Node).tunnelIpv6Prefix).toBe('');
+    expect(defaults(null).tunnelIpv6Prefix).toBe('');
+  });
+
+  it('форма принимает глобальную сеть от /32 до /64 и пустое', () => {
+    for (const ok of ['', '  ', '2001:db8:77::/48', '2001:db8:77:1::/64', '2a01:4f8::/32', '2001:db8:77:100::/56', '3fff::/32']) {
+      expect(tunnelPrefixOk(ok), ok).toBe(true);
+    }
+  });
+
+  it('и не принимает ULA, link-local, длиннее /64, короче /32, биты хоста, не-IPv6', () => {
+    for (const bad of [
+      'fd12:3456:789a:1::/64',
+      'fe80::/64',
+      '2001:db8:77:1::/65',
+      '2001:db8::/16',
+      '2001:db8:77:1::5/64',
+      '2001:db8:77::',
+      '10.0.0.0/24',
+      '2001:db8::77::/48',
+      '2001:db8:77:1:2:3:4:5:6/64',
+      'ff02::/32',
+    ]) {
+      expect(tunnelPrefixOk(bad), bad).toBe(false);
+    }
+  });
+
+  it('в PUT уходит только изменённый; очищенный — null', () => {
+    expect(tunnelPrefixPatch(null, '')).toEqual({});
+    expect(tunnelPrefixPatch(undefined, '  ')).toEqual({});
+    expect(tunnelPrefixPatch('2001:db8:77::/48', '2001:db8:77::/48')).toEqual({});
+    expect(tunnelPrefixPatch(null, '2001:db8:77::/48')).toEqual({ tunnelIpv6Prefix: '2001:db8:77::/48' });
+    expect(tunnelPrefixPatch('2001:db8:77::/48', '')).toEqual({ tunnelIpv6Prefix: null });
+    expect(tunnelPrefixPatch('2001:db8:77::/48', '2001:db8:78::/48')).toEqual({ tunnelIpv6Prefix: '2001:db8:78::/48' });
+  });
+
+  it('предупреждение о перезапуске — только при изменении сохранённого', () => {
+    expect(tunnelPrefixChanges(null, '')).toBe(false);
+    expect(tunnelPrefixChanges('2001:db8:77::/48', '2001:db8:77::/48')).toBe(false);
+    expect(tunnelPrefixChanges(null, '2001:db8:77::/48')).toBe(true);
+    expect(tunnelPrefixChanges('2001:db8:77::/48', '')).toBe(true);
   });
 });

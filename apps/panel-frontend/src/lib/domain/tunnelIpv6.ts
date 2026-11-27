@@ -15,6 +15,17 @@ import type { NodeCores } from '@iceslab/shared';
  *   'agent'   the agent does not report IPv6 in the tunnel (awgIpv6), an
  *             agent older than milestone 18.10 among them.
  */
+/**
+ * Whether the node's agent serves a real prefix with no NAT66 (milestone 18.11,
+ * the `awgNoNat6` fact). An agent of 18.10 does not: the panel keeps such a node
+ * on the profiles' private subnets and NAT66, and the node screen says so.
+ */
+export function nodeServesRealPrefix(cores: NodeCores | null | undefined): boolean {
+  return (cores?.cores ?? []).some(
+    (c) => c.name === 'amneziawg' && (c.engine === undefined || c.engine === 'amneziawg') && c.awgNoNat6 === true,
+  );
+}
+
 export type TunnelIpv6Gap = 'off' | 'address' | 'agent';
 
 export function tunnelIpv6Gap(

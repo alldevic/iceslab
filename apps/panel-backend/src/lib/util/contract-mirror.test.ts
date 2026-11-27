@@ -406,4 +406,9 @@ describe('the tunnel IPv6 fields against the agent', () => {
   it('has the fact the panel reads, on the core row', () => {
     expect(jsonKeysOf('CoreStatus')).toContain('awgIpv6');
   });
+
+  // 18.11: the flag of a real prefix, and the fact that says the agent reads it.
+  it('has the real-prefix fact on the core row', () => {
+    expect(jsonKeysOf('CoreStatus')).toContain('awgNoNat6');
+  });
 });

@@ -1,6 +1,7 @@
 import { readIpv6Mode, type Ipv6Mode, type NodeCores } from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
 import { awgInterfacesInChain } from '../cascades/cascade.service.js';
+import { interfaceSubnet64 } from './tunnel-prefix.js';
 
 /**
  * Milestone 18.9: which WireGuard-family interfaces of a node carry IPv6 inside
@@ -19,10 +20,23 @@ import { awgInterfacesInChain } from '../cascades/cascade.service.js';
  *
  * Plain WireGuard is never a cascade entry (CHAIN_ENTRY_PROTOCOLS), so its
  * interface is only held to the first three.
+ *
+ * Milestone 18.11: WHERE the addresses come from. A node may carry a real prefix
+ * the provider routes to it (`tunnelIpv6Prefix`). Then an interface that carries
+ * IPv6 and whose profile has a `subnet6` (the profile's word that it wants IPv6)
+ * is given a /64 of the prefix instead, and its clients leave with their own
+ * addresses, no NAT66 (`TunnelIpv6.real`). The /64s go by interface in the fixed
+ * order 1.x, 3.1, plain WireGuard, to the ones that qualify; the ones the prefix
+ * has no /64 left for (a /64 holds one) stay on the profile's private subnet and
+ * NAT66. An agent that does not say `awgNoNat6` (18.10) would NAT a real prefix,
+ * so such a node is not given one at all.
  */
 export type TunnelInterface = 'one' | 'three' | 'wg';
 
-export type TunnelIpv6 = Record<TunnelInterface, boolean>;
+export interface TunnelIpv6 extends Record<TunnelInterface, boolean> {
+  /** 18.11: the /64 of the node's real prefix an interface runs on; absent = the profile's `subnet6`, NAT66. */
+  real?: Partial<Record<TunnelInterface, string>>;
+}
 
 export const NO_TUNNEL_IPV6: TunnelIpv6 = { one: false, three: false, wg: false };
 
@@ -30,6 +44,29 @@ export const NO_TUNNEL_IPV6: TunnelIpv6 = { one: false, three: false, wg: false 
 export interface TunnelIpv6Facts {
   cores: NodeCores | null | undefined;
   ipv6Mode: Ipv6Mode;
+}
+
+/** Whether the agent serves a real prefix with no NAT66 (the `awgNoNat6` fact, 18.11). */
+export function nodeAgentServesRealPrefix(cores: NodeCores | null | undefined): boolean {
+  return (cores?.cores ?? []).some(
+    (c) => c.name === 'amneziawg' && (c.engine === undefined || c.engine === 'amneziawg') && c.awgNoNat6 === true,
+  );
+}
+
+/**
+ * The address plan of one interface, for the three places that use it (the push,
+ * the peers' credentials, the client configs): which `subnet6` the addresses are
+ * derived in, and whether the interface runs without NAT. Undefined when the
+ * interface carries no IPv6 or its profile has no `subnet6`.
+ */
+export function tunnelAddressing(
+  tunnel: TunnelIpv6 | null | undefined,
+  iface: TunnelInterface,
+  profileSubnet6: string | undefined,
+): { subnet6: string; noNat: boolean } | undefined {
+  if (!tunnel?.[iface] || !profileSubnet6) return undefined;
+  const real = tunnel.real?.[iface];
+  return real ? { subnet6: real, noNat: true } : { subnet6: profileSubnet6, noNat: false };
 }
 
 export function nodeAgentCarriesTunnelIpv6({ cores, ipv6Mode }: TunnelIpv6Facts): boolean {
@@ -55,12 +92,49 @@ export function interfaceCarriesIpv6(
  * asked only of a node that passes the facts, so a fleet with no IPv6 agents
  * costs one node read. A node the read does not find: no IPv6.
  */
+const INTERFACE_ORDER: TunnelInterface[] = ['one', 'three', 'wg'];
+
+/**
+ * 18.11: the /64 each interface of a node runs on in its real prefix. The
+ * interfaces are the ones the push serves (the last binding by port of each kind,
+ * as awgBindingsOfNode and wireguardBindingOfNode pick them) that carry IPv6 and
+ * whose profile has a `subnet6`.
+ */
+async function realSubnets(
+  nodeId: string,
+  prefix: string,
+  carries: Record<TunnelInterface, boolean>,
+): Promise<Partial<Record<TunnelInterface, string>>> {
+  const rows = await prisma.profileNodeBinding.findMany({
+    where: { nodeId, enabled: true, profile: { enabled: true, protocol: { in: ['amneziawg', 'wireguard'] } } },
+    orderBy: { port: 'asc' },
+    select: { overrides: true, profile: { select: { protocol: true, awgProtocol: true, config: true } } },
+  });
+  const wants = (r: (typeof rows)[number]) =>
+    !!({ ...((r.profile.config ?? {}) as object), ...((r.overrides ?? {}) as object) } as { subnet6?: string }).subnet6;
+  const last = (pred: (r: (typeof rows)[number]) => boolean) => rows.filter(pred).at(-1);
+  const served: Record<TunnelInterface, (typeof rows)[number] | undefined> = {
+    one: last((r) => r.profile.protocol === 'amneziawg' && r.profile.awgProtocol !== 3),
+    three: last((r) => r.profile.protocol === 'amneziawg' && r.profile.awgProtocol === 3),
+    wg: last((r) => r.profile.protocol === 'wireguard'),
+  };
+  const out: Partial<Record<TunnelInterface, string>> = {};
+  let index = 0;
+  for (const iface of INTERFACE_ORDER) {
+    const row = served[iface];
+    if (!carries[iface] || !row || !wants(row)) continue;
+    const subnet = interfaceSubnet64(prefix, index++);
+    if (subnet) out[iface] = subnet;
+  }
+  return out;
+}
+
 export async function tunnelIpv6OfNodes(nodeIds: string[]): Promise<Map<string, TunnelIpv6>> {
   const out = new Map<string, TunnelIpv6>();
   if (nodeIds.length === 0) return out;
   const rows = await prisma.node.findMany({
     where: { id: { in: [...new Set(nodeIds)] } },
-    select: { id: true, cores: true, ipv6Mode: true },
+    select: { id: true, cores: true, ipv6Mode: true, tunnelIpv6Prefix: true },
   });
   for (const n of rows) {
     const facts: TunnelIpv6Facts = { cores: n.cores as NodeCores | null, ipv6Mode: readIpv6Mode(n.ipv6Mode) };
@@ -69,11 +143,16 @@ export async function tunnelIpv6OfNodes(nodeIds: string[]): Promise<Map<string, 
       continue;
     }
     const inChain = await awgInterfacesInChain(n.id);
-    out.set(n.id, {
+    const carries = {
       one: interfaceCarriesIpv6(facts, 'one', inChain),
       three: interfaceCarriesIpv6(facts, 'three', inChain),
       wg: interfaceCarriesIpv6(facts, 'wg', inChain),
-    });
+    };
+    const real =
+      n.tunnelIpv6Prefix && nodeAgentServesRealPrefix(facts.cores)
+        ? await realSubnets(n.id, n.tunnelIpv6Prefix, carries)
+        : {};
+    out.set(n.id, Object.keys(real).length > 0 ? { ...carries, real } : carries);
   }
   return out;
 }

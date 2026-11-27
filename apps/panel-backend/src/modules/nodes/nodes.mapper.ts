@@ -149,6 +149,8 @@ export interface PublicNodeDto {
   /** 18.6: the operator's IPv6 setting, auto | on | off (IPV6_MODES in shared). A row
    *  the column does not hold reads as auto. */
   ipv6Mode: Ipv6Mode;
+  /** 18.11: the real IPv6 prefix routed to the node for the tunnel, null = none (private subnet, NAT66). */
+  tunnelIpv6Prefix: string | null;
   /**
    * The cores this node reported, and for each one whether it carries out the
    * node-level policy and resolver.
@@ -315,6 +317,7 @@ export function mapNodeToPublic(node: Node): PublicNodeDto {
     dns: (node.dns as DnsCfg | null) ?? null,
     carriedDns: publicCarriedDns(node),
     ipv6Mode: readIpv6Mode(node.ipv6Mode),
+    tunnelIpv6Prefix: node.tunnelIpv6Prefix ?? null,
     cores: (node.cores as NodeCores | null) ?? null,
     coreVersions: readCoreVersions(node.coreVersions),
     ...(engines !== undefined ? { engines } : {}),

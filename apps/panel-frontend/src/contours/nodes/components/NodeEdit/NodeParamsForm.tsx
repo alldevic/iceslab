@@ -1,6 +1,8 @@
 import { Caption } from '@/contours/nodes/components/NodeEdit/Caption';
 import { Box, NumberInput, SegmentedControl, Select, Stack, Switch, Text, TextInput } from '@mantine/core';
 import { readIpv6Mode } from '@iceslab/shared';
+import { tunnelPrefixChanges } from '@/contours/nodes/lib/nodeEditForm';
+import { nodeServesRealPrefix } from '@/lib/domain/tunnelIpv6';
 import { nodeIpv6EgressFact, nodeIpv6Fact, nodeIpv6ModeNote } from '@/contours/nodes/lib/nodeAdapterFacts';
 import { CARD, CYAN, HAIRLINE } from '@/contours/nodes/lib/colors';
 import { COUNTRY_OPTIONS } from '@/lib/domain/countries';
@@ -175,6 +177,7 @@ export function NodeParamsForm({
                   {...form.getInputProps('domain')}
                 />
                 <Ipv6ModeField form={form} node={node} />
+                <TunnelPrefixField form={form} node={node} />
                 {/* The region list did not arrive: said, not an empty picker. */}
                 {regionsFailure && <LoadFailedLine message={regionsFailure.message} onRetry={regionsFailure.onRetry} />}
 
@@ -351,6 +354,41 @@ function Ipv6ModeField({ form, node }: Pick<NodeEditor, 'form' | 'node'>) {
       {note && (
         <Text role="note" style={{ fontSize: 12, lineHeight: '17px', color: AMBER }}>
           {note === 'onNotWorking' ? t('nodeEdit.ipv6Mode.note.onNotWorking') : t('nodeEdit.ipv6Mode.note.agentUnsupported')}
+        </Text>
+      )}
+    </Stack>
+  );
+}
+
+/**
+ * 18.11: the real IPv6 prefix the provider routes to this node. The tunnel's
+ * clients on this node then get addresses from it and leave with them, no NAT66,
+ * only replies coming in. Saving a change restarts the node's tunnel interfaces
+ * and moves every client's IPv6 address, which the line says before the save.
+ */
+function TunnelPrefixField({ form, node }: Pick<NodeEditor, 'form' | 'node'>) {
+  const { t } = useTranslation();
+  const typed = form.values.tunnelIpv6Prefix;
+  const changes = tunnelPrefixChanges(node?.tunnelIpv6Prefix, typed);
+  const agentGap = typed.trim() !== '' && node?.cores != null && !nodeServesRealPrefix(node.cores);
+  return (
+    <Stack gap={6}>
+      <TextInput
+        {...FIELD}
+        label={t('nodeEdit.tunnelPrefix.label')}
+        description={t('nodeEdit.tunnelPrefix.hint')}
+        placeholder="2001:db8:77::/48"
+        data-testid="tunnel-ipv6-prefix"
+        {...form.getInputProps('tunnelIpv6Prefix')}
+      />
+      {agentGap && (
+        <Text role="note" data-testid="tunnel-prefix-agent-note" style={{ fontSize: 12, lineHeight: '17px', color: AMBER }}>
+          {t('nodeEdit.tunnelPrefix.agentOld')}
+        </Text>
+      )}
+      {changes && (
+        <Text role="note" data-testid="tunnel-prefix-restart-warning" style={{ fontSize: 12, lineHeight: '17px', color: AMBER }}>
+          {t('nodeEdit.tunnelPrefix.restart')}
         </Text>
       )}
     </Stack>

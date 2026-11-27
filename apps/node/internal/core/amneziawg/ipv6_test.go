@@ -570,3 +570,138 @@ func TestBadSubnet6IsRefused(t *testing.T) {
 }
 
 var _ core.AwgIpv6Reporter = (*Adapter)(nil)
+
+// Milestone 18.11: a prefix routed to the node. The peers keep their own
+// addresses, so no MASQUERADE for IPv6 and only replies come in.
+
+const test6Real = "2001:db8:77:1::/64"
+
+func TestNoNat6HooksHaveNoIpv6MasqueradeAndLetInOnlyReplies(t *testing.T) {
+	in := validInbound()
+	base := in.withDefaults()
+	in.Address6 = "2001:db8:77:1::1/64"
+	in.NoNAT6 = true
+	cfg := in.withDefaults()
+
+	// The IPv4 part is the base's, untouched, and first.
+	wantLen := len(base.PostUp) + 3
+	if len(cfg.PostUp) != wantLen || len(cfg.PostDown) != len(base.PostDown)+3 {
+		t.Fatalf("hooks: up %v, down %v", cfg.PostUp, cfg.PostDown)
+	}
+	for i := range base.PostUp {
+		if cfg.PostUp[i] != base.PostUp[i] || cfg.PostDown[i] != base.PostDown[i] {
+			t.Errorf("IPv4 hook %d changed: %q / %q", i, cfg.PostUp[i], cfg.PostDown[i])
+		}
+	}
+	up6, down6 := cfg.PostUp[len(base.PostUp):], cfg.PostDown[len(base.PostDown):]
+	wantUp := []string{
+		"ip6tables -I FORWARD 1 -i %i -j ACCEPT",
+		"ip6tables -I FORWARD 2 -o %i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
+		"ip6tables -I FORWARD 3 -o %i -j DROP",
+	}
+	wantDown := []string{
+		"ip6tables -D FORWARD -i %i -j ACCEPT",
+		"ip6tables -D FORWARD -o %i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
+		"ip6tables -D FORWARD -o %i -j DROP",
+	}
+	if strings.Join(up6, "|") != strings.Join(wantUp, "|") || strings.Join(down6, "|") != strings.Join(wantDown, "|") {
+		t.Errorf("up %q\ndown %q", up6, down6)
+	}
+	for _, c := range append(append([]string{}, cfg.PostUp...), cfg.PostDown...) {
+		if strings.Contains(c, "ip6tables") && strings.Contains(c, "MASQUERADE") {
+			t.Errorf("IPv6 MASQUERADE on a real prefix: %q", c)
+		}
+		if err := validatePostHook(c); err != nil {
+			t.Errorf("%q: %v", c, err)
+		}
+	}
+	// PostDown mirrors PostUp: same match, -D for -I n.
+	for i := range up6 {
+		mirrored := strings.NewReplacer("-I FORWARD 1", "-D FORWARD", "-I FORWARD 2", "-D FORWARD", "-I FORWARD 3", "-D FORWARD").Replace(up6[i])
+		if mirrored != down6[i] {
+			t.Errorf("PostDown[%d] %q is not the mirror of %q", i, down6[i], up6[i])
+		}
+	}
+	if _, err := renderConfig(in, nil); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+}
+
+func TestNoNat6WithoutAnIpv6AddressChangesNothing(t *testing.T) {
+	in := validInbound()
+	base := in.withDefaults()
+	in.NoNAT6 = true
+	cfg := in.withDefaults()
+	if strings.Join(cfg.PostUp, "|") != strings.Join(base.PostUp, "|") || strings.Join(cfg.PostDown, "|") != strings.Join(base.PostDown, "|") {
+		t.Errorf("the flag alone changed the hooks: %v / %v", cfg.PostUp, cfg.PostDown)
+	}
+}
+
+func TestClassifyDiffRestartsOnTheNoNatFlag(t *testing.T) {
+	nat := validInbound()
+	nat.Address6 = test6Server
+	real := nat
+	real.NoNAT6 = true
+	if got := classifyDiff(nat, real); got != diffRestart {
+		t.Errorf("NAT66 -> real = %d", got)
+	}
+	if got := classifyDiff(real, nat); got != diffRestart {
+		t.Errorf("real -> NAT66 = %d", got)
+	}
+	if got := classifyDiff(real, real); got != diffNone {
+		t.Errorf("unchanged = %d", got)
+	}
+}
+
+// Switching a node from NAT66 to its real prefix with live peers: one restart,
+// the same peers, the new hooks; and back.
+func TestChangingToARealPrefixWithLivePeersRestartsTheInterfaceAndKeepsThem(t *testing.T) {
+	fake := ip6Host(true)
+	a, cfgPath := managed6Adapter(t, fake)
+	if err := a.ApplyInbound(51820, wire6(t, nil)); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range []core.User{
+		{UserID: "u1", AmneziaWGPublicKey: testWGPubKeyA, AmneziaWGAllowedIP: "10.0.0.2", AmneziaWGAllowedIP6: "fd5a:1c3e:9b2d:1::2"},
+		{UserID: "u2", AmneziaWGPublicKey: testWGPubKeyB, AmneziaWGAllowedIP: "10.0.0.3"},
+	} {
+		if err := a.AddUser(u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	downs, ups := fake.count("awg-quick down"), fake.count("awg-quick up")
+	real := func(m map[string]any) { m["subnet6"] = test6Real; m["noNat6"] = true }
+	if err := a.ApplyInbound(51820, wirePayload(t, real)); err != nil {
+		t.Fatalf("the change to a real prefix was refused: %v", err)
+	}
+	if fake.count("awg-quick down") != downs+1 || fake.count("awg-quick up") != ups+1 {
+		t.Errorf("not one restart: %v", fake.sequence())
+	}
+	blob, _ := os.ReadFile(cfgPath)
+	for _, want := range []string{"Address = 10.0.0.1/24, 2001:db8:77:1::1/64", testWGPubKeyA, testWGPubKeyB, "--ctstate RELATED,ESTABLISHED -j ACCEPT", "-o %i -j DROP"} {
+		if !strings.Contains(string(blob), want) {
+			t.Errorf("config after the restart misses %q:\n%s", want, blob)
+		}
+	}
+	if strings.Contains(string(blob), "ip6tables -t nat -A POSTROUTING") || strings.Contains(string(blob), "fd5a:1c3e:9b2d:1::1") {
+		// (The peer's own old v6 stays until the panel re-sends the users, as in 18.10.)
+		t.Errorf("NAT66 leftovers after the change:\n%s", blob)
+	}
+	// Back to NAT66: restart again, the MASQUERADE is back, the peers stay.
+	if err := a.ApplyInbound(51820, wire6(t, nil)); err != nil {
+		t.Fatal(err)
+	}
+	blob, _ = os.ReadFile(cfgPath)
+	if !strings.Contains(string(blob), "ip6tables -t nat -A POSTROUTING") || strings.Contains(string(blob), "-o %i -j DROP") || !strings.Contains(string(blob), testWGPubKeyB) {
+		t.Errorf("after going back:\n%s", blob)
+	}
+	// The flag without a prefix to carry it is not kept.
+	if err := a.ApplyInbound(51820, wirePayload(t, func(m map[string]any) { m["noNat6"] = true })); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(a.cfg.Inbound.Address6, ":") || a.cfg.Inbound.NoNAT6 {
+		t.Errorf("flag with no subnet6 stuck: %+v", a.cfg.Inbound)
+	}
+}
+
+var _ core.AwgNoNat6Reporter = (*Adapter)(nil)

@@ -84,6 +84,11 @@ type InboundConfig struct {
 	// Empty: no IPv6 on this interface, and the rendered file is the one of
 	// before. Written as the second element of Address.
 	Address6 string `json:",omitempty"`
+	// NoNAT6 (milestone 18.11): Address6 is a prefix routed to the node, not a
+	// private one. The default PostUp then has no IPv6 MASQUERADE and lets in
+	// only replies to the peers. False is the NAT66 of milestone 18.10, and
+	// absent from a state saved before.
+	NoNAT6 bool `json:",omitempty"`
 
 	// Plain renders an upstream-WireGuard interface (milestone 9.1) instead of
 	// an AmneziaWG one: none of the obfuscation lines below is written, since
@@ -213,10 +218,24 @@ func (c *InboundConfig) withDefaults() InboundConfig {
 		// from the peers' private prefix to the node's own address. Only where
 		// the interface has an IPv6 address at all.
 		if peers6 := peerNetwork6(out.Address6); peers6 != "" {
-			out.PostUp = append(out.PostUp,
-				"ip6tables -I FORWARD 1 -i %i -j ACCEPT",
-				"ip6tables -I FORWARD 1 -o %i -j ACCEPT",
-				"ip6tables -t nat -A POSTROUTING -s "+peers6+" ! -o %i -j MASQUERADE")
+			if out.NoNAT6 {
+				// A real prefix (milestone 18.11): the peers are reachable from the
+				// internet, so the base's unconditional `-o %i ACCEPT` would let
+				// anyone open a connection to a client. Peers' traffic goes out as
+				// is, what comes back in is only a reply (conntrack), and a new
+				// connection towards the peers is dropped, even on a host whose
+				// FORWARD policy is ACCEPT. Positions are explicit: the order is
+				// the rule, a later `-I FORWARD 1` would put the DROP on top.
+				out.PostUp = append(out.PostUp,
+					"ip6tables -I FORWARD 1 -i %i -j ACCEPT",
+					"ip6tables -I FORWARD 2 -o %i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
+					"ip6tables -I FORWARD 3 -o %i -j DROP")
+			} else {
+				out.PostUp = append(out.PostUp,
+					"ip6tables -I FORWARD 1 -i %i -j ACCEPT",
+					"ip6tables -I FORWARD 1 -o %i -j ACCEPT",
+					"ip6tables -t nat -A POSTROUTING -s "+peers6+" ! -o %i -j MASQUERADE")
+			}
 		}
 	}
 	if len(out.PostDown) == 0 {
@@ -228,10 +247,17 @@ func (c *InboundConfig) withDefaults() InboundConfig {
 			out.PostDown = append(out.PostDown, "iptables -t nat -D POSTROUTING -s "+peers+" ! -o %i -j MASQUERADE")
 		}
 		if peers6 := peerNetwork6(out.Address6); peers6 != "" {
-			out.PostDown = append(out.PostDown,
-				"ip6tables -D FORWARD -i %i -j ACCEPT",
-				"ip6tables -D FORWARD -o %i -j ACCEPT",
-				"ip6tables -t nat -D POSTROUTING -s "+peers6+" ! -o %i -j MASQUERADE")
+			if out.NoNAT6 {
+				out.PostDown = append(out.PostDown,
+					"ip6tables -D FORWARD -i %i -j ACCEPT",
+					"ip6tables -D FORWARD -o %i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
+					"ip6tables -D FORWARD -o %i -j DROP")
+			} else {
+				out.PostDown = append(out.PostDown,
+					"ip6tables -D FORWARD -i %i -j ACCEPT",
+					"ip6tables -D FORWARD -o %i -j ACCEPT",
+					"ip6tables -t nat -D POSTROUTING -s "+peers6+" ! -o %i -j MASQUERADE")
+			}
 		}
 	}
 	return out

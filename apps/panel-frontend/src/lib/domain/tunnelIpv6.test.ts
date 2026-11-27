@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { NodeCores } from '@iceslab/shared';
-import { tunnelIpv6Gap } from '@/lib/domain/tunnelIpv6';
+import { nodeServesRealPrefix, tunnelIpv6Gap } from '@/lib/domain/tunnelIpv6';
 
 const cores = (over: { global?: boolean; awgIpv6?: boolean | undefined; noIpv6?: boolean } = {}): NodeCores =>
   ({
@@ -31,5 +31,17 @@ describe('tunnelIpv6Gap: a profile with subnet6 on a node that will not carry it
     expect(tunnelIpv6Gap({ protocol: 'amneziawg', config: { subnet6: '' } }, { cores: cores() })).toBeNull();
     expect(tunnelIpv6Gap({ protocol: 'xray', config: awg.config }, { cores: cores() })).toBeNull();
     expect(tunnelIpv6Gap(undefined, { cores: cores() })).toBeNull();
+  });
+});
+
+describe('nodeServesRealPrefix (18.11)', () => {
+  const row = (extra: object): NodeCores =>
+    ({ observedAt: 'x', cores: [{ name: 'amneziawg', engine: 'amneziawg', awgIpv6: true, ...extra }] }) as unknown as NodeCores;
+  it('only an agent that reports awgNoNat6 serves one', () => {
+    expect(nodeServesRealPrefix(row({ awgNoNat6: true }))).toBe(true);
+    expect(nodeServesRealPrefix(row({}))).toBe(false);
+    expect(nodeServesRealPrefix(row({ awgNoNat6: false }))).toBe(false);
+    expect(nodeServesRealPrefix(null)).toBe(false);
+    expect(nodeServesRealPrefix(undefined)).toBe(false);
   });
 });

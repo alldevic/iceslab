@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ipv6ToBigInt, NODE_PREFIX_MAX_LEN, NODE_PREFIX_MIN_LEN, normalizeNodePrefix, parseNodePrefix } from '../amneziawg/tunnel-prefix.js';
 import { CORE_COMPONENTS, ENGINE_NAMES, IPV6_MODES, canonicalNodeAddress } from '@iceslab/shared';
 
 const NameSchema = z
@@ -178,6 +179,33 @@ export const ConsumptionMultiplierSchema = z
  */
 const Ipv6ModeSchema = z.enum(IPV6_MODES);
 
+/**
+ * 18.11: the real IPv6 prefix the provider routes to the node, for the tunnel.
+ * Global unicast (2000::/3), /32../64, host bits zero; stored in the canonical
+ * spelling so two spellings of one prefix cannot get past the overlap check.
+ * `null` takes it off the node (back to the private subnet and NAT66).
+ */
+const TunnelIpv6PrefixSchema = z
+  .string()
+  .trim()
+  .superRefine((v, ctx) => {
+    if (parseNodePrefix(v)) return;
+    const m = /^([0-9a-fA-F:]+)\/(\d{1,3})$/.exec(v);
+    const addr = m ? ipv6ToBigInt(m[1]!) : null;
+    let message = 'must be an IPv6 prefix such as "2001:db8:77::/48"';
+    if (m && addr !== null) {
+      const len = Number(m[2]);
+      if (addr >> 121n === 0x7en) message = 'a ULA prefix (fc00::/7) is private: set it on the profile as subnet6, not here';
+      else if (addr >> 118n === 0x3fan) message = 'a link-local prefix (fe80::/10) is not routable';
+      else if (addr >> 125n !== 1n) message = 'must be a global unicast prefix (2000::/3)';
+      else if (len > NODE_PREFIX_MAX_LEN) message = `must be /${NODE_PREFIX_MAX_LEN} or shorter: an interface needs a /64 of its own`;
+      else if (len < NODE_PREFIX_MIN_LEN) message = `must be /${NODE_PREFIX_MIN_LEN} or longer`;
+      else message = 'has bits set beyond its length: write the network address, e.g. "2001:db8:77::/48"';
+    }
+    ctx.addIssue({ code: 'custom', message });
+  })
+  .transform((v) => normalizeNodePrefix(v)!);
+
 export const CreateNodeSchema = z.object({
   name: NameSchema,
   address: AddressSchema,
@@ -200,6 +228,8 @@ export const CreateNodeSchema = z.object({
   dns: DnsSchema,
   // 18.6: absent = auto.
   ipv6Mode: Ipv6ModeSchema.optional(),
+  // 18.11: absent / null = no real prefix.
+  tunnelIpv6Prefix: TunnelIpv6PrefixSchema.nullish(),
   // Which core versions to install; absent components get the pin.
   coreVersions: CoreVersionsCreateSchema.optional(),
 });
@@ -236,6 +266,9 @@ export const UpdateNodeSchema = z.object({
   dns: DnsSchema,
   // 18.6: absent = untouched. A change re-pushes the node's config.
   ipv6Mode: Ipv6ModeSchema.optional(),
+  // 18.11: absent = untouched, null = take it off. A change re-pushes the node's
+  // tunnel config (the interfaces restart and the clients' IPv6 addresses change).
+  tunnelIpv6Prefix: TunnelIpv6PrefixSchema.nullable().optional(),
   // Absent = untouched; per component: version sets, null puts back on the
   // pin, left out is untouched; null for the whole map = every pin. No
   // .default(): an absent key must reach the service as absent.

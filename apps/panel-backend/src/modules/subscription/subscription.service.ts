@@ -28,8 +28,8 @@ import {
 import { SINGBOX_ENTRY_PROTOCOLS } from '@iceslab/shared';
 import { subscriptionServerName } from '../../lib/util/country-flag.js';
 import { allocatePeer } from '../amneziawg/amneziawg.service.js';
-import { ipv6OfIpv4 } from '../amneziawg/amneziawg.subnet.js';
-import { tunnelIpv6OfNodes, type TunnelIpv6 } from '../amneziawg/awg-ipv6.js';
+import { ipv6OfIpv4InPrefix } from '../amneziawg/amneziawg.subnet.js';
+import { tunnelAddressing, tunnelIpv6OfNodes, type TunnelInterface, type TunnelIpv6 } from '../amneziawg/awg-ipv6.js';
 import { ensureDevices, wgDeviceCount } from '../wg-devices/wg-devices.service.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import {
@@ -1063,8 +1063,13 @@ export async function generateSubscription(
   }
   // The client's second address, `<ipv6>/128`, for a peer on an interface that
   // carries IPv6 in the tunnel: none anywhere else.
-  const peerIpv6 = (nodeId: string, iface: 'one' | 'three' | 'wg', subnet6: string | undefined, ip: string) =>
-    subnet6 && tunnelIpv6.get(nodeId)?.[iface] ? { allowedIp6: `${ipv6OfIpv4(subnet6, ip)}/128` } : {};
+  // 18.11: on a node with a real prefix the address is derived in the /64 of it
+  // that this interface runs on (the one the push told the agent), else in the
+  // profile's subnet6, as in 18.10.
+  const peerIpv6 = (nodeId: string, iface: TunnelInterface, subnet6: string | undefined, ip: string) => {
+    const plan = tunnelAddressing(tunnelIpv6.get(nodeId), iface, subnet6);
+    return plan ? { allowedIp6: `${ipv6OfIpv4InPrefix(plan.subnet6, ip)}/128` } : {};
+  };
 
   const endpoints: SubscriptionEndpoint[] = [];
   for (const b of bindings) {

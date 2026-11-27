@@ -17,7 +17,7 @@ import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { inboundSyncJobs } from '../../lib/infra/metrics.js';
 import { mtprotoBackstop } from '../users/mtproto-backstop.js';
 import { wgCredentialsOf } from '../amneziawg/awg-addresses.js';
-import { tunnelIpv6OfNode, type TunnelIpv6 } from '../amneziawg/awg-ipv6.js';
+import { tunnelAddressing, tunnelIpv6OfNode, type TunnelInterface, type TunnelIpv6 } from '../amneziawg/awg-ipv6.js';
 import { reachOfUsers } from '../users/user-reach.js';
 import { getCascadeFragmentsForNode, getChainForNode, giveCascadeLegsReality } from '../cascades/cascade.service.js';
 import { resolvePolicyForNode } from '../node-policies/node-policies.service.js';
@@ -246,9 +246,17 @@ export async function cascadeXrayDrawingForNode(nodeId: string): Promise<Cascade
  * it is taken out, so the request is byte for byte what it was before the
  * field existed, and an agent that does not know the key never sees it.
  */
-function withTunnelSubnet6(config: unknown, carries: boolean): Record<string, unknown> {
+function withTunnelSubnet6(
+  config: unknown,
+  tunnel: TunnelIpv6 | null,
+  iface: TunnelInterface,
+): Record<string, unknown> {
   const { subnet6, ...rest } = config as Record<string, unknown>;
-  return carries && subnet6 ? { ...rest, subnet6 } : rest;
+  // 18.11: on a node with a real prefix the interface is told its /64 of it, and
+  // that it needs no NAT; any other interface keeps the profile's, as in 18.10.
+  const plan = tunnelAddressing(tunnel, iface, subnet6 as string | undefined);
+  if (!plan) return rest;
+  return { ...rest, subnet6: plan.subnet6, ...(plan.noNat ? { noNat6: true } : {}) };
 }
 
 export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]> {
@@ -333,14 +341,14 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
     // geometry (it has no obfuscation to hand over).
     if (b.profile.protocol === 'wireguard') {
       config = {
-        ...(withTunnelSubnet6(config, tunnelIpv6?.wg === true)),
+        ...withTunnelSubnet6(config, tunnelIpv6, 'wg'),
         listenPort: b.port,
         inboundId: b.id,
       } as InboundDto['config'];
     }
     if (b.profile.protocol === 'amneziawg') {
       config = {
-        ...(withTunnelSubnet6(config, (b.profile.awgProtocol === 3 ? tunnelIpv6?.three : tunnelIpv6?.one) === true)),
+        ...withTunnelSubnet6(config, tunnelIpv6, b.profile.awgProtocol === 3 ? 'three' : 'one'),
         listenPort: b.port,
         // t07-6: which binding, so the agent can take down the interface of
         // one the push stops carrying; and, for a 3.1 profile, the generation

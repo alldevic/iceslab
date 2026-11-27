@@ -663,6 +663,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 				if g, ok := adapter.(core.AwgIpv6Reporter); ok {
 					cs.AwgIpv6 = g.AwgIpv6()
 				}
+				if g, ok := adapter.(core.AwgNoNat6Reporter); ok {
+					cs.AwgNoNat6 = g.AwgNoNat6()
+				}
 			}
 			// The certificate this core serves (E30a), for the panel's "Cores"
 			// beside the certificate it minted. Absent = unknown.

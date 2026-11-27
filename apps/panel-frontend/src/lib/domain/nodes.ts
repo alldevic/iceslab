@@ -134,6 +134,8 @@ export interface Node {
   carriedDns?: CarriedDnsSource[];
   /** 18.6: the operator's IPv6 setting, auto | on | off. Absent = a server older than the field (reads as auto). */
   ipv6Mode?: Ipv6Mode;
+  /** 18.11: the real IPv6 prefix routed to the node for the tunnel, null = none. Absent = a server older than the field. */
+  tunnelIpv6Prefix?: string | null;
   /**
    * Поколение AmneziaWG, которое говорит модуль ядра на этой ноде (227054e):
    * ФАКТ из отчёта, не выбор, в PUT не уходит. См. `lib/domain/awg.ts`.
@@ -419,6 +421,8 @@ export interface UpdateNodeInput {
   dns?: DnsCfg | null;
   /** 18.6: absent = untouched; a change re-pushes the node. */
   ipv6Mode?: Ipv6Mode;
+  /** 18.11: absent = untouched, null = take it off; a change re-pushes the node, the tunnel restarts and the clients' IPv6 addresses change. */
+  tunnelIpv6Prefix?: string | null;
   /**
    * Три значения на компонент: версия пишется, null возвращает на пин,
    * пропущенный компонент не трогается; null на всё = все пины. Отказ 400

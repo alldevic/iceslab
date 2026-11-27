@@ -844,6 +844,10 @@ type CoreStatus struct {
 	// (milestone 18.9 names the fact, 18.10 sets it: ip6tables with a nat table on the host). Only the amneziawg core.
 	// Absent is no, and the panel sends the tunnel no IPv6 then.
 	AwgIpv6 bool `json:"awgIpv6,omitempty"`
+	// AwgNoNat6: this agent reads the `noNat6` flag of an AmneziaWG push (milestone
+	// 18.11), so a prefix routed to the node gets no NAT66. Absent for an agent of
+	// 18.10, which the panel keeps on NAT66 for such a node.
+	AwgNoNat6 bool `json:"awgNoNat6,omitempty"`
 	// Provisioned tells "this core has a config and should be running" apart
 	// from "nobody has configured this core yet". The installer registers an
 	// adapter for every protocol the operator might switch on later, so an

@@ -192,6 +192,12 @@ model Node {
   // is every node until someone chooses and goes on the wire as no field at all.
   ipv6Mode String @default("auto") @map("ipv6_mode") @db.VarChar(8)
 
+  // 18.11: the real IPv6 prefix the provider routes to this node ("2001:db8:77::/48",
+  // /32../64, global unicast, canonical spelling), which the WireGuard-family tunnel
+  // hands out to its clients in place of a profile's private subnet6 and NAT66.
+  // NULL = no real prefix: the tunnel's IPv6 is the private subnet and NAT66, as in 18.10.
+  tunnelIpv6Prefix String? @map("tunnel_ipv6_prefix") @db.VarChar(43)
+
   // B3 / G (2026-06-14) - self-steal domain + node hardening.
   // domain: FQDN the operator A-records to THIS node's IP. Used as the REALITY
   //   serverName for self-steal profiles deployed here (SNI resolves to the node

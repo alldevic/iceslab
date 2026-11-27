@@ -428,7 +428,7 @@ export const AmneziawgConfigSchema = z
   });
 
 /** The keys the push adds to a stored AmneziaWG config (inbounds.queue.ts). */
-export const AWG_PUSH_INJECTED_KEYS = ['listenPort', 'inboundId', 'awgProtocol', 'geometry3'] as const;
+export const AWG_PUSH_INJECTED_KEYS = ['listenPort', 'inboundId', 'awgProtocol', 'geometry3', 'noNat6'] as const;
 
 // A-105: the wire type is the stored config plus what the push injects. A
 // field renamed, added or dropped on either side fails `typecheck` here; a
@@ -463,7 +463,7 @@ export const WireguardConfigSchema = z.object({
 });
 
 /** The keys the push adds to a stored plain WireGuard config. */
-export const WIREGUARD_PUSH_INJECTED_KEYS = ['listenPort', 'inboundId'] as const;
+export const WIREGUARD_PUSH_INJECTED_KEYS = ['listenPort', 'inboundId', 'noNat6'] as const;
 const wireguardWireIsStored: Same<
   Omit<WireguardInboundCfg, (typeof WIREGUARD_PUSH_INJECTED_KEYS)[number]>,
   z.output<typeof WireguardConfigSchema>

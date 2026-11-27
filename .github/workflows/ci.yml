@@ -115,6 +115,7 @@ jobs:
               - 'apps/panel-backend/src/modules/srr/linear-regex.ts'
               - 'apps/panel-backend/src/modules/cascades/policy-entries.ts'
               - 'apps/panel-backend/src/modules/geo-sets/geo-names.ts'
+              - 'apps/panel-backend/src/modules/amneziawg/tunnel-prefix.ts'
               - 'apps/panel-backend/src/lib/util/uuid-schema.ts'
               - 'apps/panel-backend/src/lib/util/header-url.ts'
             node:

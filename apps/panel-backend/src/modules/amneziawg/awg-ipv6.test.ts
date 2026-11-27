@@ -13,7 +13,8 @@ import { applyInboundsForNode, fetchEnabledInbounds } from '../inbounds/inbounds
 import { syncAddUser } from '../users/users.queue.js';
 import { awgInterfacesInChain } from '../cascades/cascade.service.js';
 import { interfaceCarriesIpv6, NO_TUNNEL_IPV6, nodeAgentCarriesTunnelIpv6, tunnelIpv6OfNode } from './awg-ipv6.js';
-import { ipv4OfIpv6, ipv6OfIpv4 } from './amneziawg.subnet.js';
+import { ipv4OfIpv6, ipv6OfIpv4, ipv6OfIpv4InPrefix } from './amneziawg.subnet.js';
+import { nodeAgentServesRealPrefix, tunnelAddressing } from './awg-ipv6.js';
 
 /**
  * 18.9: where the tunnel carries IPv6. The table of the one function, then the
@@ -388,5 +389,170 @@ describe('an interface given to a cascade chain (until 18.12)', () => {
 
   it('an unknown node is no IPv6', async () => {
     await expect(tunnelIpv6OfNode('00000000-0000-0000-0000-000000000000')).resolves.toEqual(NO_TUNNEL_IPV6);
+  });
+});
+
+/**
+ * 18.11: a node with a real prefix. The interfaces that carry IPv6 are given a
+ * /64 of it in the order 1.x, 3.1, plain WireGuard; the push says `noNat6`; the
+ * peers and the client configs are derived in that /64. A node without the prefix,
+ * or whose agent does not say `awgNoNat6`, is the node of 18.10.
+ */
+describe('a node with a real prefix', () => {
+  const PREFIX = '2001:db8:77::/48';
+  const real = (i: number) => `2001:db8:77:${i}::/64`;
+  const wgRow = { name: 'wireguard', engine: 'wireguard', running: true, installed: true } as CoreStatus;
+  const withPrefix = async (n: string, prefix: string | null, over: Partial<CoreStatus> = { awgNoNat6: true }) => {
+    await setCores(n, [awgRow(over), wgRow], ipv6Facts());
+    await prisma.node.update({ where: { id: n }, data: { tunnelIpv6Prefix: prefix } });
+  };
+
+  it('tunnelAddressing: the real /64 and no NAT where the node has one, the profile\'s and NAT66 elsewhere, nothing without IPv6', () => {
+    const t = { one: true, three: true, wg: false, real: { one: real(0) } };
+    expect(tunnelAddressing(t, 'one', S6_1)).toEqual({ subnet6: real(0), noNat: true });
+    expect(tunnelAddressing(t, 'three', S6_3)).toEqual({ subnet6: S6_3, noNat: false });
+    expect(tunnelAddressing(t, 'wg', S6_W)).toBeUndefined();
+    expect(tunnelAddressing(t, 'one', undefined)).toBeUndefined();
+    expect(tunnelAddressing(null, 'one', S6_1)).toBeUndefined();
+  });
+
+  it('the fact: only an agent that says awgNoNat6 serves one', () => {
+    expect(nodeAgentServesRealPrefix(coresOf([awgRow({ awgNoNat6: true })], ipv6Facts()))).toBe(true);
+    expect(nodeAgentServesRealPrefix(coresOf([awgRow()], ipv6Facts()))).toBe(false);
+    expect(nodeAgentServesRealPrefix(coresOf([awgRow({ awgNoNat6: false })], ipv6Facts()))).toBe(false);
+    expect(nodeAgentServesRealPrefix(null)).toBe(false);
+  });
+
+  it('a /48 gives each interface a /64 of its own, in order; the push has noNat6 on each', async () => {
+    const { n } = await tunnelNode();
+    await withPrefix(n, PREFIX);
+    await expect(tunnelIpv6OfNode(n)).resolves.toEqual({
+      one: true,
+      three: true,
+      wg: true,
+      real: { one: real(0), three: real(1), wg: real(2) },
+    });
+    const inbounds = await fetchEnabledInbounds(n);
+    for (const [port, i] of [[51820, 0], [51830, 1], [51840, 2]] as const) {
+      const c = cfgAt(inbounds, port);
+      expect(c.subnet6, String(port)).toBe(real(i));
+      expect(c.noNat6, String(port)).toBe(true);
+      // The IPv4 half and the injected keys are as they were.
+      expect(c.listenPort).toBe(port);
+    }
+    expect(cfgAt(inbounds, 51820).subnet).toBe('10.66.66.0/24');
+  });
+
+  it('a prefix that is exactly /64 goes to the first interface only; the others stay on NAT66', async () => {
+    const { n } = await tunnelNode();
+    await withPrefix(n, real(5));
+    const inbounds = await fetchEnabledInbounds(n);
+    expect(cfgAt(inbounds, 51820)).toMatchObject({ subnet6: real(5), noNat6: true });
+    expect(cfgAt(inbounds, 51830).subnet6).toBe(S6_3);
+    expect(cfgAt(inbounds, 51830).noNat6).toBeUndefined();
+    expect(cfgAt(inbounds, 51840).subnet6).toBe(S6_W);
+    expect(cfgAt(inbounds, 51840).noNat6).toBeUndefined();
+  });
+
+  it('an interface whose profile has no subnet6 does not use up a /64', async () => {
+    const n = await makeNode();
+    const one = await profile('amneziawg', awgCfg('10.66.66.0/24'));
+    const plain = await profile('wireguard', wgCfg('10.77.77.0/24', S6_W));
+    await host(one, n, 51820);
+    await host(plain, n, 51840);
+    await withPrefix(n, real(5));
+    const inbounds = await fetchEnabledInbounds(n);
+    expect(cfgAt(inbounds, 51820).subnet6).toBeUndefined();
+    expect(cfgAt(inbounds, 51840)).toMatchObject({ subnet6: real(5), noNat6: true });
+  });
+
+  it('an agent without awgNoNat6 (18.10), mode off or no prefix: the request of 18.10, byte for byte', async () => {
+    const { n } = await tunnelNode();
+    const base = JSON.stringify(await fetchEnabledInbounds(n));
+    expect(base).not.toContain('noNat6');
+    await withPrefix(n, PREFIX, {}); // the agent does not say awgNoNat6
+    expect(JSON.stringify(await fetchEnabledInbounds(n))).toBe(base);
+    await withPrefix(n, null); // the agent does, there is no prefix
+    expect(JSON.stringify(await fetchEnabledInbounds(n))).toBe(base);
+    await withPrefix(n, PREFIX);
+    expect(JSON.stringify(await fetchEnabledInbounds(n))).not.toBe(base);
+    await prisma.node.update({ where: { id: n }, data: { ipv6Mode: 'off' } });
+    expect(JSON.stringify(await fetchEnabledInbounds(n))).not.toContain('2001:db8');
+  });
+
+  it('a profile without subnet6 on a node with a prefix is the old request', async () => {
+    const { n } = await tunnelNode({ v6: false });
+    await withPrefix(n, PREFIX);
+    expect(JSON.stringify(await fetchEnabledInbounds(n))).not.toMatch(/subnet6|noNat6/);
+  });
+
+  it('the peers are derived in the node\'s /64, one-to-one with their IPv4; the rolled-out user is the same', async () => {
+    const { n, sq } = await tunnelNode();
+    await withPrefix(n, PREFIX);
+    const a = await user('v6_real', [sq.id]);
+    const pushed = capture();
+    await applyInboundsForNode(n);
+    const peers = pushed.added.find((r) => r.userId === a)!.credentials.amneziawgPeers!;
+    const p = peers[0]!;
+    expect(p.allowedIp6).toBe(ipv6OfIpv4InPrefix(real(0), p.allowedIp!));
+    expect(p.allowedIp3v6).toBe(ipv6OfIpv4InPrefix(real(1), p.allowedIp3!));
+    expect(p.wireguardAllowedIp6).toBe(ipv6OfIpv4InPrefix(real(2), p.wireguardAllowedIp!));
+    expect(p.allowedIp6!.startsWith('2001:db8:77:0:')).toBe(true);
+    expect(ipv4OfIpv6(S6_1, ipv6OfIpv4(S6_1, p.allowedIp!))).toBe(p.allowedIp);
+    vi.restoreAllMocks();
+    vi.spyOn(NodeTransport.prototype, 'listAssets').mockRejectedValue(new NodeRequestError('404', 404, null));
+    const rolled = capture();
+    await syncAddUser(a);
+    expect(rolled.added.find((r) => r.userId === a)!.credentials.amneziawgPeers).toEqual(peers);
+  });
+
+  it('one profile on two nodes, one with a prefix and one without: the client gets the prefix address for the first and the profile\'s for the second', async () => {
+    const withReal = await makeNode('real');
+    const without = await makeNode('nat');
+    const prof = await profile('amneziawg', awgCfg('10.66.66.0/24', S6_1));
+    await host(prof, withReal, 51820);
+    await host(prof, without, 51820);
+    await setCores(without, [awgRow({ awgNoNat6: true }), wgRow], ipv6Facts());
+    await withPrefix(withReal, PREFIX);
+    const sq = await post('/api/squads', { name: `v6-sq-${++seq}`, profileIds: [prof] });
+    const a = await user('v6_two', [sq.id]);
+    const t = (await prisma.user.findUniqueOrThrow({ where: { id: a }, select: { subscriptionToken: true } })).subscriptionToken;
+    const nodeName = async (id: string) => (await prisma.node.findUniqueOrThrow({ where: { id } })).name;
+    const conf = async (id: string) => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/sub/${t}?format=wgconf&node=${encodeURIComponent(await nodeName(id))}`,
+        remoteAddress: `10.79.3.${++seq}`,
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      return /^Address = (.+)$/m.exec(res.body)![1]!;
+    };
+    const first = await conf(withReal);
+    const second = await conf(without);
+    const [v4, v6] = first.split(', ');
+    expect(v6).toBe(`${ipv6OfIpv4InPrefix(real(0), v4!.replace('/32', ''))}/128`);
+    expect(v6!.startsWith('2001:db8:77:0:')).toBe(true);
+    const [v4b, v6b] = second.split(', ');
+    expect(v4b).toBe(v4);
+    expect(v6b).toBe(`${ipv6OfIpv4(S6_1, v4b!.replace('/32', ''))}/128`);
+    expect(v6b!.startsWith('fd12:')).toBe(true);
+  });
+
+  it('changing the prefix changes every pushed address and nothing of the IPv4 half', async () => {
+    const { n, sq } = await tunnelNode();
+    const a = await user('v6_move', [sq.id]);
+    await withPrefix(n, PREFIX);
+    const first = capture();
+    await applyInboundsForNode(n);
+    const before = first.added.find((r) => r.userId === a)!.credentials.amneziawgPeers![0]!;
+    await prisma.node.update({ where: { id: n }, data: { tunnelIpv6Prefix: '2001:db8:88::/48' } });
+    vi.restoreAllMocks();
+    vi.spyOn(NodeTransport.prototype, 'listAssets').mockRejectedValue(new NodeRequestError('404', 404, null));
+    const second = capture();
+    await applyInboundsForNode(n);
+    const after = second.added.find((r) => r.userId === a)!.credentials.amneziawgPeers![0]!;
+    expect(after.allowedIp).toBe(before.allowedIp);
+    expect(after.allowedIp6).toBe(ipv6OfIpv4InPrefix('2001:db8:88:0::/64', before.allowedIp!));
+    expect(after.allowedIp6).not.toBe(before.allowedIp6);
   });
 });

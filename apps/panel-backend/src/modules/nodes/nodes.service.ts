@@ -29,7 +29,7 @@ import type {
 } from './nodes.schemas.js';
 import { resolveCoreVersions, type EngineName } from '@iceslab/shared';
 import { applyCoreVersionsPatch, readCoreVersions } from './node-core-versions.js';
-import { hostsByEngine, withNeededBy } from './node-core-gate.js';
+import { assertTunnelPrefixFree, hostsByEngine, withNeededBy } from './node-core-gate.js';
 import { cascadeNeedsByNode, type CascadeEngineNeed } from './node-cascade-needs.js';
 import { engineSet, resolveNodeEngines } from './node-intended-engines.js';
 import { acmeHostnameFor } from '../inbounds/acme-hostname.js';
@@ -139,6 +139,8 @@ export async function createNode(
   // The set of cores, the label derived from it and the sing-box flag, in step.
   const engines = resolveNodeEngines(input);
 
+  if (input.tunnelIpv6Prefix) await assertTunnelPrefixFree(null, input.tunnelIpv6Prefix);
+
   let node;
   try {
     node = await repo.create({
@@ -159,6 +161,7 @@ export async function createNode(
       // Э3 F: the resolver this node's users get. Same jsonb-write pattern.
       dns: (input.dns as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
       ipv6Mode: input.ipv6Mode ?? 'auto',
+      tunnelIpv6Prefix: input.tunnelIpv6Prefix ?? null,
       // Engine-choice: "singbox is in intendedEngines", kept as its own column.
       singboxEngine: engines.singboxEngine,
       // Which core versions to install; '{}' (every pin) when none were chosen.
@@ -547,6 +550,14 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
   }
   // 18.6: the IPv6 setting. A change goes to the agent (below).
   if (input.ipv6Mode !== undefined) data.ipv6Mode = input.ipv6Mode;
+  // 18.11: the real prefix of the tunnel. Another node's or a profile's range is
+  // refused before the write; a change goes to the agent (below).
+  const tunnelPrefixChanged =
+    input.tunnelIpv6Prefix !== undefined && input.tunnelIpv6Prefix !== (existing.tunnelIpv6Prefix ?? null);
+  if (tunnelPrefixChanged) {
+    if (input.tunnelIpv6Prefix) await assertTunnelPrefixFree(id, input.tunnelIpv6Prefix);
+    data.tunnelIpv6Prefix = input.tunnelIpv6Prefix ?? null;
+  }
   // Э3: attaching or detaching the node-level policy. Checked BEFORE the write,
   // so a policy this node cannot carry out (a WARP rule with no WARP here, a
   // cascade direction this node does not dial) is refused on the screen where
@@ -617,7 +628,7 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
     throw nodeClashOf(err, input) ?? err;
   }
 
-  if (domainChanged || addressChanged || dnsChanged || ipv6ModeChanged) {
+  if (domainChanged || addressChanged || dnsChanged || ipv6ModeChanged || tunnelPrefixChanged) {
     eventBus.emit('node.updated', { nodeId: id, nodeName: updated.name });
   }
   if (policyChanged) {

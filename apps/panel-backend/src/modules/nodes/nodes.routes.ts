@@ -10,6 +10,7 @@ import {
   NodeIdParamSchema,
 } from './nodes.schemas.js';
 import * as nodesService from './nodes.service.js';
+import { coreGateReply } from './node-core-gate.js';
 import { checkNodePortExposure } from './nodes.exposure.js';
 import { getNodeSyncStatus } from './nodes.sync-status.js';
 import { portClaimsOnNode } from './node-ports.js';
@@ -101,6 +102,8 @@ export async function nodesRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(409).send({ error: 'CONFLICT', message: err.message });
       }
       // intendedEngines, protocol and singboxEngine that contradict each other.
+      const gate = coreGateReply(err);
+      if (gate) return reply.code(gate.status).send(gate.body);
       if (err instanceof nodesService.NodeEnginesError) {
         return reply.code(400).send({ error: err.code, message: err.message, path: [err.path] });
       }
@@ -427,6 +430,9 @@ export async function nodesRoutes(app: FastifyInstance): Promise<void> {
       if (err instanceof nodesService.NodeAlreadyExistsError) {
         return reply.code(409).send({ error: 'CONFLICT', message: err.message });
       }
+      // 18.11: the tunnel prefix overlaps another node's or a profile's.
+      const gate = coreGateReply(err);
+      if (gate) return reply.code(gate.status).send(gate.body);
       // Э3: the policy the operator just chose cannot be carried out here (a
       // WARP rule with no WARP on this node, a cascade direction it does not
       // dial). 409, and the message names the node and the reason: the core

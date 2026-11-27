@@ -1064,6 +1064,10 @@ export interface AmneziawgInboundCfg {
    *  otherwise, so the request stays byte for byte what it was); the server
    *  takes the address derived from its IPv4 one. */
   subnet6?: string;
+  /** Milestone 18.11: `subnet6` is a real prefix routed to this node (the
+   *  node's `tunnelIpv6Prefix`, one /64 of it): no NAT66, and only replies come
+   *  in. Sent only with such a `subnet6`; absent is the NAT66 of 18.10. */
+  noNat6?: boolean;
   /** Server WG private key (base64-standard, like `wg genkey`). */
   serverPrivateKey: string;
   /** Its public half. The agent ignores it; clients get it in their config. */
@@ -1096,6 +1100,8 @@ export interface WireguardInboundCfg {
   subnet: string;
   /** Milestone 18.9, as for AmneziaWG. */
   subnet6?: string;
+  /** Milestone 18.11, as for AmneziaWG. */
+  noNat6?: boolean;
   /** Server WG private key (base64-standard, like `wg genkey`). */
   serverPrivateKey: string;
   /** Its public half; clients get it in their config. */
@@ -2109,6 +2115,14 @@ export interface CoreStatus {
    * the tunnel of a node that does not say so.
    */
   awgIpv6?: boolean;
+  /**
+   * Milestone 18.11: this agent reads the `noNat6` flag of a tunnel push, so a
+   * prefix routed to the node can be served with no NAT66. Reported with
+   * `awgIpv6`. ⚠ Absent is "no": an agent of 18.10 knows IPv6 in the tunnel but
+   * would put MASQUERADE on a real prefix, and the panel keeps such a node on the
+   * private subnet and NAT66.
+   */
+  awgNoNat6?: boolean;
   /** Whether this core is CONFIGURED, i.e. has an inbound and is expected to
    *  run. The installer registers an adapter for every protocol the operator
    *  might switch on later, and an unconfigured one sits idle by design.
@@ -2441,6 +2455,8 @@ export interface NodeCoreInfo {
   awgGenerations?: AwgProtocol[];
   /** See CoreStatus.awgIpv6. Inventory: it changes with the agent. */
   awgIpv6?: boolean;
+  /** See CoreStatus.awgNoNat6. Inventory: it changes with the agent. */
+  awgNoNat6?: boolean;
   provisioned?: boolean;
   /** See CoreStatus.reason. Inventory: it changes with a push, not a tick. */
   reason?: string;

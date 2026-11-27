@@ -20,7 +20,11 @@ type inboundCfgWire struct {
 	// Subnet6 is the interface's IPv6 prefix, a ULA /64 (milestone 18.9). The
 	// panel sends it only for a tunnel that carries IPv6; the agent brings it
 	// up when the host can NAT IPv6 (milestone 18.10), and ignores it where not.
-	Subnet6          string         `json:"subnet6,omitempty"`
+	Subnet6 string `json:"subnet6,omitempty"`
+	// NoNat6 (milestone 18.11): Subnet6 is a real prefix routed to this node, so
+	// its clients leave with their own addresses: no MASQUERADE for it, and only
+	// replies come back in. Absent is the NAT66 of milestone 18.10.
+	NoNat6           bool           `json:"noNat6,omitempty"`
 	ServerPrivateKey string         `json:"serverPrivateKey"`
 	ServerPublicKey  string         `json:"serverPublicKey"` // unused on agent
 	Obfuscation      obfuscationCfg `json:"obfuscation"`
@@ -193,6 +197,7 @@ func (w inboundCfgWire) toInboundConfig(iface string, listenPort int) (InboundCo
 		PrivateKey: w.ServerPrivateKey,
 		Address:    addr,
 		Address6:   addr6,
+		NoNAT6:     w.NoNat6 && addr6 != "",
 		Jc:         w.Obfuscation.Jc,
 		Jmin:       w.Obfuscation.Jmin,
 		Jmax:       w.Obfuscation.Jmax,
@@ -296,6 +301,7 @@ func classifyDiff(old, new InboundConfig) diffKind {
 	// comes up again with the same peers (milestone 18.10).
 	if old.PrivateKey != new.PrivateKey ||
 		old.Address6 != new.Address6 ||
+		old.NoNAT6 != new.NoNAT6 ||
 		old.ListenPort != new.ListenPort ||
 		old.Interface != new.Interface ||
 		old.H1 != new.H1 || old.H2 != new.H2 || old.H3 != new.H3 || old.H4 != new.H4 ||

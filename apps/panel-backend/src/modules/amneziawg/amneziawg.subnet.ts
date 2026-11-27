@@ -101,8 +101,19 @@ export function generateSubnet6(random: (n: number) => Uint8Array = randomBytes)
  * ULA /64. Works for any IPv4 subnet width, since all 32 bits go in.
  */
 export function ipv6OfIpv4(subnet6: string, ipv4: string): string {
-  const prefix = parseSubnet6(subnet6);
-  if (!prefix) throw new Error(`Invalid IPv6 subnet: ${subnet6}`);
+  if (!parseSubnet6(subnet6)) throw new Error(`Invalid IPv6 subnet: ${subnet6}`);
+  return ipv6OfIpv4InPrefix(subnet6, ipv4);
+}
+
+/**
+ * The same derivation in any /64 written as four groups: a ULA one of a profile
+ * or a real one of a node (milestone 18.11, interfaceSubnet64). Callers pass the
+ * effective prefix (awg-ipv6.ts tunnelAddressing); a profile's own `subnet6` is
+ * held to a ULA by the schema.
+ */
+export function ipv6OfIpv4InPrefix(prefix64: string, ipv4: string): string {
+  const prefix = /^((?:[0-9a-f]{1,4}:){3}[0-9a-f]{1,4})::\/64$/i.exec(prefix64)?.[1]?.split(':').map((g) => parseInt(g, 16));
+  if (!prefix) throw new Error(`Invalid IPv6 /64: ${prefix64}`);
   const n = ipToInt(ipv4);
   const hex = (x: number) => x.toString(16);
   const hi = n >>> 16;

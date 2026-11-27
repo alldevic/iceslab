@@ -2,8 +2,8 @@ import { prisma } from '../../prisma.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import type { AmneziawgPeerCred } from '@iceslab/shared';
 import { allocatePeer, DEFAULT_SUBNET, preallocatePeers, type PeerDevice } from './amneziawg.service.js';
-import { ipv6OfIpv4 } from './amneziawg.subnet.js';
-import { NO_TUNNEL_IPV6, type TunnelIpv6 } from './awg-ipv6.js';
+import { ipv6OfIpv4InPrefix } from './amneziawg.subnet.js';
+import { NO_TUNNEL_IPV6, tunnelAddressing, type TunnelInterface, type TunnelIpv6 } from './awg-ipv6.js';
 import { ensureDevicesForUsers, type WgDeviceRow } from '../wg-devices/wg-devices.service.js';
 
 /**
@@ -134,8 +134,8 @@ export interface WgCredentials {
  *
  * `ipv6` (18.9, tunnelIpv6OfNode of the node): the interfaces that carry IPv6 in
  * the tunnel. A peer on such an interface whose profile has a `subnet6` also
- * gets its IPv6, derived from its IPv4 address; any other peer is as before,
- * byte for byte.
+ * gets its IPv6, derived from its IPv4 address (in the node's real /64 for an
+ * interface that has one, 18.11); any other peer is as before, byte for byte.
  *
  * The push and the rollout of one user both read this, so the peer set a node
  * holds for a user is the same whichever of them wrote it last. `issuedTo` are
@@ -166,11 +166,13 @@ export async function wgCredentialsOf(
       const a3 = three && u.reachesThree ? ip3.get(d.id) : undefined;
       const aw = wg && u.reachesWg ? ipWg.get(d.id) : undefined;
       if (!a1 && !a3 && !aw) continue;
-      const v6 = (addr: string | undefined, on: boolean, p: { subnet6?: string } | null) =>
-        addr && on && p?.subnet6 ? ipv6OfIpv4(p.subnet6, addr) : undefined;
-      const a16 = v6(a1, ipv6.one, one);
-      const a36 = v6(a3, ipv6.three, three);
-      const aw6 = v6(aw, ipv6.wg, wg);
+      const v6 = (addr: string | undefined, iface: TunnelInterface, p: { subnet6?: string } | null) => {
+        const plan = addr ? tunnelAddressing(ipv6, iface, p?.subnet6) : undefined;
+        return addr && plan ? ipv6OfIpv4InPrefix(plan.subnet6, addr) : undefined;
+      };
+      const a16 = v6(a1, 'one', one);
+      const a36 = v6(a3, 'three', three);
+      const aw6 = v6(aw, 'wg', wg);
       // The device's one preshared key, on each interface whose profile asks
       // for it and the device has an address on. Never an empty string: the
       // agent renders no line for an absent key, and `PresharedKey = ` for ''.

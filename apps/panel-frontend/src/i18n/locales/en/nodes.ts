@@ -351,6 +351,14 @@ export const nodes = {
         agentUnsupported: 'The agent does not support the mode: it reports no IPv6 block, so the setting changes nothing on this node.',
       },
     },
+    // 18.11: the real IPv6 prefix of the tunnel.
+    tunnelPrefix: {
+      label: 'IPv6 prefix for the tunnel',
+      hint: 'A prefix your provider routes to this node, from /32 to /64 (for example 2001:db8:77::/48): the WireGuard and AmneziaWG clients of this node get addresses from it and go out with them, with no NAT66. Only a prefix routed to the node is supported; addresses from the same /64 as the node\'s own interface would need an NDP proxy, which is not done. One /64 per tunnel interface: a /64 prefix serves the first interface only, the others stay on the profile\'s private subnet. Incoming connections to the clients are dropped, only replies to their own traffic come back. Empty: the profile\'s private subnet and NAT66.',
+      bad: 'A global IPv6 network from /32 to /64, written as its network address, e.g. 2001:db8:77::/48',
+      agentOld: 'The agent on this node does not know prefixes without NAT (it reports no such fact): the node stays on the private subnet and NAT66 until the agent is updated.',
+      restart: 'Saving restarts the node\'s tunnel interfaces (the clients drop for a moment) and changes every client\'s IPv6 address: configs imported by hand lose IPv6 until they are downloaded again. IPv4 is not affected.',
+    },
     coresRendersPolicy: 'applies the policy',
     coresNoDns: 'no node DNS',
     coresNoDnsHint: 'This core does not execute the node DNS: the setting does not reach its clients.',

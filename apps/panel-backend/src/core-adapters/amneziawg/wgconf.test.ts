@@ -107,6 +107,11 @@ describe('buildAmneziawgClientConfig second address (18.9)', () => {
     expect(out.match(/^Address = /gm)).toHaveLength(1);
   });
 
+  it('a global address of a node prefix (18.11) is written the same way', () => {
+    const out = buildAmneziawgClientConfig({ ...baseOpts, allowedIp6: '2001:db8:77:1:0:0:a00:2a/128' });
+    expect(out).toContain('Address = 10.0.0.42/32, 2001:db8:77:1:0:0:a00:2a/128\n');
+  });
+
   it('without allowedIp6 the Address line is what it always was', () => {
     expect(buildAmneziawgClientConfig(baseOpts)).toContain('Address = 10.0.0.42/32\n');
   });

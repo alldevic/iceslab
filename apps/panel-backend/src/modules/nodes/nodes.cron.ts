@@ -519,6 +519,8 @@ export function observedCores(
         : {}),
       // 18.9: whether the agent carries IPv6 in the wg tunnel; only a boolean.
       ...(typeof c.awgIpv6 === 'boolean' ? { awgIpv6: c.awgIpv6 } : {}),
+      // 18.11: whether it also reads the noNat6 flag (a real prefix, no NAT66).
+      ...(typeof c.awgNoNat6 === 'boolean' ? { awgNoNat6: c.awgNoNat6 } : {}),
       ...(c.provisioned !== undefined ? { provisioned: c.provisioned } : {}),
       ...(c.reason ? { reason: c.reason } : {}),
       ...(c.installed !== undefined ? { installed: c.installed } : {}),

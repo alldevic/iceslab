@@ -32,6 +32,8 @@ export interface FormValues {
   dns: DnsForm;
   /** 18.6: auto | on | off; уходит в PUT только изменённым (ipv6ModePatch). */
   ipv6Mode: Ipv6Mode;
+  /** 18.11: the real IPv6 prefix of the tunnel as typed; '' = none. Sent only when changed (tunnelPrefixPatch). */
+  tunnelIpv6Prefix: string;
   /** В работе: false = статус `disabled` (вне подписок и опроса). */
   inService: boolean;
 }
@@ -93,6 +95,55 @@ export function ipv6ModePatch(stored: Ipv6Mode | undefined, typed: Ipv6Mode): { 
   return typed === readIpv6Mode(stored) ? {} : { ipv6Mode: typed };
 }
 
+/**
+ * Whether the typed tunnel prefix is one the server takes (nodes.schemas.ts): a
+ * global unicast IPv6 network, /32 to /64, written as its network address.
+ * Empty is no prefix and passes. The server has the last word (and the overlap
+ * with another node, which only it knows).
+ */
+export function tunnelPrefixOk(typed: string): boolean {
+  const v = typed.trim();
+  if (v === '') return true;
+  const m = /^([0-9a-fA-F:]+)\/(\d{1,3})$/.exec(v);
+  if (!m) return false;
+  const len = Number(m[2]);
+  if (len < 32 || len > 64) return false;
+  const [head, tail, ...extra] = m[1]!.split('::');
+  if (extra.length > 0) return false;
+  const groups = (s: string | undefined) => (s ? s.split(':') : []);
+  const h = groups(head);
+  const t = groups(tail);
+  const fill = 8 - h.length - t.length;
+  if (tail === undefined ? fill !== 0 : fill < 1) return false;
+  const all = [...h, ...Array<string>(tail === undefined ? 0 : fill).fill('0'), ...t];
+  if (all.length !== 8 || all.some((g) => !/^[0-9a-fA-F]{1,4}$/.test(g))) return false;
+  const n = all.map((g) => parseInt(g, 16));
+  if ((n[0]! >> 13) !== 1) return false; // 2000::/3
+  // Host bits: everything past `len` is zero.
+  return n.every((g, i) => {
+    const keep = Math.max(0, Math.min(16, len - i * 16));
+    return (g & (0xffff >> keep)) === 0;
+  });
+}
+
+/**
+ * The tunnel prefix in the node's PUT (18.11). Only when it differs from the
+ * stored one: a change re-pushes the node, restarts its tunnel interfaces and
+ * moves the clients' IPv6 addresses. Cleared is `null`, which takes it off.
+ */
+export function tunnelPrefixPatch(
+  stored: string | null | undefined,
+  typed: string,
+): { tunnelIpv6Prefix?: string | null } {
+  const next = typed.trim() || null;
+  return next === (stored ?? null) ? {} : { tunnelIpv6Prefix: next };
+}
+
+/** Whether saving this moves the tunnel's addresses: a change of the stored prefix. */
+export function tunnelPrefixChanges(stored: string | null | undefined, typed: string): boolean {
+  return 'tunnelIpv6Prefix' in tunnelPrefixPatch(stored, typed);
+}
+
 /** The server's shape for a domain: a bare FQDN, no scheme, no port, at most
  *  255 (nodes.schemas.ts DomainSchema). Empty is no domain and passes. */
 export function domainOk(typed: string): boolean {
@@ -146,6 +197,7 @@ export function defaults(node: Node | null, decimalComma = false): FormValues {
     engines: [...(node?.intendedEngines ?? [])],
     dns: dnsDefaults(node?.dns),
     ipv6Mode: readIpv6Mode(node?.ipv6Mode),
+    tunnelIpv6Prefix: node?.tunnelIpv6Prefix ?? '',
     inService: node?.status !== 'disabled',
   };
 }

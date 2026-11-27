@@ -282,6 +282,11 @@ type ipv6Core struct {
 
 func (c *ipv6Core) AwgIpv6() bool { return c.nat6() }
 
+// noNat6Core also knows the 18.11 flag, the way the adapter of this version does.
+type noNat6Core struct{ ipv6Core }
+
+func (c *noNat6Core) AwgNoNat6() bool { return c.nat6() }
+
 // Milestone 18.10: the amneziawg row carries awgIpv6 when the host can NAT
 // IPv6, and says nothing when it cannot (the panel reads absent as no).
 func TestAwgIpv6TravelsOnTheAmneziawgRowOnlyWhenTheHostCanNat(t *testing.T) {
@@ -299,6 +304,23 @@ func TestAwgIpv6TravelsOnTheAmneziawgRowOnlyWhenTheHostCanNat(t *testing.T) {
 	// An agent that cannot tell (a core that does not report it) sends none.
 	if body := healthBody(t, &generationCore{fakeCore{name: "amneziawg", running: true}, 3}); strings.Contains(body, `"awgIpv6"`) {
 		t.Errorf("a core that does not report the fact sent it: %s", body)
+	}
+}
+
+// Milestone 18.11: awgNoNat6 travels with awgIpv6 from an agent that reads the
+// flag; an agent of 18.10 sends awgIpv6 alone, and the panel keeps NAT66 there.
+func TestAwgNoNat6TravelsOnlyFromAnAgentThatReadsTheFlag(t *testing.T) {
+	yes := healthBody(t, &noNat6Core{ipv6Core{fakeCore{name: "amneziawg", running: true}, func() bool { return true }}})
+	if !strings.Contains(yes, `"awgNoNat6":true`) || !strings.Contains(yes, `"awgIpv6":true`) {
+		t.Errorf("both facts expected: %s", yes)
+	}
+	old := healthBody(t, &ipv6Core{fakeCore{name: "amneziawg", running: true}, func() bool { return true }})
+	if strings.Contains(old, `"awgNoNat6"`) {
+		t.Errorf("an agent without the flag sent the fact: %s", old)
+	}
+	no := healthBody(t, &noNat6Core{ipv6Core{fakeCore{name: "amneziawg", running: true}, func() bool { return false }}})
+	if strings.Contains(no, `"awgNoNat6"`) {
+		t.Errorf("a host that cannot do IPv6 sent the fact: %s", no)
 	}
 }
 

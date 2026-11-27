@@ -15,6 +15,7 @@ import { prisma } from '../../prisma.js';
 import { effectiveEngineOf } from './node-engines.js';
 import { readCoreVersions } from './node-core-versions.js';
 import { normalizeSubnet6 } from '../amneziawg/amneziawg.subnet.js';
+import { ipv6NetworksOverlapText, nodePrefixOverlaps } from '../amneziawg/tunnel-prefix.js';
 
 /**
  * A host does not go onto a node whose core for it is missing or known to be
@@ -240,6 +241,54 @@ export class AwgSubnet6OverlapError extends Error {
   }
 }
 
+/**
+ * A node's real tunnel prefix (milestone 18.11) that another node already has,
+ * or a profile's `subnet6` sits in. A prefix is routed to ONE node, so two
+ * nodes on overlapping ones is a mistake that would send a client's replies to
+ * the wrong machine. (A profile's `subnet6` is a ULA and a node's prefix is
+ * global, so the profile half cannot trip on what the schemas let in; it guards
+ * a row written around them.)
+ */
+export class TunnelPrefixOverlapError extends Error {
+  readonly code = 'TUNNEL_PREFIX_OVERLAP';
+  constructor(
+    public prefix: string,
+    public otherKind: 'node' | 'profile',
+    public otherName: string,
+    public otherPrefix: string,
+  ) {
+    super(
+      otherKind === 'node'
+        ? `The prefix ${prefix} overlaps ${otherPrefix}, the tunnel prefix of node "${otherName}". A prefix is routed to one node: give each node its own.`
+        : `The prefix ${prefix} overlaps ${otherPrefix}, the IPv6 subnet of tunnel profile "${otherName}". Give the node a prefix of its own.`,
+    );
+    this.name = 'TunnelPrefixOverlapError';
+  }
+}
+
+/** Refuses `prefix` for node `nodeId` (null: a node being created) when it overlaps another node's or a profile's. */
+export async function assertTunnelPrefixFree(nodeId: string | null, prefix: string): Promise<void> {
+  const nodes = await prisma.node.findMany({
+    where: { deletedAt: null, tunnelIpv6Prefix: { not: null }, ...(nodeId ? { id: { not: nodeId } } : {}) },
+    select: { name: true, tunnelIpv6Prefix: true },
+  });
+  for (const n of nodes) {
+    if (n.tunnelIpv6Prefix && nodePrefixOverlaps(prefix, n.tunnelIpv6Prefix)) {
+      throw new TunnelPrefixOverlapError(prefix, 'node', n.name, n.tunnelIpv6Prefix);
+    }
+  }
+  const profiles = await prisma.profile.findMany({
+    where: { protocol: { in: ['amneziawg', 'wireguard'] } },
+    select: { name: true, config: true },
+  });
+  for (const p of profiles) {
+    const subnet6 = ((p.config ?? {}) as { subnet6?: string }).subnet6;
+    if (subnet6 && ipv6NetworksOverlapText(prefix, subnet6)) {
+      throw new TunnelPrefixOverlapError(prefix, 'profile', p.name, subnet6);
+    }
+  }
+}
+
 function v4Range(cidr: string): [number, number] | null {
   const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d+)$/.exec(cidr.trim());
   if (!m) return null;
@@ -382,6 +431,19 @@ export function coreGateReply(err: unknown): { status: 409; body: Record<string,
         subnet6: err.subnet6,
         otherProfileName: err.otherProfileName,
         otherSubnet6: err.otherSubnet6,
+      },
+    };
+  }
+  if (err instanceof TunnelPrefixOverlapError) {
+    return {
+      status: 409,
+      body: {
+        error: err.code,
+        message: err.message,
+        prefix: err.prefix,
+        otherKind: err.otherKind,
+        otherName: err.otherName,
+        otherPrefix: err.otherPrefix,
       },
     };
   }
