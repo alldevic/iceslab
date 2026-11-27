@@ -77,6 +77,7 @@ describe('nodeIpv6Fact (18.2): строка IPv6 на карточке ноды'
       state: 'stack',
       count: 2,
       addresses: ['2001:db8::1', '2001:db8::2'],
+      apiIpv4Only: false,
     });
     expect(nodeIpv6Fact({ observedAt: at, cores: [], ipv6: { stack: false, global: true, addresses: ['2001:db8::1'] } }).state).toBe('address');
     expect(nodeIpv6Fact({ observedAt: at, cores: [] }).state).toBe('unknown');
@@ -86,6 +87,7 @@ describe('nodeIpv6Fact (18.2): строка IPv6 на карточке ноды'
       state: 'none',
       count: 0,
       addresses: [],
+      apiIpv4Only: false,
     });
     expect(nodeIpv6Fact(null).state).toBe('unknown');
     expect(nodeIpv6Fact(undefined).state).toBe('unknown');
@@ -101,5 +103,21 @@ describe('nodeIpv6EgressFact (18.5): строка проверки исходя�
     expect(nodeIpv6EgressFact({ observedAt: at, cores: [], ipv6: base })).toBe('unknown');
     expect(nodeIpv6EgressFact({ observedAt: at, cores: [] })).toBe('unknown');
     expect(nodeIpv6EgressFact(null)).toBe('unknown');
+  });
+});
+
+describe('nodeIpv6Fact (18.4): API агента на IPv4 при стеке', () => {
+  const at = '2026-11-27T00:00:00.000Z';
+  const cores = (stack: boolean, apiListen?: string) => ({
+    observedAt: at,
+    cores: [],
+    ipv6: { stack, global: stack, addresses: [], ...(apiListen ? { apiListen } : {}) },
+  });
+  it('подсказка только когда стек есть, а API на 0.0.0.0', () => {
+    expect(nodeIpv6Fact(cores(true, '0.0.0.0')).apiIpv4Only).toBe(true);
+    expect(nodeIpv6Fact(cores(true, '::')).apiIpv4Only).toBe(false);
+    expect(nodeIpv6Fact(cores(true, '10.0.0.5')).apiIpv4Only).toBe(false);
+    expect(nodeIpv6Fact(cores(true)).apiIpv4Only).toBe(false);
+    expect(nodeIpv6Fact(cores(false, '0.0.0.0')).apiIpv4Only).toBe(false);
   });
 });

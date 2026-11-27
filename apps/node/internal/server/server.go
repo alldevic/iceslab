@@ -261,7 +261,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	httpSrv := &http.Server{
-		Addr:    s.cfg.Host + ":" + s.cfg.Port,
+		Addr:    net.JoinHostPort(s.cfg.Host, s.cfg.Port),
 		Handler: s.routes(),
 		TLSConfig: &tls.Config{
 			// Asked on every handshake, so a rotated pair (A-124) is served to
@@ -799,7 +799,7 @@ func (s *Server) ipv6() *dto.IPv6Dto {
 		addrs = []string{}
 	}
 	egress := f.Egress
-	return &dto.IPv6Dto{Stack: f.Stack, Global: f.Global, Addresses: addrs, Egress: &egress}
+	return &dto.IPv6Dto{Stack: f.Stack, Global: f.Global, Addresses: addrs, Egress: &egress, ApiListen: s.cfg.Host}
 }
 
 // portHopping is the range the nat table redirects to hysteria, nil when it

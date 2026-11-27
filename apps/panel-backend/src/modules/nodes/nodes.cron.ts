@@ -471,6 +471,7 @@ function observedIpv6(r: NodeIPv6 | undefined): NodeIPv6 | undefined {
     global: r.global,
     addresses,
     ...(typeof r.egress === 'boolean' ? { egress: r.egress } : {}),
+    ...(typeof r.apiListen === 'string' && r.apiListen !== '' ? { apiListen: r.apiListen } : {}),
   };
 }
 

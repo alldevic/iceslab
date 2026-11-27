@@ -440,3 +440,14 @@ func TestTheHealthcheckCarriesTheIPv6Block(t *testing.T) {
 		t.Errorf("body %s", rr.Body.String())
 	}
 }
+
+// Milestone 18.4: the block names where the agent's own API listens, so the
+// panel can hint at a node whose stack takes `::` while the API stayed IPv4.
+func TestTheIPv6BlockNamesTheAPIListener(t *testing.T) {
+	s := newServerWith(t, &fakeAdapter{name: "xray", engine: "xray"})
+	s.cfg.IPv6Probe = func() core.IPv6Facts { return core.IPv6Facts{Stack: true} }
+	s.cfg.Host = "0.0.0.0"
+	if h := healthOf(t, s); h.IPv6 == nil || h.IPv6.ApiListen != "0.0.0.0" {
+		t.Errorf("ipv6 block %+v", h.IPv6)
+	}
+}

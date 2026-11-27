@@ -991,6 +991,10 @@ type IPv6Dto struct {
 	// cached one, core.IPv6Prober). Absent from an agent older than the check,
 	// which the panel reads as "not reported", not as "no".
 	Egress *bool `json:"egress,omitempty"`
+	// ApiListen: the address this agent's own API is bound to (NODE_HOST, or
+	// what the agent chose). The panel hints at a node whose stack takes `::`
+	// while the API stayed on 0.0.0.0 (an install from before milestone 18.4).
+	ApiListen string `json:"apiListen,omitempty"`
 }
 
 // PortHopDto is an inclusive UDP port range, {0, 0} for none.

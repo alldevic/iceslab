@@ -32,7 +32,8 @@ type InboundConfig struct {
 	// Tag uniquely identifies the inbound inside Xray. Default: "ss-in".
 	Tag string
 
-	// ListenHost is the bind address. Default: "0.0.0.0".
+	// ListenHost is the bind address. Default: core.ListenAddr(): "::" where
+	// it takes IPv4 too, else "0.0.0.0".
 	ListenHost string
 
 	// ListenPort is the public TCP port the SS server listens on.
@@ -62,7 +63,7 @@ func (c *InboundConfig) withDefaults() InboundConfig {
 		out.Tag = "ss-in"
 	}
 	if out.ListenHost == "" {
-		out.ListenHost = "0.0.0.0"
+		out.ListenHost = listenAddr()
 	}
 	if out.ListenPort == 0 {
 		out.ListenPort = 8388 // SS historic default
@@ -264,3 +265,7 @@ func writeConfig(path string, blob []byte) error {
 	}
 	return atomicfile.Write(path, blob, 0o600)
 }
+
+// listenAddr is read at every render. A variable so tests can pin the answer:
+// the goldens would otherwise depend on the machine that runs them.
+var listenAddr = core.ListenAddr

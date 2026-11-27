@@ -30,11 +30,14 @@ package mtproto
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/atomicfile"
-	"strings"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 )
 
 // InboundConfig holds per-inbound settings.
@@ -125,7 +128,7 @@ func renderConfig(inbound InboundConfig) ([]byte, error) {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "secret = \"%s\"\n", cfg.Secret)
-	fmt.Fprintf(&b, "bind-to = \"0.0.0.0:%d\"\n", cfg.ListenPort)
+	fmt.Fprintf(&b, "bind-to = \"%s\"\n", net.JoinHostPort(listenAddr(), strconv.Itoa(cfg.ListenPort)))
 	fmt.Fprintf(&b, "concurrency = 8192\n")
 	fmt.Fprintf(&b, "prefer-ip = \"prefer-ipv4\"\n")
 	b.WriteString("\n")
@@ -157,3 +160,7 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// listenAddr is read at every render. A variable so tests can pin the answer:
+// the goldens would otherwise depend on the machine that runs them.
+var listenAddr = core.ListenAddr

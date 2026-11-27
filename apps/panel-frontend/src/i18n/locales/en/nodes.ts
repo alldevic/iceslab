@@ -328,6 +328,8 @@ export const nodes = {
         fails: 'the outbound connection fails, the cores leave by IPv4',
         unknown: 'the agent does not report it',
       },
+      apiIpv4Only:
+        'The agent API listens on IPv4 only (NODE_HOST=0.0.0.0, written by an older installer). To take the panel channel over IPv6 as well, remove NODE_HOST from /etc/iceslab-node/env and restart the agent. Nothing changes on its own.',
     },
     coresRendersPolicy: 'applies the policy',
     coresNoDns: 'no node DNS',

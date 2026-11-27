@@ -113,3 +113,19 @@ func TestPortHolderLeavesTheLineAloneWhenNobodyIsFound(t *testing.T) {
 		}
 	}
 }
+
+// A core on `::` (18.4) dies of `listen tcp [::]:443`; the holder is found in
+// /proc/net/tcp6 all the same.
+func TestExitReasonNamesWhoHoldsADualStackPort(t *testing.T) {
+	l, err := net.Listen("tcp", "[::]:0")
+	if err != nil {
+		t.Skip("no IPv6 on this host")
+	}
+	defer l.Close()
+
+	reason := exitReasonOfHelper(t, "tcp", l.Addr().String())
+	want := fmt.Sprintf("(pid %d))", os.Getpid())
+	if !strings.Contains(reason, "(held by ") || !strings.HasSuffix(reason, want) {
+		t.Errorf("reason does not name the holder %s: %q", want, reason)
+	}
+}

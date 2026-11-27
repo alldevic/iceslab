@@ -2282,6 +2282,8 @@ export interface NodeIPv6 {
   global: boolean;
   addresses: string[];
   egress?: boolean;
+  /** The address the agent's API is bound to; absent = the agent does not say. */
+  apiListen?: string;
 }
 
 /** An inclusive UDP port range a node redirects; `{start: 0, end: 0}` = none. */

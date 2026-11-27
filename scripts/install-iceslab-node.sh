@@ -113,7 +113,8 @@
 #                           the port this session arrived on (SSH_CONNECTION)
 #                           is allowed as well, so ufw cannot cut it. Pass it if
 #                           you moved sshd: ufw would open a port sshd is not on.
-#   --panel-ip <ip|cidr>    allow only this address (or comma-list) to reach
+#   --panel-ip <ip|cidr>    allow only this address (or comma-list; IPv4 and
+#                           IPv6 alike, 2001:db8::5 or 2001:db8::/32) to reach
 #                           the agent's mTLS port. Without it the port is open
 #                           to the whole internet: mTLS turns everyone away,
 #                           but the handshakes still cost CPU and the cert
@@ -501,7 +502,10 @@ apply_core_versions_from_payload() {
   done
 }
 
-NODE_HOST=${NODE_HOST:-0.0.0.0}
+# Empty means "the agent decides": `::` where the host takes IPv4 on it too,
+# else 0.0.0.0 (the agent's own default). A value from the environment is
+# written as given and wins.
+NODE_HOST=${NODE_HOST:-}
 # Default moved to 1337 (2026-05-21). The old 8443 is the canonical
 # HTTPS-alt port and the first thing every bot probes after 443. 1337
 # stays out of standard scanner profiles and frees 8443 for actual
@@ -1681,12 +1685,14 @@ if [[ -n "$PAYLOAD" || ! -f "$ENV_FILE" ]]; then
   install -m 0600 /dev/null "$ENV_FILE"
   cat > "$ENV_FILE" <<EOF
 NODE_PAYLOAD=${PAYLOAD}
-NODE_HOST=${NODE_HOST}
 NODE_PORT=${NODE_PORT}
 # The addresses the agent dials over IPv6 to decide whether this node leaves by
 # IPv6 (any one connecting is enough). Uncomment to change the default:
 # IPV6_EGRESS_PROBE_TARGETS=[2606:4700:4700::1111]:443,[2001:4860:4860::8888]:443
 EOF
+  if [[ -n "$NODE_HOST" ]]; then
+    echo "NODE_HOST=${NODE_HOST}" >> "$ENV_FILE"
+  fi
   # Zashchita (hardening): record realistic-fallback intent for the agent.
   # The agent reads REALISTIC_FALLBACK when generating the REALITY/Caddy
   # fallback so an active probe hits a real-looking site instead of a bare
@@ -1714,6 +1720,12 @@ step "Firewall (ufw)"
 # then flip defaults to deny + enable. Skip with SKIP_FIREWALL=1.
 if [[ "${SKIP_FIREWALL:-0}" != "1" ]]; then
   log "ufw: SSH + panel-mTLS:$NODE_PORT + protocol-specific"
+  # The cores listen on `::` where the host allows it (agent, 18.4), and ufw
+  # drops every IPv6 packet, the allow rules below included, when IPV6=no.
+  if grep -Eiq '^IPV6=no' "$UFW_DEFAULT_FILE" 2>/dev/null; then
+    warn "ufw has IPV6=no ($UFW_DEFAULT_FILE): the rules below open IPv4 only, and IPv6 clients are dropped."
+    warn "Set IPV6=yes there and run 'ufw reload' (re-run this script after) if the node should take IPv6."
+  fi
   # SSH FIRST (the lockout-safety rule above), on SSH_PORT (--ssh-port, default
   # 22). Zashchita: when an --ssh-allowlist is given, lock the SSH port to those
   # IP/CIDRs only (mirror of the --panel-ip loop below) instead of world-open.

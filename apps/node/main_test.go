@@ -145,3 +145,18 @@ func TestWireguardIsRegisteredOnlyByAnExplicitBin(t *testing.T) {
 		t.Errorf("a wg binary that is not on the machine reads as installed")
 	}
 }
+
+// The API listens where the host allows, and an explicit NODE_HOST wins over
+// whatever the host would have chosen.
+func TestNodeHostDefaultAndExplicit(t *testing.T) {
+	t.Setenv("NODE_HOST", "")
+	if got, want := nodeHost(), core.ListenAddr(); got != want {
+		t.Errorf("default NODE_HOST = %q, want %q", got, want)
+	}
+	for _, v := range []string{"0.0.0.0", "10.1.2.3", "::1"} {
+		t.Setenv("NODE_HOST", v)
+		if got := nodeHost(); got != v {
+			t.Errorf("NODE_HOST=%q: got %q", v, got)
+		}
+	}
+}

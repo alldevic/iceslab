@@ -34,7 +34,6 @@ import (
 
 const (
 	defaultPort                = "1337"
-	defaultHost                = "0.0.0.0"
 	defaultAuthCallbackPort    = 9000
 	defaultXrayPort            = 443
 	defaultXrayConfigPath      = "/etc/xray/config.json"
@@ -142,7 +141,7 @@ func main() {
 	}
 
 	srv, err := server.New(server.Config{
-		Host:              getenv("NODE_HOST", defaultHost),
+		Host:              nodeHost(),
 		Port:              getenv("NODE_PORT", defaultPort),
 		Payload:           pld,
 		Logger:            logger,
@@ -598,6 +597,11 @@ func stopAdapters(adapters []core.CoreAdapter, logger *slog.Logger) {
 		}
 	}
 }
+
+// nodeHost is where the mTLS API binds: NODE_HOST as given (an installer from
+// before 18.4 wrote 0.0.0.0 into the env file, and that stays), else the
+// address the cores take, `::` where it takes IPv4 too and 0.0.0.0 where not.
+func nodeHost() string { return getenv("NODE_HOST", core.ListenAddr()) }
 
 func getenv(key, def string) string {
 	if v := os.Getenv(key); v != "" {

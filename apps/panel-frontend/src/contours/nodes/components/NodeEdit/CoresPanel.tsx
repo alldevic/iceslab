@@ -275,6 +275,9 @@ function Ipv6Line({ cores }: { cores: Node['cores'] }) {
               : t('nodeEdit.ipv6.egress.unknown')}
         </Text>
       )}
+      {fact.apiIpv4Only && (
+        <Text style={{ fontSize: 12, lineHeight: '17px', color: AMBER }}>{t('nodeEdit.ipv6.apiIpv4Only')}</Text>
+      )}
     </>
   );
 }

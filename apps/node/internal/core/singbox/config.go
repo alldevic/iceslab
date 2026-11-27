@@ -258,7 +258,7 @@ func renderConfig(certPath, keyPath, statsListen string, inbound InboundConfig, 
 		Inbounds: []sbInbound{{
 			Type:              "tuic",
 			Tag:               "tuic-in",
-			Listen:            "0.0.0.0",
+			Listen:            listenAddr(),
 			ListenPort:        inbound.ListenPort,
 			Users:             sbUsers,
 			CongestionControl: cc,
@@ -310,7 +310,7 @@ func renderAnytlsConfig(certPath, keyPath, statsListen string, inbound InboundCo
 		Inbounds: []sbInbound{{
 			Type:       "anytls",
 			Tag:        "anytls-in",
-			Listen:     "0.0.0.0",
+			Listen:     listenAddr(),
 			ListenPort: inbound.ListenPort,
 			Users:      sbUsers,
 			TLS: &sbTLS{
@@ -392,7 +392,7 @@ func renderXrayFamilyConfig(statsListen string, inbound InboundConfig, users map
 		Inbounds: []sbInbound{{
 			Type:       sub,
 			Tag:        sub + "-in",
-			Listen:     "0.0.0.0",
+			Listen:     listenAddr(),
 			ListenPort: inbound.ListenPort,
 			Users:      sbUsers,
 			TLS:        &tls,
@@ -478,7 +478,7 @@ func renderHysteria2Config(certPath, keyPath, statsListen string, inbound Inboun
 	in := sbInbound{
 		Type:                  "hysteria2",
 		Tag:                   "hy2-in",
-		Listen:                "0.0.0.0",
+		Listen:                listenAddr(),
 		ListenPort:            inbound.ListenPort,
 		Users:                 sbUsers,
 		IgnoreClientBandwidth: inbound.BrutalUpMbps == 0 && inbound.BrutalDownMbps == 0,
@@ -543,7 +543,7 @@ func renderShadowtlsConfig(statsListen string, inbound InboundConfig, users map[
 		map[string]any{
 			"type":        "shadowtls",
 			"tag":         "shadowtls-in",
-			"listen":      "0.0.0.0",
+			"listen":      listenAddr(),
 			"listen_port": inbound.ListenPort,
 			"version":     3,
 			"users":       stUsers,
@@ -609,7 +609,7 @@ func renderShadowsocksConfig(statsListen, ssmListen string, inbound InboundConfi
 	in := sbInbound{
 		Type:       "shadowsocks",
 		Tag:        "ss-in",
-		Listen:     "0.0.0.0",
+		Listen:     listenAddr(),
 		ListenPort: inbound.ListenPort,
 		Method:     inbound.Method,
 		Password:   inbound.ServerPSK,
@@ -647,3 +647,7 @@ func renderShadowsocksConfig(statsListen, ssmListen string, inbound InboundConfi
 
 	return json.MarshalIndent(cfg, "", "  ")
 }
+
+// listenAddr is read at every render. A variable so tests can pin the answer:
+// the goldens would otherwise depend on the machine that runs them.
+var listenAddr = core.ListenAddr

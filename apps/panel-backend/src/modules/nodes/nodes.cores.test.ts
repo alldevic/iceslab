@@ -202,6 +202,12 @@ describe('when the inventory is written back', () => {
     expect(coresWorthWriting(got, inventory(), at(AT))).toBe(true);
   });
 
+  it('keeps where the agent API listens, and nothing when it says nothing', () => {
+    const base = { stack: true, global: true, addresses: [] };
+    expect(observedCores([], AT, undefined, undefined, undefined, { ...base, apiListen: '0.0.0.0' }).ipv6?.apiListen).toBe('0.0.0.0');
+    expect(observedCores([], AT, undefined, undefined, undefined, { ...base, apiListen: '' }).ipv6).toEqual(base);
+  });
+
   it('does not keep an ipv6 block that is not one', () => {
     expect('ipv6' in observedCores([], AT)).toBe(false);
     for (const bad of [{ stack: 'yes' }, {}, { stack: true }] as never[]) {

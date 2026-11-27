@@ -93,16 +93,23 @@ export function userScopeGapsOf(raw: unknown): { profileName: string; port: numb
  * block (older than the field, or the node has not reported), which is NOT
  * `none` and is not drawn as a fault. The addresses ride along for the tooltip.
  */
-export type NodeIpv6Fact = { state: 'stack' | 'address' | 'none' | 'unknown'; count: number; addresses: string[] };
+export type NodeIpv6Fact = {
+  state: 'stack' | 'address' | 'none' | 'unknown';
+  count: number;
+  addresses: string[];
+  /** The host takes `::` but the agent's API is bound to 0.0.0.0 (installed
+   *  before 18.4, NODE_HOST written into its env): the panel channel stays IPv4. */
+  apiIpv4Only: boolean;
+};
 
 export function nodeIpv6Fact(cores: NodeCores | null | undefined): NodeIpv6Fact {
   const v = cores?.ipv6;
   if (!v || typeof v.stack !== 'boolean' || typeof v.global !== 'boolean') {
-    return { state: 'unknown', count: 0, addresses: [] };
+    return { state: 'unknown', count: 0, addresses: [], apiIpv4Only: false };
   }
   const addresses = Array.isArray(v.addresses) ? v.addresses.filter((a): a is string => typeof a === 'string') : [];
   const state = v.stack && v.global ? 'stack' : v.global ? 'address' : 'none';
-  return { state, count: addresses.length, addresses };
+  return { state, count: addresses.length, addresses, apiIpv4Only: v.stack && v.apiListen === '0.0.0.0' };
 }
 
 /**
