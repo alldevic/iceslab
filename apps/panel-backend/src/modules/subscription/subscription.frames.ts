@@ -47,6 +47,13 @@ export function openFrame(frame: Frame): { cfg: Frame; routing: boolean } {
   return { cfg, routing: service?.routing === 'preset' };
 }
 
+/** Whether the frame has a `dns` of its own: the test the builders make (xray
+ *  `frame.dns !== undefined`, Clash and sing-box `cfg.dns === undefined`), and
+ *  the frame then wins whole, the panel's DNS rules do not reach it. */
+export function frameHasOwnDns(frame: Frame): boolean {
+  return frame.dns !== undefined;
+}
+
 /** Whether the frame asks for the hosts the operator hid (A-236 step 6):
  *  `iceslab: { includeHiddenHosts: true }` at its top. */
 export function frameIncludesHidden(frame: Frame): boolean {

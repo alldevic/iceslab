@@ -2,6 +2,9 @@ import { Box, Text } from '@mantine/core';
 import { AMBER, DISPLAY, FAINT, HAIRLINE, MIST, MONO, MOSS, RED, SNOW } from '@/contours/traffic/lib/colors';
 import { DNS_FORMATS, type DnsFormatNote } from '@/contours/traffic/lib/dnsFormats';
 import { useTranslation } from 'react-i18next';
+import { useQuery } from '@tanstack/react-query';
+import { templatesSkippingDnsRules } from '@/contours/traffic/lib/dnsTemplates';
+import { isNotImplemented, listTemplates } from '@/lib/domain/subscriptionTemplates';
 
 function noteWords(note: DnsFormatNote, t: (key: string) => string): string {
   switch (note) {
@@ -32,9 +35,18 @@ const COLS = '150px 110px 190px minmax(0, 1fr)';
  * Which subscription formats run a DNS rule, always on screen under the
  * editor, whatever is typed in it (the data is DNS_FORMATS, a constant).
  * Saving never waits on it: a rule is saved whichever formats are switched on.
+ * Under it, the templates of the panel whose own `dns` wins and so do not get
+ * the rules (none: no line).
  */
 export function DnsFormatsTable() {
   const { t } = useTranslation();
+  // The same list the templates screen reads; a server without it (404) or a failed read: no line.
+  const templates = useQuery({
+    queryKey: ['subscription-templates'],
+    queryFn: listTemplates,
+    retry: (count, err) => !isNotImplemented(err) && count < 2,
+  });
+  const skipping = templatesSkippingDnsRules(templates.data?.templates);
   return (
     <Box style={{ paddingBlock: 12, paddingInline: 24, borderTop: `1px solid ${HAIRLINE}` }}>
       <Text style={{ ...HEAD, marginBottom: 4 }}>{t('routes.dnsFormat.title')}</Text>
@@ -53,7 +65,7 @@ export function DnsFormatsTable() {
               : f.kinds === 'unverified'
                 ? t('routes.dnsFormat.unverified')
                 : f.kinds.map((k) => KIND_LABEL[k]).join(', ');
-          const notes = [f.note ? noteWords(f.note, t) : null, f.soon ? t('routes.dnsFormat.soon') : null].filter(Boolean);
+          const notes = f.note ? [noteWords(f.note, t)] : [];
           return (
             <Box key={f.id} role="row" data-format={f.id} style={{ display: 'grid', gridTemplateColumns: COLS, gap: 12, paddingBlock: 5, minWidth: 560, borderTop: `1px solid ${HAIRLINE}` }}>
               <Text role="cell" style={{ ...CELL, fontFamily: MONO, color: SNOW }}>{f.label}</Text>
@@ -64,7 +76,11 @@ export function DnsFormatsTable() {
           );
         })}
       </Box>
-      <Text style={{ ...CELL, fontSize: 11, color: MIST, marginTop: 8 }}>{t('routes.dnsFormat.ownDns')}</Text>
+      {skipping.length > 0 && (
+        <Text data-testid="dns-own-templates" style={{ ...CELL, fontSize: 11, color: AMBER, marginTop: 8 }}>
+          {t('routes.dnsFormat.ownDnsTemplates', { list: skipping.map((x) => `${x.name} (${x.type})`).join(', ') })}
+        </Text>
+      )}
     </Box>
   );
 }

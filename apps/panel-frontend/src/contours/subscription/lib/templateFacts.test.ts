@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { subscription as en } from '@/i18n/locales/en/subscription';
+import { subscription as ru } from '@/i18n/locales/ru/subscription';
 import {
   dryRunFacts,
+  dryRunWarningWordsKey,
+  isBlockingWarning,
   dryRunForBody,
   dryRunWarningOf,
   importFacts,
@@ -381,5 +385,37 @@ describe('dryRunFacts', () => {
   it('7. общий ok true над отказом ядра зелёным не становится', () => {
     const f = dryRunFacts({ ok: true, rendered: '', check: { ok: false, message: 'нет' }, warnings: [] })!;
     expect(f.verdict).toBe('refused');
+  });
+});
+
+describe('own dns warning (m19.7)', () => {
+  const own = { code: 'OWN_DNS_SKIPS_RULES', message: 'the template has its own `dns`' };
+  const run = (warnings: unknown[], ok: boolean | null = null) =>
+    dryRunFacts({ ok, rendered: 'x', check: { ok: null }, warnings: warnings as never })!;
+
+  it('is read by its code, shown in the words of the screen, and is advice: saving stays open', () => {
+    const f = run([own]);
+    expect(f.warnings).toEqual([{ code: 'OWN_DNS_SKIPS_RULES', message: own.message }]);
+    expect(dryRunWarningWordsKey(f.warnings[0]!)).toBe('ownDns');
+    expect(isBlockingWarning(f.warnings[0]!)).toBe(false);
+    expect(f.verdict).toBe('unchecked');
+    expect(f.canSave).toBe(true);
+  });
+
+  it('next to a blocking warning the run is still refused', () => {
+    const f = run([own, { code: 'NO_GROUP_HOLDS_NODE', message: 'no group' }], false);
+    expect(f.verdict).toBe('refused');
+    expect(f.warnings.filter(isBlockingWarning)).toHaveLength(1);
+  });
+
+  it('an old server (a string) and an unknown code still block; their words are the server\'s', () => {
+    expect(isBlockingWarning({ code: null, message: 'x' })).toBe(true);
+    expect(dryRunWarningWordsKey({ code: 'NO_GROUP_HOLDS_NODE', message: 'x' })).toBeNull();
+  });
+
+  it('has words in both locales', () => {
+    for (const l of [en, ru] as { templates: Record<string, unknown> }[]) {
+      expect(typeof l.templates.ownDnsSkipsRules).toBe('string');
+    }
   });
 });

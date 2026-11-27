@@ -266,6 +266,49 @@ describe('the subscription and the dry run', () => {
     expect((await app.inject({ method: 'GET', url: `/sub/${sub}?format=singbox` })).body).toBe(before);
   });
 
+  it('m19.7: dry-run warns of an own dns that asks for the routing preset, as advice: ok and the rendered file stay as they were', async () => {
+    const run = async (type: string, body: string) => {
+      const res = await app.inject({ method: 'POST', url: '/api/subscription-templates/dry-run', headers: auth(), payload: { type, body } });
+      expect(res.statusCode, res.body).toBe(200);
+      return JSON.parse(res.body) as { ok: boolean | null; rendered: string; warnings: { code: string; message: string }[] };
+    };
+    const codes = (r: { warnings: { code: string }[] }) => r.warnings.map((w) => w.code);
+    const CODE = 'OWN_DNS_SKIPS_RULES';
+    const asking = (o: Record<string, unknown>) => JSON.stringify({ iceslab: { routing: 'preset' }, ...o });
+    const own = { dns: { servers: ['1.1.1.1'] } };
+    // The three types that run DNS rules.
+    for (const type of ['xray-json', 'xray-json-array']) {
+      const base = DEFAULT_TEMPLATE_BODIES[type as TemplateType];
+      const r = await run(type, JSON.stringify({ ...JSON.parse(base), ...own }));
+      expect(codes(r), type).toEqual([CODE]);
+      expect(r.warnings[0]!.message.length).toBeGreaterThan(0);
+      // Advice, not a refusal: with no core binary ok stays null, never false.
+      expect(r.ok === false, type).toBe(false);
+      expect(codes(await run(type, base)), `${type} default`).toEqual([]);
+    }
+    // sing-box spells its own dns its way: with SINGBOX_BIN set the dry run runs `sing-box check`.
+    const sbOwn = { dns: { servers: [{ type: 'local', tag: 'own-dns' }] } };
+    const sb = await run('singbox', JSON.stringify({ ...JSON.parse(DEFAULT_TEMPLATE_BODIES.singbox), ...sbOwn }));
+    expect(codes(sb)).toEqual([CODE]);
+    expect(sb.ok === false).toBe(false);
+    const mh = await run('mihomo', DEFAULT_TEMPLATE_BODIES.mihomo.replace('proxies:', 'dns:\n  enable: true\nproxies:'));
+    expect(codes(mh)).toEqual([CODE]);
+    // The rendered file is the template's dns, as before.
+    expect(mh.rendered).toContain('enable: true');
+    // Without `iceslab.routing: preset` the panel hands no rules: nothing to say.
+    const noRouting = JSON.parse(DEFAULT_TEMPLATE_BODIES.singbox) as Record<string, unknown>;
+    delete noRouting.iceslab;
+    expect(codes(await run('singbox', JSON.stringify({ ...noRouting, ...sbOwn })))).toEqual([]);
+    // Stash and the old Clash are given no rules whatever their dns says.
+    for (const type of ['stash', 'clash']) {
+      expect(codes(await run(type, DEFAULT_TEMPLATE_BODIES[type as TemplateType].replace('proxies:', 'dns:\n  enable: true\nproxies:'))), type).toEqual([]);
+    }
+    // A real refusal still refuses next to the advice.
+    const both = await run('singbox', asking({ ...own, outbounds: [{ type: 'direct', tag: 'direct' }] }));
+    expect(codes(both)).toEqual([CODE, 'NO_SELECTOR_HOLDS_NODE']);
+    expect(both.ok).toBe(false);
+  });
+
   it('dry-run: the Default is ok with the nodes in it; a frame without a slot is not, and says why', async () => {
     const run = (type: string, body: string) =>
       app.inject({ method: 'POST', url: '/api/subscription-templates/dry-run', headers: auth(), payload: { type, body } });

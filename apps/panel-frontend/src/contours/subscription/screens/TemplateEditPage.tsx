@@ -25,6 +25,8 @@ import {
 } from '@/lib/domain/subscriptionTemplates';
 import {
   dryRunFacts,
+  dryRunWarningWordsKey,
+  isBlockingWarning,
   dryRunForBody,
   templateActions,
   templateEditGate,
@@ -538,12 +540,14 @@ export function TemplateEditPage() {
               </Text>
               {dry.warnings.map((w, i) => (
                 <Text key={`${i}-${w.message}`} style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '17px', color: SNOW }}>
-                  {w.message}
+                  {dryRunWarningWordsKey(w) === 'ownDns' ? t('templates.ownDnsSkipsRules') : w.message}
                 </Text>
               ))}
-              <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '16px', color: MIST }}>
-                {t('templates.warningsBlock')}
-              </Text>
+              {dry.warnings.some(isBlockingWarning) && (
+                <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '16px', color: MIST }}>
+                  {t('templates.warningsBlock')}
+                </Text>
+              )}
               {/* Nodes in no group is how a file from another panel looks. */}
               {nodesInNoGroup(dry.warnings) && (
                 <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '16px', color: CYAN }}>

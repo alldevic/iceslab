@@ -21,8 +21,8 @@ describe('the table of formats that run a DNS rule (stage 19)', () => {
     for (const id of ['xkeen', 'mihomo']) expect(row(id).kinds, id).toBe('unverified');
   });
 
-  it('a format that does not run the rule is never marked as coming', () => {
-    expect(DNS_FORMATS.filter((r) => !r.runs && r.soon)).toEqual([]);
+  it('no row carries a "coming later" marker: the output of all five exists', () => {
+    for (const r of DNS_FORMATS) expect(Object.keys(r), r.id).not.toContain('soon');
   });
 
   it('every row has a unique id', () => {

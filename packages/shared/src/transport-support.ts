@@ -175,10 +175,19 @@ export function formatDisabledForHost(disableForFormats: readonly string[] | nul
  *   - NO_GROUP_HOLDS_NODE: no proxy group holds a node (Clash family), rules
  *     have nothing to send traffic through;
  *   - NO_SELECTOR_HOLDS_NODE: no selector or urltest outbound holds a node
- *     (sing-box), the client cannot pick a server.
+ *     (sing-box), the client cannot pick a server;
+ *   - OWN_DNS_SKIPS_RULES: the template has a `dns` of its own and asks for
+ *     `iceslab.routing: preset` (xray, mihomo, sing-box): the template's `dns`
+ *     wins whole, so the DNS rules of the panel do not reach it. Advisory: it
+ *     does not refuse the template (DRY_RUN_ADVISORY_CODES).
  */
-export const DRY_RUN_WARNING_CODES = ['NO_NODE_IN_PROXIES', 'NO_GROUP_HOLDS_NODE', 'NO_SELECTOR_HOLDS_NODE'] as const;
+export const DRY_RUN_WARNING_CODES = ['NO_NODE_IN_PROXIES', 'NO_GROUP_HOLDS_NODE', 'NO_SELECTOR_HOLDS_NODE', 'OWN_DNS_SKIPS_RULES'] as const;
 export type DryRunWarningCode = (typeof DRY_RUN_WARNING_CODES)[number];
+
+/** Warnings that only inform: the template is still fine to save, and they do
+ *  not turn the run's `ok` to false. The others say the file would hand every
+ *  client nothing. */
+export const DRY_RUN_ADVISORY_CODES: readonly DryRunWarningCode[] = ['OWN_DNS_SKIPS_RULES'];
 
 /** The row of the transport table a template type reads. */
 export const TEMPLATE_TRANSPORT: Record<TemplateType, SubscriptionTransportFormat> = {

@@ -255,6 +255,8 @@ export const subscription = {
     warnings: 'The panel noticed',
     warningsBlock:
       'Such a template is not saved: with an empty slot, or nodes that never reached a group, everyone caught by this rule gets an empty subscription.',
+    ownDnsSkipsRules:
+      'This template has its own dns and asks for the panel routing. The template wins as a whole, so the DNS rules of the panel and of the presets are not run by it. The template is saved as it is.',
     rendered: 'What the client gets',
     renderedHint: 'Built over three synthetic nodes. Your servers take their place.',
     invalid: 'The server refused the template:',

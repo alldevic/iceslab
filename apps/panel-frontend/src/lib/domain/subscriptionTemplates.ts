@@ -47,6 +47,14 @@ export interface SubscriptionTemplate {
    * удаляется и не переименовывается, но его можно восстановить кнопкой.
    */
   isDefault: boolean;
+  /**
+   * Тело шаблона со своим `dns` (оно побеждает целиком, правила DNS панели до
+   * него не доходят; веха 19.7). `null`: тело не разобралось; сервер старше
+   * этой вехи поля не шлёт.
+   */
+  ownDns?: boolean | null;
+  /** Тело просит `iceslab.routing: preset`; `null`: тело не разобралось. */
+  asksRouting?: boolean | null;
   updatedAt: string;
 }
 

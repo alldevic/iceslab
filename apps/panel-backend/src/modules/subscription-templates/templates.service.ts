@@ -10,7 +10,7 @@ import {
   isReservedName,
 } from './templates.defaults.js';
 import { checkTemplateBody } from './templates.parse.js';
-import { readFrame, type Frame } from '../subscription/subscription.frames.js';
+import { frameHasOwnDns, openFrame, readFrame, type Frame } from '../subscription/subscription.frames.js';
 
 /**
  * A-236 step 2: subscription templates, the API contract 4.5a
@@ -24,6 +24,10 @@ export interface PublicTemplate {
   name: string;
   body: string;
   isDefault: boolean;
+  /** The body has a `dns` of its own (it wins whole, the panel's DNS rules do not reach it); null when the body does not read. */
+  ownDns: boolean | null;
+  /** The body asks for `iceslab.routing: preset`; null when the body does not read. */
+  asksRouting: boolean | null;
   updatedAt: string;
 }
 
@@ -63,6 +67,16 @@ export class TemplateNotDefaultError extends Error {
   }
 }
 
+/** Read at every listing: a body that does not parse is "unknown", not a failed list. */
+function dnsFacts(type: TemplateType, body: string): { ownDns: boolean | null; asksRouting: boolean | null } {
+  try {
+    const frame = readFrame(type, body);
+    return { ownDns: frameHasOwnDns(frame), asksRouting: openFrame(frame).routing };
+  } catch {
+    return { ownDns: null, asksRouting: null };
+  }
+}
+
 type Row = { id: string; type: string; name: string; body: string; updatedAt: Date };
 
 function toDto(r: Row): PublicTemplate {
@@ -72,6 +86,7 @@ function toDto(r: Row): PublicTemplate {
     name: r.name,
     body: r.body,
     isDefault: r.name === DEFAULT_TEMPLATE_NAME,
+    ...dnsFacts(r.type as TemplateType, r.body),
     updatedAt: r.updatedAt.toISOString(),
   };
 }
@@ -83,6 +98,7 @@ function codeDefault(type: TemplateType): PublicTemplate {
     name: DEFAULT_TEMPLATE_NAME,
     body: DEFAULT_TEMPLATE_BODIES[type],
     isDefault: true,
+    ...dnsFacts(type, DEFAULT_TEMPLATE_BODIES[type]),
     updatedAt: DEFAULT_TEMPLATES_REVISION,
   };
 }

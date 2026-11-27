@@ -1,4 +1,4 @@
-import { DRY_RUN_WARNING_CODES, type DryRunWarningCode } from '@iceslab/shared';
+import { DRY_RUN_ADVISORY_CODES, DRY_RUN_WARNING_CODES, type DryRunWarningCode } from '@iceslab/shared';
 import {
   TEMPLATE_TYPES,
   type SubscriptionTemplate,
@@ -225,6 +225,19 @@ export function dryRunWarningOf(w: unknown): DryRunWarning | null {
   return { code: known ? (code as DryRunWarningCode) : null, message };
 }
 
+/** Жалоба, после которой сохранять нельзя. Совет (свой `dns` шаблона, код из
+ *  `DRY_RUN_ADVISORY_CODES`) только сообщает: шаблон сохраняется как был. Строка
+ *  старого сервера и неизвестный код считаются жалобой, как всегда. */
+export function isBlockingWarning(w: DryRunWarning): boolean {
+  return w.code === null || !DRY_RUN_ADVISORY_CODES.includes(w.code);
+}
+
+/** Слова экрана для жалобы, которой экран говорит сам (код из контракта), а не
+ *  фразой сервера; `null`: показывается фраза сервера. */
+export function dryRunWarningWordsKey(w: DryRunWarning): 'ownDns' | null {
+  return w.code === 'OWN_DNS_SKIPS_RULES' ? 'ownDns' : null;
+}
+
 /**
  * Сухой прогон сказал, что узлы не попали ни в одну группу: так выглядит файл
  * из другой панели, чьи служебные ключи Iceslab не узнаёт. Рядом с жалобой
@@ -320,7 +333,7 @@ export function dryRunFacts(run: TemplateDryRun | null | undefined): DryRunFacts
   const checkOk = run.check?.ok === true ? true : run.check?.ok === false ? false : null;
   // Общий итог сервера, если он булев или null; ответ без него (старый сервер)
   // складывается тем же правилом, что у сервера: отказ или жалоба ложны.
-  const derived = checkOk === false || warnings.length > 0 ? false : checkOk;
+  const derived = checkOk === false || warnings.some(isBlockingWarning) ? false : checkOk;
   const overall = run.ok === true || run.ok === false || run.ok === null ? run.ok : derived;
   // Отказ ядра или жалоба главнее «ок» общего итога: на экране не может быть
   // зелёного над словами отказа.

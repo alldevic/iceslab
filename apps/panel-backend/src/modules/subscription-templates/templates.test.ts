@@ -90,7 +90,10 @@ describe('/api/subscription-templates', () => {
   });
 
   const auth = () => ({ authorization: `Bearer ${token}` });
-  type Dto = { id: string; type: string; name: string; body: string; isDefault: boolean; updatedAt: string };
+  type Dto = {
+    id: string; type: string; name: string; body: string; isDefault: boolean;
+    ownDns: boolean | null; asksRouting: boolean | null; updatedAt: string;
+  };
   const list = async () =>
     (JSON.parse((await app.inject({ method: 'GET', url: '/api/subscription-templates', headers: auth() })).body) as {
       templates: Dto[];
@@ -104,6 +107,21 @@ describe('/api/subscription-templates', () => {
       expect(t.body).toBe(DEFAULT_TEMPLATE_BODIES[t.type as TemplateType]);
     }
     expect(await prisma.subscriptionTemplate.count()).toBe(0);
+  });
+
+  it('m19.7: the list says which template has a dns of its own and asks for the routing; a body that does not read is unknown', async () => {
+    for (const t of await list()) expect(t, t.type).toMatchObject({ ownDns: false, asksRouting: DEFAULT_TEMPLATE_BODIES[t.type as TemplateType].includes('routing: preset') || DEFAULT_TEMPLATE_BODIES[t.type as TemplateType].includes('"routing": "preset"') });
+    const make = (type: string, name: string, body: string) =>
+      app.inject({ method: 'POST', url: '/api/subscription-templates', headers: auth(), payload: { type, name, body } });
+    expect((await make('xray-json', 'own', JSON.stringify({ iceslab: { routing: 'preset' }, dns: { servers: ['1.1.1.1'] }, outbounds: [] }))).statusCode).toBe(201);
+    expect((await make('mihomo', 'own-no-routing', 'dns:\n  enable: true\nproxies:\n')).statusCode).toBe(201);
+    // A body that parsed on save and no longer does: the list still answers.
+    await prisma.subscriptionTemplate.create({ data: { type: 'singbox', name: 'broken', body: '{ "log": ' } });
+    invalidateTemplateCache();
+    const all = await list();
+    expect(all.find((t) => t.name === 'own')).toMatchObject({ ownDns: true, asksRouting: true });
+    expect(all.find((t) => t.name === 'own-no-routing')).toMatchObject({ ownDns: true, asksRouting: false });
+    expect(all.find((t) => t.name === 'broken')).toMatchObject({ ownDns: null, asksRouting: null });
   });
 
   it('creates an own template, refuses its name twice in a type, takes it in another', async () => {

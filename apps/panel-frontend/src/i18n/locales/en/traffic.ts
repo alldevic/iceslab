@@ -220,8 +220,7 @@ export const traffic = {
       yes: 'yes',
       no: 'no',
       unverified: 'not verified',
-      soon: 'Output arrives in a later version.',
-      ownDns: 'The rule does nothing when the subscription template has its own dns: the template wins as a whole.',
+      ownDnsTemplates: 'These templates have their own dns, which wins as a whole, so they do not run the rules: {{list}}.',
       note: {
         xray: 'xray core: no DoT, a rule with tls:// is skipped.',
         xrayApps: 'Measured on the xray core; wrapper apps are not verified.',

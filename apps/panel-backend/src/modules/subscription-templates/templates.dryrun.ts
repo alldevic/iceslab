@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { parse as parseYaml } from 'yaml';
-import type { DryRunWarningCode, TemplateType } from '@iceslab/shared';
+import { DRY_RUN_ADVISORY_CODES, type DryRunWarningCode, type TemplateType } from '@iceslab/shared';
 import type { SubscriptionEndpoint } from '../subscription/subscription.formats.js';
-import { readFrame } from '../subscription/subscription.frames.js';
+import { frameHasOwnDns, openFrame, readFrame, type Frame } from '../subscription/subscription.frames.js';
 import { buildClashYaml } from '../subscription/formats/clash.js';
 import { buildSingboxJson } from '../subscription/formats/singbox.js';
 import { buildXrayJson, buildXrayJsonArray } from '../subscription/formats/xrayjson.js';
@@ -26,11 +26,12 @@ const run = promisify(execFile);
  *     panel to ask, and a core the panel does not have is said so;
  *   - `warnings`: `{ code, message }`, no node reached the file, or no group
  *     holds a node (the operator saved a frame without a slot and every client
- *     gets nothing); the codes are DRY_RUN_WARNING_CODES in shared.
+ *     gets nothing); the codes are DRY_RUN_WARNING_CODES in shared. A
+ *     template's own `dns` (advisory) is said first and does not turn `ok`.
  * `check.ok` is true when the core took the file, false when it refused it,
  * and null when it did not run (no binary on the panel, no Clash core at
  * all): null is not yes: the core did not run. The overall `ok` is false on a
- * refusal or any warning, null when nothing was refused and nothing checked,
+ * refusal or any warning but an advisory one, null when nothing was refused and nothing checked,
  * true only when the core took it and there is no warning.
  */
 
@@ -51,7 +52,7 @@ export interface DryRun {
 }
 
 function overall(check: CheckAnswer, warnings: DryRunWarning[]): boolean | null {
-  if (check.ok === false || warnings.length > 0) return false;
+  if (check.ok === false || warnings.some((w) => !DRY_RUN_ADVISORY_CODES.includes(w.code))) return false;
   return check.ok === null ? null : true;
 }
 
@@ -97,11 +98,25 @@ async function coreCheck(bin: string, args: (f: string) => string[], configs: st
   }
 }
 
+/** The template has a `dns` of its own and asks for the panel's routing: the
+ *  panel's DNS rules would reach it, and the `dns` wins whole instead. Xray,
+ *  mihomo and sing-box only: the other types get no DNS rules at all. */
+function ownDnsWarning(type: TemplateType, frame: Frame): DryRunWarning | null {
+  if (type === 'stash' || type === 'clash') return null;
+  if (!frameHasOwnDns(frame) || !openFrame(frame).routing) return null;
+  return {
+    code: 'OWN_DNS_SKIPS_RULES',
+    message: 'the template has its own `dns` and it wins whole: the DNS rules of the panel are not run by this template',
+  };
+}
+
 export async function dryRun(type: TemplateType, body: string): Promise<DryRun> {
   checkTemplateBody(type, body);
   const frame = readFrame(type, body);
   const names = DRY_RUN_NODES.map((n) => n.nodeName);
   const warnings: DryRunWarning[] = [];
+  const ownDns = ownDnsWarning(type, frame);
+  if (ownDns) warnings.push(ownDns);
 
   if (type === 'mihomo' || type === 'stash' || type === 'clash') {
     const rendered = buildClashYaml(DRY_RUN_NODES, { frame });
