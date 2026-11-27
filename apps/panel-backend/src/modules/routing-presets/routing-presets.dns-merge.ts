@@ -1,4 +1,4 @@
-import { parseDnsServer, type DnsCfg, type DnsServer } from '@iceslab/shared';
+import { DEFAULT_NODE_RESOLVERS, parseDnsServer, type DnsCfg, type DnsServer } from '@iceslab/shared';
 import { xrayDnsRules } from '../subscription/subscription.device-rules.js';
 
 /**
@@ -166,8 +166,41 @@ export function overriddenNames(manual: DnsCfg | null | undefined, rule: { match
  * itself, byte for byte (undefined for none), so a node no preset reaches gets
  * the request it always got. More than 64 names for one server go in more
  * entries of the same address.
+ *
+ * Carried servers are an ADDITION to the node's resolvers, never all of them:
+ * a `dns` with only skipFallback servers has nothing to answer the names no
+ * rule names (xray sends them to the first server). So when the manual `dns`
+ * has no general server (none without `domains`, which covers absent and empty)
+ * the agent's default resolvers are put in as general servers, after the manual
+ * ones and before the carried ones: the node answers outside the rules as it
+ * did with no `dns`. Each core takes that form: xray falls back through them in
+ * order, sing-box makes the first the final server (the others are noted as
+ * skipped), hysteria takes the first as its one resolver.
+ *
+ * With NO manual `dns` the section is the agent's default one, so it also gets
+ * the default's `queryStrategy` (xray dns_default.go, core.ResolveStrategy):
+ * `UseIP` when the node leaves by IPv6 (`exitsIpv6`, nodeExitsViaIpv6), else
+ * `UseIPv4`. A manual `dns` keeps its own queryStrategy or none, as written.
  */
-export function mergeNodeDns(manual: DnsCfg | null | undefined, carried: readonly StoredPresetDns[] | null | undefined): DnsCfg | undefined {
+export function mergeNodeDns(
+  manual: DnsCfg | null | undefined,
+  carried: readonly StoredPresetDns[] | null | undefined,
+  exitsIpv6 = false,
+): DnsCfg | undefined {
+  const { dns } = mergeWithDefaults(manual, carried);
+  return dns && !manual ? { ...dns, queryStrategy: exitsIpv6 ? 'UseIP' : 'UseIPv4' } : dns;
+}
+
+/** The servers the push has beyond the manual ones' own count and the defaults: what NODE_DNS_MAX_SERVERS limits. */
+export function nodeDnsServerCount(manual: DnsCfg | null | undefined, carried: readonly StoredPresetDns[] | null | undefined): number {
+  const { dns, defaults } = mergeWithDefaults(manual, carried);
+  return (dns?.servers.length ?? 0) - defaults;
+}
+
+function mergeWithDefaults(
+  manual: DnsCfg | null | undefined,
+  carried: readonly StoredPresetDns[] | null | undefined,
+): { dns: DnsCfg | undefined; defaults: number } {
   const byAddress = new Map<string, string[]>();
   for (const src of carried ?? []) {
     for (const rule of src.rules) {
@@ -185,6 +218,8 @@ export function mergeNodeDns(manual: DnsCfg | null | undefined, carried: readonl
       added.push({ address, domains: names.slice(i, i + NODE_DNS_MAX_DOMAINS), skipFallback: true });
     }
   }
-  if (added.length === 0) return manual ?? undefined;
-  return { ...(manual ?? {}), servers: [...(manual?.servers ?? []), ...added] };
+  if (added.length === 0) return { dns: manual ?? undefined, defaults: 0 };
+  const own = manual?.servers ?? [];
+  const general: DnsServer[] = own.some((s) => !s.domains || s.domains.length === 0) ? [] : DEFAULT_NODE_RESOLVERS.map((address) => ({ address }));
+  return { dns: { ...(manual ?? {}), servers: [...own, ...general, ...added] }, defaults: general.length };
 }

@@ -167,17 +167,30 @@ describe('19.10: the rules carried from presets ride in the same dns', () => {
     expect((await prisma.node.findUniqueOrThrow({ where: { id: node.id } })).dns).toEqual(stored(YANDEX));
   });
 
-  it('a node with only carried rules gets them alone, one with none the request it always got', async () => {
+  it('a node with only carried rules gets them after the default resolvers, one with none the request it always got', async () => {
     const carried = await makeNode();
     await prisma.node.update({ where: { id: carried.id }, data: { presetDnsRules: CARRIED } });
     expect((await applyInboundsRequestForNode(carried.id))?.dns).toEqual({
-      servers: [{ address: '10.99.0.1', domains: ['domain:example.com'], skipFallback: true }],
+      servers: [{ address: '1.1.1.1' }, { address: '8.8.8.8' }, { address: 'localhost' }, { address: '10.99.0.1', domains: ['domain:example.com'], skipFallback: true }],
+      queryStrategy: 'UseIPv4',
     });
     const plain = await makeNode(YANDEX);
     expect((await applyInboundsRequestForNode(plain.id))?.dns).toEqual(stored(YANDEX));
     const bare = await makeNode();
     const req = await applyInboundsRequestForNode(bare.id);
     expect(req && 'dns' in req).toBe(false);
+  });
+
+  it('the default section takes the node\'s IPv6 answer as its queryStrategy, a manual dns keeps its own', async () => {
+    const v6 = { observedAt: new Date().toISOString(), cores: [], ipv6: { stack: true, global: true, addresses: ['2001:db8::1'], egress: true } };
+    const node = await makeNode();
+    await prisma.node.update({ where: { id: node.id }, data: { presetDnsRules: CARRIED, cores: v6 as never } });
+    expect((await applyInboundsRequestForNode(node.id))?.dns?.queryStrategy).toBe('UseIP');
+    await prisma.node.update({ where: { id: node.id }, data: { ipv6Mode: 'off' } });
+    expect((await applyInboundsRequestForNode(node.id))?.dns?.queryStrategy).toBe('UseIPv4');
+    const manual = await makeNode({ servers: [{ address: '9.9.9.9' }] });
+    await prisma.node.update({ where: { id: manual.id }, data: { presetDnsRules: CARRIED, cores: v6 as never } });
+    expect((await applyInboundsRequestForNode(manual.id))?.dns?.queryStrategy).toBeUndefined();
   });
 
   it('a rule the core does not run is not sent', async () => {

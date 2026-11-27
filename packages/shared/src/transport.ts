@@ -929,6 +929,15 @@ export interface DnsCfg {
   disableCache?: boolean;
 }
 
+/**
+ * The resolvers the agent uses on a node whose `dns` is absent (E37;
+ * core.DefaultResolvers in apps/node/internal/core/resolvers.go, which a panel
+ * test keeps equal to this). The panel adds them as general servers when it
+ * pushes carried preset rules to a node with no general server of its own, and
+ * the node editor names them.
+ */
+export const DEFAULT_NODE_RESOLVERS: readonly string[] = ['1.1.1.1', '8.8.8.8', 'localhost'];
+
 export interface DnsServer {
   /** Plain IP ("77.88.8.8"), or a DoH endpoint ("https://dns.google/dns-query").
    *  A plain IP dodges the bootstrap problem of resolving the resolver. */

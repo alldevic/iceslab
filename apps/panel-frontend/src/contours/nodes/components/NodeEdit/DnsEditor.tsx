@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { DEFAULT_NODE_RESOLVERS } from '@iceslab/shared';
 import { Box, Select, Stack, Switch, Text, Textarea, TextInput } from '@mantine/core';
 import { Caption } from '@/contours/nodes/components/NodeEdit/Caption';
 import { CarriedDns } from '@/contours/nodes/components/NodeEdit/CarriedDns';
@@ -21,7 +22,7 @@ import {
 import type { CarriedDnsSource, NodeCore } from '@/lib/domain/nodes';
 
 /** Built-in resolvers of a node with no DNS of its own (core.DefaultResolvers in apps/node). */
-const BUILT_IN = '1.1.1.1, 8.8.8.8, localhost';
+const BUILT_IN = DEFAULT_NODE_RESOLVERS.join(', ');
 
 /**
  * The node's DNS: servers with their domains, the query strategy, the cache.

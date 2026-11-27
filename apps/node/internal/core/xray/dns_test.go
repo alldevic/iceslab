@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -278,5 +280,41 @@ func TestTheResolverDoesNotMoveTheRoutingStages(t *testing.T) {
 	// And the hijack rule is still first after the loopback management one.
 	if cfg.Routing.Rules[1]["outboundTag"] != "dns-out" {
 		t.Errorf("the DNS-hijack rule moved: %v", cfg.Routing.Rules[1])
+	}
+}
+
+// 19.10 stand defect: the panel pushes the carried rule servers after the
+// agent's default resolvers when the node names no general server of its own.
+// The shape renders as the plain default servers first, the rule server scoped
+// and skipFallback, so a name outside the rule falls to 1.1.1.1 and not to the
+// rule's server. xray loads it when XRAY_BIN is set.
+func TestCarriedRuleServersComeAfterTheDefaultResolvers(t *testing.T) {
+	setting := &dto.DnsCfg{Servers: []dto.DnsServer{
+		{Address: "1.1.1.1"}, {Address: "8.8.8.8"}, {Address: "localhost"},
+		{Address: "10.99.0.1", Domains: []string{"domain:example.com"}, SkipFallback: true},
+	}}
+	dns := renderedDns(t, setting)
+	got, _ := json.Marshal(dns["servers"])
+	want := `["1.1.1.1","8.8.8.8","localhost",{"address":"10.99.0.1","domains":["domain:example.com"],"skipFallback":true}]`
+	if string(got) != want {
+		t.Fatalf("servers %s, want %s", got, want)
+	}
+	bin := os.Getenv("XRAY_BIN")
+	if bin == "" {
+		t.Log("XRAY_BIN not set: the core is not asked")
+		return
+	}
+	in := validInbound()
+	in.RealityPrivateKey = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA" // a well-formed key: xray decodes it
+	blob, err := renderMultiConfig([]InboundConfig{in}, policyUsers(), nil, 8080, nil, setting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, blob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(bin, "-test", "-c", path).CombinedOutput(); err != nil {
+		t.Fatalf("xray refused the render: %v\n%s", err, out)
 	}
 }

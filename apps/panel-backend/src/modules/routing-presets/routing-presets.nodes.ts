@@ -7,7 +7,7 @@ import {
   NODE_DNS_MAX_SERVERS,
   carriesRule,
   findDnsConflict,
-  mergeNodeDns,
+  nodeDnsServerCount,
   resolveDnsConflicts,
   type DnsConflict,
   type NamedDnsSource,
@@ -209,7 +209,7 @@ export async function planCarriedDns(scope: DnsPlanScope, db: Db = prisma): Prom
         .map((s) => ({ presetId: s.presetId, rules: s.rules.filter(carriesRule).map((r) => ({ match: [...r.match], server: r.server })) }))
         .filter((s) => s.rules.length > 0);
     let next = carry();
-    let servers = mergeNodeDns(n.dns as DnsCfg | null, next)?.servers.length ?? 0;
+    let servers = nodeDnsServerCount(n.dns as DnsCfg | null, next);
     if (servers > NODE_DNS_MAX_SERVERS && scope.refuse) throw new RoutingPresetDnsLimitError(n.name, servers);
     // Nobody to refuse: the preset that came last is the one left out, until the node fits.
     while (servers > NODE_DNS_MAX_SERVERS && next.some((s) => s.presetId !== null)) {
@@ -217,7 +217,7 @@ export async function planCarriedDns(scope: DnsPlanScope, db: Db = prisma): Prom
       left.push({ kind: 'limit', presetId: last.presetId, count: servers });
       kept = kept.filter((s) => s !== last);
       next = carry();
-      servers = mergeNodeDns(n.dns as DnsCfg | null, next)?.servers.length ?? 0;
+      servers = nodeDnsServerCount(n.dns as DnsCfg | null, next);
     }
     const nextOrNull = next.length > 0 ? next : null;
     const leftOrNull = left.length > 0 ? left : null;

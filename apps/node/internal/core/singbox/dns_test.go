@@ -342,3 +342,40 @@ func TestEveryProtocolRendersADnsSectionThePinnedEngineTakes(t *testing.T) {
 		}()
 	}
 }
+
+// 19.10 stand defect: the panel adds the agent's default resolvers as general
+// servers ahead of the carried rule servers. The first general one is the final
+// server, so a name no rule names goes to 1.1.1.1; the later general ones are
+// noted as skipped, the rule server answers its names.
+func TestDefaultResolversAheadOfCarriedRulesMakeTheFirstOneFinal(t *testing.T) {
+	s, notes := nodeDNS(&dto.DnsCfg{Servers: []dto.DnsServer{
+		{Address: "1.1.1.1"}, {Address: "8.8.8.8"}, {Address: "localhost"},
+		{Address: "10.99.0.1", Domains: []string{"domain:example.com"}, SkipFallback: true},
+	}}, false)
+	want := `{"servers":[{"type":"udp","tag":"node-dns-1","server":"1.1.1.1"},{"type":"udp","tag":"node-dns-4","server":"10.99.0.1"},{"type":"local","tag":"egress-dns"}],` +
+		`"rules":[{"domain_suffix":["example.com"],"action":"route","server":"node-dns-4"}],"final":"node-dns-1"}`
+	if got := dnsJSON(t, s); got != want || len(notes) != 2 {
+		t.Fatalf("got %s %v", got, notes)
+	}
+	bin := os.Getenv("SINGBOX_BIN")
+	if bin == "" {
+		t.Log("SINGBOX_BIN not set: the engine is not asked")
+		return
+	}
+	dir := t.TempDir()
+	cert, key := selfSigned(t, dir)
+	a := New(Config{Protocol: "tuic", BinaryPath: bin, StatsListen: "127.0.0.1:29100"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := a.ApplyDns(json.RawMessage(`{"servers":[{"address":"1.1.1.1"},{"address":"8.8.8.8"},{"address":"localhost"},{"address":"10.99.0.1","domains":["domain:example.com"],"skipFallback":true}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	users := map[string]userEntry{"u-1": {UUID: "5f0c9a3e-2b7d-4e51-9c8a-1d2e3f4a5b6c", Password: "5f0c9a3e-2b7d-4e51-9c8a-1d2e3f4a5b6c"}}
+	blob, err := a.renderAll(cert, key, a.cfg.StatsListen, []heldInbound{{id: "aaaaaaaa-1", cfg: InboundConfig{ListenPort: 29011, ServerName: "n.example.test"}}}, users)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "config.json")
+	_ = os.WriteFile(path, blob, 0o600)
+	if out, err := exec.Command(bin, "check", "-c", path).CombinedOutput(); err != nil {
+		t.Fatalf("sing-box check: %v\n%s", err, out)
+	}
+}

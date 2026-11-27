@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { DEFAULT_NODE_RESOLVERS } from '@iceslab/shared';
 import {
   carriesRule,
   findDnsConflict,
   mergeNodeDns,
+  nodeDnsServerCount,
   normalizeDnsName,
   normalizeDnsServer,
   resolveDnsConflicts,
@@ -69,6 +73,8 @@ describe('findDnsConflict', () => {
   });
 });
 
+const DEFAULTS = DEFAULT_NODE_RESOLVERS.map((address) => ({ address }));
+
 describe('mergeNodeDns', () => {
   const manual = { servers: [{ address: '77.88.8.8', domains: ['geosite:category-ru'], skipFallback: true }, { address: '8.8.8.8' }], queryStrategy: 'UseIPv4' as const };
 
@@ -97,14 +103,52 @@ describe('mergeNodeDns', () => {
 
   it('with no manual dns, the carried servers alone', () => {
     expect(mergeNodeDns(null, [{ presetId: 'a', rules: [{ match: ['x.com'], server: 'https://dns.example/dns-query' }] }])).toEqual({
-      servers: [{ address: 'https://dns.example/dns-query', domains: ['domain:x.com'], skipFallback: true }],
+      queryStrategy: 'UseIPv4',
+      servers: [...DEFAULTS, { address: 'https://dns.example/dns-query', domains: ['domain:x.com'], skipFallback: true }],
     });
+  });
+
+  it('with no manual dns the agent\'s default resolvers stay as general servers, ahead of the carried ones', () => {
+    const rules = [{ presetId: 'a', rules: [{ match: ['x.com'], server: '10.0.0.1' }] }];
+    const out = mergeNodeDns(undefined, rules);
+    expect(out?.servers.slice(0, 3)).toEqual([{ address: '1.1.1.1' }, { address: '8.8.8.8' }, { address: 'localhost' }]);
+    expect(mergeNodeDns({ servers: [] }, rules)?.servers).toHaveLength(4);
+    expect(nodeDnsServerCount(null, rules)).toBe(1);
+  });
+
+  it('the default section gets the queryStrategy the agent would give: UseIP out by IPv6, else UseIPv4; a manual dns keeps its own', () => {
+    const rules = [{ presetId: 'a', rules: [{ match: ['x.com'], server: '10.0.0.1' }] }];
+    expect(mergeNodeDns(null, rules)?.queryStrategy).toBe('UseIPv4');
+    expect(mergeNodeDns(null, rules, false)?.queryStrategy).toBe('UseIPv4');
+    expect(mergeNodeDns(null, rules, true)?.queryStrategy).toBe('UseIP');
+    expect(mergeNodeDns({ servers: [{ address: '9.9.9.9' }] }, rules, true)).not.toHaveProperty('queryStrategy');
+    expect(mergeNodeDns({ servers: [{ address: '9.9.9.9' }], queryStrategy: 'UseIPv6' }, rules, true)?.queryStrategy).toBe('UseIPv6');
+    expect(mergeNodeDns(null, null, true)).toBeUndefined();
+  });
+
+  it('a manual dns without a general server gets the defaults after its own servers, and keeps its options', () => {
+    const only = { servers: [{ address: '77.88.8.8', domains: ['geosite:category-ru'], skipFallback: true }], queryStrategy: 'UseIPv4' as const, disableCache: true };
+    const out = mergeNodeDns(only, [{ presetId: 'a', rules: [{ match: ['x.com'], server: '10.0.0.1' }] }]);
+    expect(out).toEqual({ ...only, servers: [only.servers[0], ...DEFAULTS, { address: '10.0.0.1', domains: ['domain:x.com'], skipFallback: true }] });
+    expect(mergeNodeDns(only, null)).toBe(only);
+  });
+
+  it('a manual dns with a general server gets no defaults', () => {
+    const out = mergeNodeDns(manual, [{ presetId: 'a', rules: [{ match: ['x.com'], server: '10.0.0.1' }] }]);
+    expect(out?.servers).toEqual([...manual.servers, { address: '10.0.0.1', domains: ['domain:x.com'], skipFallback: true }]);
+    expect(nodeDnsServerCount(manual, [{ presetId: 'a', rules: [{ match: ['x.com'], server: '10.0.0.1' }] }])).toBe(3);
+  });
+
+  it('the defaults are the agent\'s core.DefaultResolvers', () => {
+    const go = readFileSync(resolve(__dirname, '../../../../node/internal/core/resolvers.go'), 'utf8');
+    const m = /var DefaultResolvers = \[\]string\{([^}]*)\}/.exec(go);
+    expect(m && [...m[1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1])).toEqual([...DEFAULT_NODE_RESOLVERS]);
   });
 
   it('keeps the 64 names a server takes: more go in a second entry of the same address', () => {
     const names = Array.from({ length: 70 }, (_, i) => `n${i}.example`);
     const out = mergeNodeDns(null, [{ presetId: 'a', rules: [{ match: names.slice(0, 40), server: '10.0.0.1' }, { match: names.slice(40), server: '10.0.0.1' }] }]);
-    expect(out?.servers.map((s) => [s.address, s.domains?.length])).toEqual([['10.0.0.1', 64], ['10.0.0.1', 6]]);
+    expect(out?.servers.slice(3).map((s) => [s.address, s.domains?.length])).toEqual([['10.0.0.1', 64], ['10.0.0.1', 6]]);
   });
 });
 

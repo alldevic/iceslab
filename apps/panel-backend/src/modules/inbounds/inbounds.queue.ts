@@ -7,7 +7,7 @@ import type {
   ProtocolName,
   XrayCascadeFragments,
 } from '@iceslab/shared';
-import { readIpv6Mode } from '@iceslab/shared';
+import { readIpv6Mode, type NodeCores } from '@iceslab/shared';
 import { queueRedis, redis } from '../../lib/infra/redis.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
@@ -30,6 +30,7 @@ import { checkRenderDrift, recordPushed } from './render-drift.js';
 import { ensureHysteriaTls } from '../nodes/hysteria-tls.js';
 import { ensureAwg3Geometry } from '../nodes/awg3-geometry.js';
 import { pushedBindingsWhere } from '../nodes/pushed-bindings.js';
+import { nodeExitsViaIpv6 } from '../nodes/node-core-gate.js';
 import { mergeNodeDns, type StoredPresetDns } from '../routing-presets/routing-presets.dns-merge.js';
 
 // Moved to its own module (E30) so the install command reads the address the
@@ -118,6 +119,8 @@ interface NodeRow {
   presetDnsRules: unknown;
   /** 18.6: auto | on | off; only `on` and `off` go to the agent. */
   ipv6Mode: string;
+  /** What the agent reported: whether the node leaves by IPv6 (19.10: the queryStrategy of the default resolvers). */
+  cores: unknown;
   /** Null until a push landed on this node once: nothing of ours is on it. */
   lastInboundSyncAt: Date | null;
 }
@@ -125,7 +128,7 @@ interface NodeRow {
 async function fetchNode(nodeId: string): Promise<NodeRow | null> {
   return prisma.node.findFirst({
     where: { id: nodeId, deletedAt: null, status: { not: 'disabled' } },
-    select: { id: true, name: true, address: true, dns: true, presetDnsRules: true, ipv6Mode: true, lastInboundSyncAt: true },
+    select: { id: true, name: true, address: true, dns: true, presetDnsRules: true, ipv6Mode: true, cores: true, lastInboundSyncAt: true },
   });
 }
 
@@ -532,7 +535,11 @@ async function buildApplyInboundsRequest(node: NodeRow): Promise<ApplyInboundsRe
   const inbounds = await fetchEnabledInbounds(node.id);
   // 19.10: the manual resolver first, then the servers carried from presets;
   // a node nothing is carried to gets its manual `dns` as before.
-  const dns = mergeNodeDns(node.dns as DnsCfg | null, node.presetDnsRules as StoredPresetDns[] | null);
+  const dns = mergeNodeDns(
+    node.dns as DnsCfg | null,
+    node.presetDnsRules as StoredPresetDns[] | null,
+    nodeExitsViaIpv6(node.cores as NodeCores | null, readIpv6Mode(node.ipv6Mode)),
+  );
   // Э3 шаг 1: the cascade is a node-level block now, next to the policy and the
   // resolver. Read back off the xray inbound rather than fetched a second time,
   // so the node-level block and the transitional copy are literally the same

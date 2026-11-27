@@ -156,3 +156,16 @@ func TestSameDnsIsByWireForm(t *testing.T) {
 		t.Error("sameDns")
 	}
 }
+
+// 19.10 stand defect: the default resolvers ahead of the carried rule servers
+// give hysteria its one resolver, the first general server (1.1.1.1), and the
+// node still reports the setting as not executed (rule servers are not).
+func TestDefaultResolversAheadOfCarriedRulesGiveTheFirstAsTheResolver(t *testing.T) {
+	res, executed, _ := nodeResolver(&dto.DnsCfg{Servers: []dto.DnsServer{
+		{Address: "1.1.1.1"}, {Address: "8.8.8.8"}, {Address: "localhost"},
+		{Address: "10.99.0.1", Domains: []string{"domain:example.com"}, SkipFallback: true},
+	}})
+	if res == nil || res.Type != "udp" || res.Addr != "1.1.1.1:53" || executed {
+		t.Fatalf("got %+v executed=%v", res, executed)
+	}
+}
