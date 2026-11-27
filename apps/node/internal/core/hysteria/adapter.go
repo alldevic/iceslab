@@ -31,6 +31,7 @@ import (
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/subprocess"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/dto"
 )
 
 const Name = "hysteria"
@@ -149,6 +150,10 @@ type Adapter struct {
 	// hysteria entry of a cascade, and the config carries no outbounds at all,
 	// which is what every hysteria node rendered before the phase.
 	chain *ChainHandoff
+
+	// dns: the node's resolver as the panel pushed it (ApplyDns, dns.go); nil =
+	// none, the host's own resolver answers.
+	dns *dto.DnsCfg
 
 	callbackSrv *http.Server
 	proc        *subprocess.Subprocess // hysteria subprocess; nil when BinaryPath is empty
@@ -870,8 +875,15 @@ func (a *Adapter) ApplyCascade(raw json.RawMessage) error {
 
 // rewriteLocked renders and writes the config. Caller holds mu.
 func (a *Adapter) rewriteLocked(inbound InboundConfig, handoff *ChainHandoff, who string) error {
+	res, _, _ := nodeResolver(a.dns)
+	return a.rewriteWithLocked(inbound, handoff, res, who)
+}
+
+// rewriteWithLocked is rewriteLocked with the resolver given, for a setting
+// that is stored only once it has rendered.
+func (a *Adapter) rewriteWithLocked(inbound InboundConfig, handoff *ChainHandoff, res *resolver, who string) error {
 	a.ipv6.Note(nodeHasIPv6())
-	blob, err := renderConfig(a.cfg, inbound, handoff)
+	blob, err := renderConfigDns(a.cfg, inbound, handoff, res)
 	if err != nil {
 		return fmt.Errorf("hysteria %s: render: %w", who, err)
 	}

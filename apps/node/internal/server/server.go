@@ -595,6 +595,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			// others, so "this node applies the policy" is already a lie.
 			_, rendersPolicy := adapter.(core.PolicyReceiver)
 			_, rendersDns := adapter.(core.DnsReceiver)
+			// An engine that carries out only part of a setting says so
+			// (19.14): receiving it is not executing it.
+			if r, ok := adapter.(core.DnsExecutionReporter); ok && rendersDns {
+				rendersDns = r.ExecutesDns()
+			}
 			cs.RendersPolicy = &rendersPolicy
 			cs.RendersDns = &rendersDns
 			// Whether this core is configured at all. Same optional-interface

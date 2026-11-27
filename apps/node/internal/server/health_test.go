@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core/hysteria"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/singbox"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/dto"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/payload"
@@ -178,8 +179,10 @@ func TestEachCoreReportsWhetherItRendersThePolicy(t *testing.T) {
 	if d := byName["xray"].RendersDns; d == nil || !*d {
 		t.Error("the resolver has the same shape and the same answer for xray")
 	}
+	// hysteria here is a stand-in with no DnsReceiver at all; the real
+	// adapter's answer per setting is TestHysteriaReportsWhatItExecutesOfTheResolver.
 	if d := byName["hysteria"].RendersDns; d == nil || *d {
-		t.Error("hysteria renders no resolver and has to say so")
+		t.Error("a core with no resolver receiver has to say it renders none")
 	}
 	// The engine, not only the protocol: one node can serve tuic and vless both
 	// through sing-box, and the capability belongs to the engine.
@@ -504,5 +507,39 @@ func TestTheIPv6BlockNamesTheAPIListener(t *testing.T) {
 	s.cfg.Host = "0.0.0.0"
 	if h := healthOf(t, s); h.IPv6 == nil || h.IPv6.ApiListen != "0.0.0.0" {
 		t.Errorf("ipv6 block %+v", h.IPv6)
+	}
+}
+
+// 19.14: the real hysteria adapter takes the resolver but has one general
+// resolver and no choice by domain, so receiving a setting is not executing it:
+// `rendersDns` is true for a general server (or none held), false when the
+// setting has rules by domain or nothing this core can draw.
+func TestHysteriaReportsWhatItExecutesOfTheResolver(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cases := []struct {
+		name, dns string
+		want      bool
+	}{
+		{"no setting", ``, true},
+		{"general server", `{"servers":[{"address":"1.1.1.1"}]}`, true},
+		{"general server first of several", `{"servers":[{"address":"1.1.1.1"},{"address":"9.9.9.9"}]}`, true},
+		{"domain rule only", `{"servers":[{"address":"10.0.0.2","domains":["corp.example"]}]}`, false},
+		{"domain rule beside a general server", `{"servers":[{"address":"10.0.0.2","domains":["corp.example"]},{"address":"1.1.1.1"}]}`, false},
+		{"a kind hysteria has no resolver for", `{"servers":[{"address":"quic://dns.example"}]}`, false},
+	}
+	for _, c := range cases {
+		a := hysteria.New(hysteria.Config{}, log)
+		if c.dns != "" {
+			if err := a.ApplyDns(json.RawMessage(c.dns)); err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+		}
+		got := health(t, a)
+		if len(got.Cores) != 1 || got.Cores[0].RendersDns == nil {
+			t.Fatalf("%s: no rendersDns in %+v", c.name, got.Cores)
+		}
+		if *got.Cores[0].RendersDns != c.want {
+			t.Errorf("%s: rendersDns = %v, want %v", c.name, *got.Cores[0].RendersDns, c.want)
+		}
 	}
 }

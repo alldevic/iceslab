@@ -225,6 +225,17 @@ type DnsReceiver interface {
 	ApplyDns(dns json.RawMessage) error
 }
 
+// DnsExecutionReporter is an OPTIONAL second interface for a DnsReceiver whose
+// engine carries out only part of what a setting can say (hysteria: one general
+// resolver, no choice by domain). Implementing DnsReceiver alone reports
+// "renders the resolver" for any setting; this says whether the setting held
+// NOW is carried out in full, and `rendersDns` is true only when it is.
+//
+// A receiver that does not implement it reports what it always did.
+type DnsExecutionReporter interface {
+	ExecutesDns() bool
+}
+
 // CascadeReceiver is an OPTIONAL interface for adapters that can draw this
 // node's hop in a cascade (see dto.NodeCascade).
 //

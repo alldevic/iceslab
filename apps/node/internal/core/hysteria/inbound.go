@@ -213,6 +213,12 @@ func inboundEqual(a, b InboundConfig) bool {
 // surface is tiny and the layout is fixed; a 60-line writer is cheaper than
 // a transitive dep.
 func renderConfig(adapterCfg Config, inbound InboundConfig, handoff *ChainHandoff) ([]byte, error) {
+	return renderConfigDns(adapterCfg, inbound, handoff, nil)
+}
+
+// renderConfigDns is renderConfig with the node's resolver (dns.go): nil draws
+// no `resolver:` section, the bytes every node had before 19.14.
+func renderConfigDns(adapterCfg Config, inbound InboundConfig, handoff *ChainHandoff, res *resolver) ([]byte, error) {
 	// Hostname selection mirrors the port priority below: what the panel pushed
 	// wins, the install-time value is the fallback for a panel too old to send
 	// one. A newline or YAML metacharacter in a pushed hostname would break out
@@ -368,10 +374,15 @@ func renderConfig(adapterCfg Config, inbound InboundConfig, handoff *ChainHandof
 	}
 
 	if handoff != nil {
+		// No resolver for a hand-off: the only outbound is the chain's socks5,
+		// which gets the name as it came and the chain resolves it.
 		if err := writeChainOutbound(&b, handoff); err != nil {
 			return nil, err
 		}
 	} else {
+		if err := writeResolver(&b, res); err != nil {
+			return nil, err
+		}
 		writeDirectOutbound(&b)
 	}
 
