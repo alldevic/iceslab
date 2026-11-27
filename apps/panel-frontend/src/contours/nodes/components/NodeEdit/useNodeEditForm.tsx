@@ -34,6 +34,7 @@ import { listNodePolicies, policyFitRefusal as readPolicyRefusal } from '@/lib/d
 import { listSquads } from '@/lib/domain/squads';
 import { useOverview } from '@/lib/domain/dashboard';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
+import { dnsPatch, dnsProblems } from '@/contours/nodes/lib/nodeDnsForm';
 import { defaults, domainOk, domainPatch, egressOf, nodeEnginesPut, statusPut, type FormValues } from '@/contours/nodes/lib/nodeEditForm';
 import { loadFailure, loadView } from '@/lib/ui/loadView';
 import { nodeEnginesRefusal, type NodeEnginesRefusal } from '@/contours/nodes/lib/nodeCreateForm';
@@ -109,6 +110,8 @@ export function useNodeEditForm() {
       },
       maxUsers: (v) => (parseMaxUsers(v).ok ? null : t('nodeEdit.maxUsersDesc')),
       domain: (v) => (domainOk(v) ? null : t('nodeEdit.domainBad')),
+      // The editor says which field; here the save is held back (limits of DnsSchema).
+      dns: (v) => (dnsProblems(v).length === 0 ? null : t('nodeEdit.dnsInvalid')),
       name: (v) => {
         const trimmed = v.trim();
         if (trimmed.length === 0) return t('validation.nameRequired');
@@ -214,6 +217,8 @@ export function useNodeEditForm() {
         ...multiplierPatch(form.values.consumptionMultiplier, true),
         ...maxUsersPatch(form.values.maxUsers),
         policyId: form.values.policyId || null,
+        // Only when changed; the server re-pushes the node, and the sync strip says when it landed.
+        ...dnsPatch(node?.dns, form.values.dns),
         // Поколения AWG нет: это факт модуля, не выбор (227054e).
         // Версии ядер: только изменённые компоненты, и только если сервер поле
         // знает (ключ пришёл в ответе про ноду).

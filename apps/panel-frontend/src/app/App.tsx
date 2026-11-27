@@ -63,6 +63,7 @@ const TemplatesPage = lazy(() =>
 const GeoSetsPage = lazy(() =>
   import('@/contours/traffic/screens/GeoSetsPage').then((m) => ({ default: m.GeoSetsPage })),
 );
+const DnsPage = lazy(() => import('@/contours/nodes/screens/DnsPage').then((m) => ({ default: m.DnsPage })));
 const NamedOutboundsPage = lazy(() =>
   import('@/contours/traffic/screens/NamedOutboundsPage').then((m) => ({ default: m.NamedOutboundsPage })),
 );
@@ -113,6 +114,7 @@ export default function App() {
           <Route path="/subscription/routes" element={<RoutesPage />} />
           {/* Гео-наборы, фаза 9. Экран живёт до бэкенда и говорит об этом. */}
           <Route path="/traffic/geo-sets" element={<GeoSetsPage />} />
+          <Route path="/traffic/dns" element={<DnsPage />} />
           <Route path="/traffic/named-outbounds" element={<NamedOutboundsPage />} />
           <Route path="/insights" element={<InsightsPage />} />
           <Route path="/audit" element={<AuditPage />} />

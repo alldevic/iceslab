@@ -16,6 +16,7 @@ import { SystemPanel } from '@/contours/nodes/components/NodeEdit/SystemPanel';
 import { TabButton } from '@/contours/nodes/components/NodeEdit/TabButton';
 import { useNodeEditForm } from '@/contours/nodes/components/NodeEdit/useNodeEditForm';
 import { CoresPanel } from '@/contours/nodes/components/NodeEdit/CoresPanel';
+import { DnsEditor } from '@/contours/nodes/components/NodeEdit/DnsEditor';
 import { AMBER, CARD, DISPLAY, HAIRLINE, MIST, MONO, MOSS, RED, SNOW, VIOLET, WELL } from '@/contours/nodes/lib/colors';
 import { refusalOf } from '@/lib/domain/syncRefusal';
 import { chainFacts } from '@/lib/domain/chainStatus';
@@ -86,14 +87,15 @@ export function NodeEditPage() {
   } = useNodeEditForm();
 
   // `#cores`: the deploy window and the host form link here for a core the
-  // node lacks. Scrolled once the node has loaded, since the section is not in
+  // node lacks; `#dns`: the DNS list of nodes links to the editor. Scrolled once the node has loaded, since the section is not in
   // the page before that, and a beat later: the cards above it fill from their
   // own queries and would push it back down.
   const loaded = node !== undefined;
   useEffect(() => {
-    if (!loaded || window.location.hash !== '#cores') return;
+    const anchor = window.location.hash.slice(1);
+    if (!loaded || (anchor !== 'cores' && anchor !== 'dns')) return;
     const timer = setTimeout(() => {
-      document.getElementById('cores')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      document.getElementById(anchor)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 600);
     return () => clearTimeout(timer);
   }, [loaded]);
@@ -331,6 +333,17 @@ export function NodeEditPage() {
                   onIntent={(next) => form.setFieldValue('coreVersions', next)}
                   refusal={coreRefusal}
                   awgGenerationsKnown={awgGenerationsKnown(fleetQuery.data)}
+                />
+              </Box>
+
+              {/* Who answers the name lookups of this node's users. Saved with
+                  the rest of the form, so the sync strip above says when the
+                  push landed. */}
+              <Box id="dns" style={{ scrollMarginTop: 16 }}>
+                <DnsEditor
+                  value={form.values.dns}
+                  onChange={(next) => form.setFieldValue('dns', next)}
+                  cores={node.cores?.cores}
                 />
               </Box>
             </Box>

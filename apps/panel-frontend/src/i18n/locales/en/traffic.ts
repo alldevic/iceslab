@@ -412,6 +412,25 @@ export const traffic = {
       'Without a set of your own the rules run on the lists built into the core. Your own set is for when those are not enough: your domains, your subnets, your refresh cadence.',
   },
 
+  dnsPage: {
+    title: 'Node DNS',
+    count: '{{n}} nodes',
+    intro:
+      'Who answers the name lookups of each node\'s clients. It is edited in the node form, the «DNS» block; this page shows how much is set and which cores execute it.',
+    emptyTitle: 'No nodes yet',
+    emptyBody: 'DNS is set on a node, and there are none yet: add a node and it will show up here.',
+    summary: '{{servers}} servers · {{domains}} domains',
+    builtIn: 'no DNS of its own: the node\'s built-in resolvers',
+    state: {
+      executes: 'executed',
+      'not-executes': 'not executed',
+      unknown: 'unknown',
+    },
+    executing: 'executing: {{cores}}',
+    notExecuting: 'not executing: {{cores}}',
+    unanswered: 'no answer: {{cores}}',
+    edit: 'Edit',
+  },
   namedOutbounds: {
     title: 'Named outbounds',
     count: '{{n}} total',

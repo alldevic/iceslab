@@ -53,6 +53,7 @@ const PAGES: PageCase[] = [
   { file: 'audit/AuditPage', route: '/audit', url: '/audit', phrase: 'audit.emptyFiltered' },
   { file: 'traffic/RoutesPage', route: '/subscription/routes', url: '/subscription/routes', phrase: 'routes.nodeNoPolicies' },
   { file: 'traffic/GeoSetsPage', route: '/traffic/geo-sets', url: '/traffic/geo-sets', phrase: 'geoSets.emptyTitle' },
+  { file: 'nodes/DnsPage', route: '/traffic/dns', url: '/traffic/dns', phrase: 'dnsPage.emptyTitle' },
   { file: 'traffic/NamedOutboundsPage', route: '/traffic/named-outbounds', url: '/traffic/named-outbounds', phrase: 'namedOutbounds.emptyTitle' },
   { file: 'settings/SettingsPage', route: '/settings', url: '/settings', phrase: 'settings.tokens.empty' },
   { file: 'subscription/SrrPage', route: '/subscription/delivery', url: '/subscription/delivery', phrase: 'delivery.empty' },

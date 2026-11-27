@@ -940,12 +940,7 @@ function AppLayoutInner() {
                 placeholder
                 placeholderTitle={notWired}
               />
-              <NavItem
-                label={t('sidebar.dns')}
-                icon={<NavDnsIcon />}
-                placeholder
-                placeholderTitle={notWired}
-              />
+              <NavItem to="/traffic/dns" label={t('sidebar.dns')} icon={<NavDnsIcon />} />
             </Stack>
 
             {/* Tools group: read-only instruments an operator reaches for when

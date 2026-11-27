@@ -1,4 +1,4 @@
-import type { CoreComponent, EngineName, NodeCoreInfo, NodeCores, NodeCoreVersions } from '@iceslab/shared';
+import type { CoreComponent, DnsCfg, EngineName, NodeCoreInfo, NodeCores, NodeCoreVersions } from '@iceslab/shared';
 import type { AwgProtocol } from '@/lib/domain/awg';
 import type { NodeGeoFact, NodeGeoIntended } from '@/lib/domain/geoSets';
 import { api } from '@/lib/net/client';
@@ -126,6 +126,9 @@ export interface Node {
    * node never carries a copy of them.
    */
   policyId: string | null;
+  /** Who answers the name lookups of this node's users (nodes.mapper.ts). null =
+   *  the node's built-in resolver set; absent on a server older than the field. */
+  dns?: DnsCfg | null;
   /**
    * Поколение AmneziaWG, которое говорит модуль ядра на этой ноде (227054e):
    * ФАКТ из отчёта, не выбор, в PUT не уходит. См. `lib/domain/awg.ts`.
@@ -392,6 +395,12 @@ export interface UpdateNodeInput {
    * direction this node does not dial). The screen shows that sentence.
    */
   policyId?: string | null;
+  /**
+   * The node's resolver setting. Absent = untouched; `null` puts the node back
+   * on its built-in resolvers (and re-pushes it), so sending null is an action.
+   * At most 16 servers, see `dnsProblems` (contours/nodes/lib/nodeDnsForm.ts).
+   */
+  dns?: DnsCfg | null;
   /**
    * Три значения на компонент: версия пишется, null возвращает на пин,
    * пропущенный компонент не трогается; null на всё = все пины. Отказ 400

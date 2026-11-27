@@ -323,6 +323,51 @@ export const nodes = {
       unknown: 'the agent does not report it',
     },
     coresRendersPolicy: 'applies the policy',
+    coresNoDns: 'no node DNS',
+    coresNoDnsHint: 'This core does not execute the node DNS: the setting does not reach its clients.',
+    dnsTitle: 'DNS',
+    dnsIntro:
+      'Who answers the name lookups of this node\'s clients: servers in order, the first one whose domains match answers. Saved with the node and applied once the config is pushed.',
+    dnsDefaultNote:
+      'The node has no DNS of its own: it uses its built-in resolver set ({{resolvers}}). Add a server to set your own.',
+    dnsServerN: 'Server {{n}}',
+    dnsAddServer: 'Add server',
+    dnsRemoveServer: 'Remove',
+    dnsAddress: 'Address',
+    dnsAddressDesc:
+      'An IP, https://… (DoH) or tcp://… The string goes to the core as it is, and a form outside xray\'s vocabulary is refused by the node on apply. A plain IP avoids resolving the resolver\'s own name.',
+    dnsDomains: 'Domains',
+    dnsDomainsDesc:
+      'One per line: full:, domain:, regexp:, geosite:, ext:set:tag. Empty: the server answers everything.',
+    dnsSkipFallback: 'No fallback server',
+    dnsSkipFallbackDesc: 'A name this server did not resolve is not sent to the general resolver.',
+    dnsAdvanced: 'Advanced',
+    dnsAdvancedHide: 'Hide advanced',
+    dnsExpectIps: 'Expected addresses',
+    dnsExpectIpsDesc: 'Accept answers only inside these ranges, one per line: geoip:ru, 10.0.0.0/8.',
+    dnsQueryStrategy: 'Query strategy',
+    dnsQueryStrategyDesc: 'What the resolver is allowed to return.',
+    dnsQueryStrategyDefault: 'the core default',
+    dnsDisableCache: 'Disable the cache',
+    dnsDisableCacheDesc: 'For hunting a stale answer, not for everyday use.',
+    dnsReset: 'Reset to default',
+    dnsInvalid: 'The node DNS is filled in wrongly: fix the marked fields.',
+    dnsProblem: {
+      servers: { tooMany: 'At most {{limit}} servers.' },
+      address: { required: 'The server address is required.', tooLong: 'The address is at most {{limit}} characters.' },
+      domains: { tooMany: 'At most {{limit}} domains per server.', tooLong: 'A domain entry is at most {{limit}} characters.' },
+      expectIps: { tooMany: 'At most {{limit}} expected addresses.', tooLong: 'An entry is at most {{limit}} characters.' },
+    },
+    dnsReachUnknown:
+      'Whether this node executes DNS is unknown: the agent is older than the field or has not reported its cores. This is not «does not execute»: update the agent to get an answer.',
+    dnsReachAll: 'The node DNS is executed by: {{cores}}.',
+    dnsReachSomeUnknown: 'No answer about {{cores}}: that core\'s agent is older than the field. It can be counted neither as executing nor as not.',
+    dnsReachSomeTag: 'DNS DOES NOT REACH EVERYONE',
+    dnsReachSome:
+      'Only {{executing}} executes the node DNS. Clients connected through {{missing}} ask for names outside this setting.',
+    dnsReachNoneTag: 'DNS DOES NOT WORK HERE',
+    dnsReachNone:
+      'No core of this node executes DNS: {{cores}}. The setting is saved, but it does not affect client lookups.',
     coreFault: 'the core is not working: {{error}}',
     coreUncounted: 'no traffic accounting: user limits on this engine are not counted',
     coresAwgFact: {

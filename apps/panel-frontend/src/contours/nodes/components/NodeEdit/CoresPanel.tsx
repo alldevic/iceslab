@@ -409,6 +409,18 @@ function CoreRow({
           </Text>
         )}
 
+        {/* Обратное к метке выше, и только при ответе НЕТ: DNS ноды исполняет
+            ядро (rendersDns), и правило на ноде с hysteria рядом с xray
+            действует не для всех. Молчание поля здесь тоже молчание. */}
+        {core.rendersDns === false && (
+          <Text
+            title={t('nodeEdit.coresNoDnsHint')}
+            style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: FAINT, flexShrink: 0 }}
+          >
+            {t('nodeEdit.coresNoDns')}
+          </Text>
+        )}
+
         <Box style={{ flex: 1 }} />
 
         {/* Подсказка, не источник действий: ноль молчит. */}

@@ -61,9 +61,6 @@ const PAIRS: Pair[] = [
     front: 'Node',
     back: 'PublicNodeDto',
     file: 'nodes/nodes.mapper.ts',
-    backendOnly: {
-      dns: 'the node-level resolver (DnsCfg) is carried by the API only; no node screen edits or shows it',
-    },
   },
   { front: 'NodeSyncStatus', back: 'NodeSyncStatusDto', file: 'nodes/nodes.sync-status.ts' },
   { front: 'NodeHardening', back: 'HardeningDto', file: 'nodes/nodes.mapper.ts' },

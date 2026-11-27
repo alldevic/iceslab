@@ -2,6 +2,7 @@ import type { EngineName, NodeCoreVersions } from '@iceslab/shared';
 import type { Node, NodeLabel, NodeProtocol } from '@/lib/domain/nodes';
 import { DEFAULT_NODE_PORT } from '@/contours/nodes/lib/nodeProtocols';
 import { multiplierInput } from '@/contours/nodes/lib/nodeLimits';
+import { dnsDefaults, type DnsForm } from '@/contours/nodes/lib/nodeDnsForm';
 export interface FormValues {
   name: string;
   host: string;
@@ -25,6 +26,8 @@ export interface FormValues {
    *  правят (E42, 2359c7e), состав сообщает нода по командам «Ядер». Пусто,
    *  если сервер поля не знает: тогда на экране прежний селект протокола. */
   engines: EngineName[];
+  /** DNS ноды (nodeDnsForm.ts): уходит в PUT только разницей с сохранённым. */
+  dns: DnsForm;
   /** В работе: false = статус `disabled` (вне подписок и опроса). */
   inService: boolean;
 }
@@ -109,6 +112,7 @@ export function defaults(node: Node | null, decimalComma = false): FormValues {
     policyId: node?.policyId ?? '',
     coreVersions: { ...(node?.coreVersions ?? {}) },
     engines: [...(node?.intendedEngines ?? [])],
+    dns: dnsDefaults(node?.dns),
     inService: node?.status !== 'disabled',
   };
 }
