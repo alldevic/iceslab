@@ -17,7 +17,7 @@ import { getLogger } from '../../lib/infra/logger.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { AWG_PROTOCOLS, CORE_ARCHES, ENGINE_NAMES } from '@iceslab/shared';
-import type { CoreArch, CoreStatus, NodeCoreRestarts, NodeCores, PortHopping } from '@iceslab/shared';
+import type { CoreArch, CoreStatus, NodeCoreRestarts, NodeCores, NodeIPv6, PortHopping } from '@iceslab/shared';
 
 const METRICS_KEY_PREFIX = 'node:metrics:';
 const METRICS_TTL_SECONDS = 60;
@@ -454,6 +454,27 @@ function isPortHopping(r: PortHopping): boolean {
 }
 
 /**
+ * The IPv6 block as the panel keeps it, or undefined when the agent sent none
+ * or a malformed one (an old agent: "no IPv6", see nodeHasIpv6). Addresses are
+ * sorted here too, whatever order the agent sent: coresWorthWriting compares by
+ * content, and an order that flips between polls would rewrite the row on each.
+ * `egress` is kept only as a boolean and only when present: nothing fills it
+ * before the egress check, and absent reads as "no".
+ */
+function observedIpv6(r: NodeIPv6 | undefined): NodeIPv6 | undefined {
+  if (!r || typeof r.stack !== 'boolean' || typeof r.global !== 'boolean') return undefined;
+  const addresses = Array.isArray(r.addresses)
+    ? [...new Set(r.addresses.filter((a): a is string => typeof a === 'string' && a !== ''))].sort()
+    : [];
+  return {
+    stack: r.stack,
+    global: r.global,
+    addresses,
+    ...(typeof r.egress === 'boolean' ? { egress: r.egress } : {}),
+  };
+}
+
+/**
  * The core inventory as the panel keeps it: what the agent listed, minus the
  * parts that belong to liveness (`running`, `restarts`). See NodeCoreInfo.
  *
@@ -468,7 +489,9 @@ export function observedCores(
   arch?: CoreArch,
   chainEngine?: EngineName,
   portHopping?: PortHopping,
+  ipv6?: NodeIPv6,
 ): NodeCores {
+  const ipv6Kept = observedIpv6(ipv6);
   return {
     observedAt,
     // Only a name the manifest knows: the update command picks a release file
@@ -479,6 +502,8 @@ export function observedCores(
     ...(chainEngine && (ENGINE_NAMES as readonly string[]).includes(chainEngine) ? { chainEngine } : {}),
     // Only a range that is one ({0, 0} = none): the host screen warns by it.
     ...(portHopping && isPortHopping(portHopping) ? { portHopping: { start: portHopping.start, end: portHopping.end } } : {}),
+    // 18.2: a fact of the host, not of a core. Kept as reported, absence too.
+    ...(ipv6Kept ? { ipv6: ipv6Kept } : {}),
     cores: cores.map((c) => ({
       name: c.name,
       ...(c.engine !== undefined ? { engine: c.engine } : {}),
@@ -535,6 +560,7 @@ export function coresWorthWriting(
   if (stored.arch !== fresh.arch) return true;
   if (stored.chainEngine !== fresh.chainEngine) return true;
   if (JSON.stringify(stored.portHopping) !== JSON.stringify(fresh.portHopping)) return true;
+  if (JSON.stringify(stored.ipv6) !== JSON.stringify(fresh.ipv6)) return true;
   const storedAt = Date.parse(stored.observedAt);
   // NaN (missing or garbled stamp from an older build) counts as stale, so the
   // next poll repairs it instead of freezing forever.
@@ -639,7 +665,7 @@ async function checkOne(node: {
       unnamedDetail: verdict.message === UNNAMED_DEGRADED ? res : undefined,
       coreVersion,
       coreRestarts,
-      cores: observedCores(res.cores, new Date().toISOString(), res.arch, res.chainEngine, res.portHopping),
+      cores: observedCores(res.cores, new Date().toISOString(), res.arch, res.chainEngine, res.portHopping, res.ipv6),
       // `null` and `undefined` are different answers here: null is "the node
       // answered and has no chain", undefined never reaches this line because
       // an unreachable node returns from the catch below.

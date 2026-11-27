@@ -122,6 +122,16 @@ export function agentCarriesAwg3(cores: NodeCores | null): boolean {
   return row?.awgGenerations?.includes(3) === true;
 }
 
+/**
+ * Whether the node's host does IPv6: the agent reported a global address AND a
+ * socket on `::` that takes IPv4 as well. Unknown is "no": a node never polled,
+ * or an agent older than the field that sends no block, is a node without IPv6,
+ * and nothing IPv6 turns on for it. `egress` is not read yet (milestone 18.5).
+ */
+export function nodeHasIpv6(cores: NodeCores | null | undefined): boolean {
+  return cores?.ipv6?.stack === true && cores.ipv6.global === true;
+}
+
 function awgName(g: AwgProtocol): string {
   return g === 3 ? '3.1' : '1.x';
 }

@@ -180,6 +180,35 @@ describe('when the inventory is written back', () => {
     expect(coresWorthWriting(range(20000, 50000), range(20000, 50000), at(AT))).toBe(false);
   });
 
+  it('keeps the ipv6 block sorted and writes only when it moves', () => {
+    const got = observedCores([], AT, undefined, undefined, undefined, {
+      stack: true,
+      global: true,
+      addresses: ['2001:db8::9', '2001:db8::1', '2001:db8::9'],
+    });
+    expect(got.ipv6).toEqual({ stack: true, global: true, addresses: ['2001:db8::1', '2001:db8::9'] });
+    // Same facts in another order, as another poll may send them: no rewrite.
+    const again = observedCores([], AT, undefined, undefined, undefined, {
+      stack: true,
+      global: true,
+      addresses: ['2001:db8::1', '2001:db8::9'],
+    });
+    expect(coresWorthWriting(got, again, at(AT))).toBe(false);
+    // First learned from an agent that now reports it, then a change.
+    expect(coresWorthWriting(inventory(), got, at(AT))).toBe(true);
+    const moved = { ...got, ipv6: { ...got.ipv6!, stack: false } };
+    expect(coresWorthWriting(got, moved, at(AT))).toBe(true);
+    // The agent stops reporting it (downgraded): the stored fact goes.
+    expect(coresWorthWriting(got, inventory(), at(AT))).toBe(true);
+  });
+
+  it('does not keep an ipv6 block that is not one', () => {
+    expect('ipv6' in observedCores([], AT)).toBe(false);
+    for (const bad of [{ stack: 'yes' }, {}, { stack: true }] as never[]) {
+      expect('ipv6' in observedCores([], AT, undefined, undefined, undefined, bad), JSON.stringify(bad)).toBe(false);
+    }
+  });
+
   it('refreshes the stamp on the heartbeat so it keeps meaning something', () => {
     expect(coresWorthWriting(inventory(), inventory(), at('2026-09-11T12:11:00.000Z'))).toBe(true);
   });

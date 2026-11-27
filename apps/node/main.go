@@ -151,6 +151,7 @@ func main() {
 		Chain:             chainMgr,
 		Geo:               geo.NewStore(geoDir),
 		ResolverProbe:     server.SystemResolverProbe,
+		IPv6Probe:         core.NewIPv6Prober(time.Minute).Facts,
 		EnvFile:           getenv("ICESLAB_NODE_ENV", "/etc/iceslab-node/env"),
 		HopGuard:          hopguard.New(logger),
 		Certs:             certs,

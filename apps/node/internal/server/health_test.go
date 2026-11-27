@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -403,5 +404,31 @@ func TestHealthzSaysNothingAboutAChainThatDoesNotExist(t *testing.T) {
 	}
 	if out.Chain != nil {
 		t.Errorf("Chain = %+v, want nil", out.Chain)
+	}
+}
+
+// Milestone 18.2: the healthcheck carries what the host can do with IPv6, and
+// says nothing where the server has no probe.
+func TestTheHealthcheckCarriesTheIPv6Block(t *testing.T) {
+	s := newServerWith(t, &fakeAdapter{name: "xray", engine: "xray"})
+	if h := healthOf(t, s); h.IPv6 != nil {
+		t.Errorf("no probe, yet an ipv6 block: %+v", h.IPv6)
+	}
+
+	s.cfg.IPv6Probe = func() core.IPv6Facts {
+		return core.IPv6Facts{Stack: true, Global: true, Addresses: []string{"2001:db8::1"}}
+	}
+	h := healthOf(t, s)
+	if h.IPv6 == nil || !h.IPv6.Stack || !h.IPv6.Global || len(h.IPv6.Addresses) != 1 || h.IPv6.Egress != nil {
+		t.Errorf("ipv6 block %+v", h.IPv6)
+	}
+
+	// A host without IPv6: stack false, and the address list is [] on the wire,
+	// not null.
+	s.cfg.IPv6Probe = func() core.IPv6Facts { return core.IPv6Facts{} }
+	rr := httptest.NewRecorder()
+	s.routes().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if !strings.Contains(rr.Body.String(), `"ipv6":{"stack":false,"global":false,"addresses":[]}`) {
+		t.Errorf("body %s", rr.Body.String())
 	}
 }

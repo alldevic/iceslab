@@ -22,6 +22,7 @@ import {
   isNativeHysteria,
   type HysteriaTlsFacts,
 } from '@/contours/nodes/lib/hysteriaTls';
+import { nodeIpv6Fact } from '@/contours/nodes/lib/nodeAdapterFacts';
 import { HysteriaTlsLine } from '@/contours/nodes/components/NodeEdit/HysteriaTlsLine';
 import { agentAwgFact, nodeAwgFact, type AgentAwgFact, type NodeAwgFact } from '@/lib/domain/awg';
 import { coreVersionOf } from '@/lib/domain/coreVersion';
@@ -230,6 +231,7 @@ export function CoresPanel({
               второй источник правды, который разойдётся с первым. */}
           <Box style={{ borderTop: `1px solid ${HAIRLINE}`, padding: '12px 20px 16px' }}>
             <Stack gap={6}>
+              <Ipv6Line cores={node.cores} />
               {/* Чем рекомендуемая отличается от закреплённой: одна строка на
                   секцию, только когда выбор версий на экране есть. */}
               {intent && onIntent && <CoreVersionNote />}
@@ -241,6 +243,25 @@ export function CoresPanel({
         </Stack>
       )}
     </Box>
+  );
+}
+
+/** Факт хоста, а не ядра: одна строка под списком ядер. Адреса в подсказке. */
+function Ipv6Line({ cores }: { cores: Node['cores'] }) {
+  const { t } = useTranslation();
+  const fact = nodeIpv6Fact(cores);
+  const tone = fact.state === 'stack' ? MOSS : fact.state === 'address' ? AMBER : FAINT;
+  const text =
+    fact.state === 'unknown'
+      ? t('nodeEdit.ipv6.unknown')
+      : t(`nodeEdit.ipv6.${fact.state}`, { count: fact.count });
+  return (
+    <Text
+      title={fact.addresses.length > 0 ? fact.addresses.join('\n') : undefined}
+      style={{ fontSize: 12, lineHeight: '17px', color: tone }}
+    >
+      {t('nodeEdit.ipv6.label')}: {text}
+    </Text>
   );
 }
 

@@ -971,6 +971,25 @@ type HealthcheckResponse struct {
 	// than the field: not reported, which is not "none". Mirrors
 	// HealthcheckResponse.portHopping.
 	PortHopping *PortHopDto `json:"portHopping,omitempty"`
+	// IPv6: what this host can do with IPv6 (milestone 18.2). A pointer so
+	// absence is a state: an agent older than the field sends no block, and the
+	// panel reads that as "no IPv6", never as a failure. Mirrors
+	// HealthcheckResponse.ipv6.
+	IPv6 *IPv6Dto `json:"ipv6,omitempty"`
+}
+
+// IPv6Dto mirrors NodeIPv6 in shared/transport.ts.
+type IPv6Dto struct {
+	// Stack: a socket on `::` binds and also takes IPv4.
+	Stack bool `json:"stack"`
+	// Global: an interface carries a global (not link-local, not fc00::/7)
+	// IPv6 address.
+	Global bool `json:"global"`
+	// Addresses: those global addresses, sorted. Never null.
+	Addresses []string `json:"addresses"`
+	// Egress: an outbound IPv6 connection succeeds. Reserved: nothing fills it
+	// before the egress check lands, and absent reads as "no".
+	Egress *bool `json:"egress,omitempty"`
 }
 
 // PortHopDto is an inclusive UDP port range, {0, 0} for none.

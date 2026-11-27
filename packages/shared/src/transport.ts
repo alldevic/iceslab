@@ -2261,6 +2261,27 @@ export interface HealthcheckResponse {
    * Mirrors the Go PortHopDto json tags exactly (wire-sync).
    */
   portHopping?: PortHopping;
+  /**
+   * What the host can do with IPv6 (milestone 18.2). ⚠ ABSENT is not a
+   * failure: an agent older than the field sends no block, and the panel reads
+   * that as "no IPv6" (nodeHasIpv6). Mirrors the Go IPv6Dto json tags exactly
+   * (wire-sync).
+   */
+  ipv6?: NodeIPv6;
+}
+
+/**
+ * The host's IPv6 facts as the agent reports them. `stack`: a socket on `::`
+ * binds and takes IPv4 too. `global`: an interface carries a global address
+ * (not link-local, not fc00::/7). `addresses`: those addresses, sorted.
+ * `egress`: an outbound IPv6 connection succeeds; nothing fills it before the
+ * egress check, and ABSENT reads as "no".
+ */
+export interface NodeIPv6 {
+  stack: boolean;
+  global: boolean;
+  addresses: string[];
+  egress?: boolean;
 }
 
 /** An inclusive UDP port range a node redirects; `{start: 0, end: 0}` = none. */
@@ -2344,6 +2365,10 @@ export interface NodeCores {
   /** See HealthcheckResponse.portHopping. Inventory: it changes when hysteria's
    *  bootstrap is rerun with another range. Absent = not reported. */
   portHopping?: PortHopping;
+  /** See HealthcheckResponse.ipv6: a fact of the host, kept beside the
+   *  inventory like chainEngine. Absent = the agent does not report it, which
+   *  the panel reads as "no IPv6". */
+  ipv6?: NodeIPv6;
   cores: NodeCoreInfo[];
 }
 

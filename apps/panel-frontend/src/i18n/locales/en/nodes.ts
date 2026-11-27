@@ -314,6 +314,14 @@ export const nodes = {
     },
     coresInventoryNote:
       'This is the inventory, not liveness: whether a core is up right now is what the node status above says. An idle core is a normal state, the agent registers an adapter for every protocol.',
+    // The host's IPv6 fact from the agent (18.2); the addresses are in the tooltip.
+    ipv6: {
+      label: 'IPv6',
+      stack: 'stack available, addresses: {{count}}',
+      address: 'has an address, cannot listen on ::, addresses: {{count}}',
+      none: 'none',
+      unknown: 'the agent does not report it',
+    },
     coresRendersPolicy: 'applies the policy',
     coreFault: 'the core is not working: {{error}}',
     coreUncounted: 'no traffic accounting: user limits on this engine are not counted',

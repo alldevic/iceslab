@@ -107,6 +107,9 @@ type Config struct {
 	// degrades the node with dto.ResolverDownReason. main wires
 	// SystemResolverProbe. Nil asks nothing, which is what tests get.
 	ResolverProbe func(ctx context.Context) error
+	// IPv6Probe reports the host's IPv6 facts on every /healthz; main wires a
+	// cached core.IPv6Prober. Nil reports no block, which is what tests get.
+	IPv6Probe func() core.IPv6Facts
 	// EnvFile is the agent's env, where the bootstraps declare their cores
 	// (E42, declaredEngines). Empty reports nothing, which is what tests get.
 	EnvFile string
@@ -781,7 +784,21 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		AgentVersion:    s.cfg.AgentVersion,
 		Policy:          s.policyDrawn(),
 		PortHopping:     s.portHopping(r.Context()),
+		IPv6:            s.ipv6(),
 	})
+}
+
+// ipv6 is the host's IPv6 facts, nil when this server has no probe.
+func (s *Server) ipv6() *dto.IPv6Dto {
+	if s.cfg.IPv6Probe == nil {
+		return nil
+	}
+	f := s.cfg.IPv6Probe()
+	addrs := f.Addresses
+	if addrs == nil {
+		addrs = []string{}
+	}
+	return &dto.IPv6Dto{Stack: f.Stack, Global: f.Global, Addresses: addrs}
 }
 
 // portHopping is the range the nat table redirects to hysteria, nil when it

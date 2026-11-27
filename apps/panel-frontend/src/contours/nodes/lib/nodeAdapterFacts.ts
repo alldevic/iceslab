@@ -1,4 +1,4 @@
-import type { UserScopeGap } from '@iceslab/shared';
+import type { NodeCores, UserScopeGap } from '@iceslab/shared';
 import { awgLabel } from '@/lib/domain/awg';
 import { protocolLabelCompact } from '@/lib/domain/protocols';
 
@@ -84,4 +84,23 @@ export function userScopeGapsOf(raw: unknown): { profileName: string; port: numb
     if (!Object.hasOwn(KNOWN_GAPS, gap)) return [];
     return [{ profileName, port, gap: gap as UserScopeGap }];
   });
+}
+
+/**
+ * The node card's IPv6 line (18.2). `stack`: the agent can listen on `::` and
+ * has a global address; `address`: a global address but no usable `::` socket;
+ * `none`: the agent reported and has neither; `unknown`: the agent sends no
+ * block (older than the field, or the node has not reported), which is NOT
+ * `none` and is not drawn as a fault. The addresses ride along for the tooltip.
+ */
+export type NodeIpv6Fact = { state: 'stack' | 'address' | 'none' | 'unknown'; count: number; addresses: string[] };
+
+export function nodeIpv6Fact(cores: NodeCores | null | undefined): NodeIpv6Fact {
+  const v = cores?.ipv6;
+  if (!v || typeof v.stack !== 'boolean' || typeof v.global !== 'boolean') {
+    return { state: 'unknown', count: 0, addresses: [] };
+  }
+  const addresses = Array.isArray(v.addresses) ? v.addresses.filter((a): a is string => typeof a === 'string') : [];
+  const state = v.stack && v.global ? 'stack' : v.global ? 'address' : 'none';
+  return { state, count: addresses.length, addresses };
 }

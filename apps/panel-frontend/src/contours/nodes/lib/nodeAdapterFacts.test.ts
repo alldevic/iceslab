@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { slotConflictsOf, slotLabel, userScopeGapsOf } from '@/contours/nodes/lib/nodeAdapterFacts';
+import { nodeIpv6Fact, slotConflictsOf, slotLabel, userScopeGapsOf } from '@/contours/nodes/lib/nodeAdapterFacts';
 
 describe('slotLabel: слот словами', () => {
   const t = (key: string, vars?: Record<string, unknown>) => `${key}${vars ? ' ' + JSON.stringify(vars) : ''}`;
@@ -67,5 +67,27 @@ describe('userScopeGapsOf (A-204): где ограничение сквада п
     expect(userScopeGapsOf(undefined)).toBeNull();
     expect(userScopeGapsOf([])).toEqual([]);
     expect(userScopeGapsOf([{ profileName: 'x', port: 1, gap: 'other' }, 3])).toEqual([]);
+  });
+});
+
+describe('nodeIpv6Fact (18.2): строка IPv6 на карточке ноды', () => {
+  const at = '2026-11-27T00:00:00.000Z';
+  it('три состояния: есть стек, есть адрес, агент не сообщает', () => {
+    expect(nodeIpv6Fact({ observedAt: at, cores: [], ipv6: { stack: true, global: true, addresses: ['2001:db8::1', '2001:db8::2'] } })).toEqual({
+      state: 'stack',
+      count: 2,
+      addresses: ['2001:db8::1', '2001:db8::2'],
+    });
+    expect(nodeIpv6Fact({ observedAt: at, cores: [], ipv6: { stack: false, global: true, addresses: ['2001:db8::1'] } }).state).toBe('address');
+    expect(nodeIpv6Fact({ observedAt: at, cores: [] }).state).toBe('unknown');
+  });
+  it('сообщил и ничего нет: none, не unknown; нет cores: unknown', () => {
+    expect(nodeIpv6Fact({ observedAt: at, cores: [], ipv6: { stack: false, global: false, addresses: [] } })).toEqual({
+      state: 'none',
+      count: 0,
+      addresses: [],
+    });
+    expect(nodeIpv6Fact(null).state).toBe('unknown');
+    expect(nodeIpv6Fact(undefined).state).toBe('unknown');
   });
 });

@@ -7,6 +7,7 @@ import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { observedCores } from './nodes.cron.js';
+import { nodeHasIpv6 } from './node-core-gate.js';
 import { WG_TEST_PRIVATE_KEY, WG_TEST_PUBLIC_KEY } from '../../../tests/helpers/wg-keys.js';
 
 /**
@@ -526,5 +527,29 @@ describe('neededBy on the node response', () => {
       expect(rows.tuic.neededBy).toBe(0);
       expect('neededBy' in rows.mieru).toBe(false);
     }
+  });
+});
+
+describe('nodeHasIpv6', () => {
+  const at = new Date().toISOString();
+  const xray = [{ name: 'xray', engine: 'xray', running: true } as CoreStatus];
+
+  it('reads an old agent, whose healthcheck has no ipv6 block, as no IPv6', () => {
+    expect(nodeHasIpv6(observedCores(xray, at))).toBe(false);
+    expect(nodeHasIpv6(null)).toBe(false);
+    expect(nodeHasIpv6(undefined)).toBe(false);
+  });
+
+  it('says yes only to a global address and a dual-stack socket together', () => {
+    const has = (stack: boolean, global: boolean) =>
+      nodeHasIpv6(observedCores(xray, at, undefined, undefined, undefined, { stack, global, addresses: global ? ['2001:db8::1'] : [] }));
+    expect(has(true, true)).toBe(true);
+    expect(has(true, false)).toBe(false);
+    expect(has(false, true)).toBe(false);
+    expect(has(false, false)).toBe(false);
+  });
+
+  it('does not read egress yet: egress alone does not make IPv6', () => {
+    expect(nodeHasIpv6(observedCores(xray, at, undefined, undefined, undefined, { stack: false, global: false, addresses: [], egress: true }))).toBe(false);
   });
 });
