@@ -129,6 +129,9 @@ export interface Node {
   /** Who answers the name lookups of this node's users (nodes.mapper.ts). null =
    *  the node's built-in resolver set; absent on a server older than the field. */
   dns?: DnsCfg | null;
+  /** 19.12: the DNS rules the node carries from presets (presetId) and from the panel-wide rules (null), apart from the manual
+   *  `dns`; `overridden` = names the manual `dns` also names (it answers first). Absent = a server older than the field. */
+  carriedDns?: CarriedDnsSource[];
   /** 18.6: the operator's IPv6 setting, auto | on | off. Absent = a server older than the field (reads as auto). */
   ipv6Mode?: Ipv6Mode;
   /**
@@ -251,6 +254,17 @@ export interface Node {
  * is worse than silence.
  */
 export type NodeCore = NodeCoreInfo;
+
+/** Имя ядра для перечисления. Движок называется только когда он не родной для
+ *  протокола: иначе строка «hysteria (hysteria)» повторяет сама себя. */
+export function coreLabel(c: NodeCore): string {
+  return c.engine && c.engine !== c.name ? `${c.name} (${c.engine})` : c.name;
+}
+
+export interface CarriedDnsSource {
+  presetId: string | null;
+  rules: { match: string[]; server: string; overridden: string[] }[];
+}
 
 /** One engine of a node that cascades need, with those cascades (core-lifecycle §8). */
 export interface CascadeEngineNeed {

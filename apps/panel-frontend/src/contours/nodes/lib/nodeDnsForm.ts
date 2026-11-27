@@ -160,3 +160,9 @@ export function dnsSummary(node: Pick<Node, 'dns'>): DnsSummary {
   const servers = node.dns?.servers ?? [];
   return { servers: servers.length, domains: servers.reduce((n, s) => n + (s.domains?.length ?? 0), 0) };
 }
+
+/** 19.12: how many rules the node carries from presets and the panel-wide rules, and from how many sources. Zero for a server older than the field. */
+export function carriedSummary(node: Pick<Node, 'carriedDns'>): { rules: number; sources: number } {
+  const sources = (node.carriedDns ?? []).filter((s) => s.rules.length > 0);
+  return { rules: sources.reduce((n, s) => n + s.rules.length, 0), sources: sources.length };
+}

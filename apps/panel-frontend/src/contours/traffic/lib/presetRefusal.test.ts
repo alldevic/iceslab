@@ -92,3 +92,35 @@ describe('the words of the DNS refusals (stage 19)', () => {
     expect(routingPresetRefusal(res(409, { error: 'ROUTING_PRESET_DNS_SERVER_INVALID', entries: ['x'] }))).toBeNull();
   });
 });
+
+describe('the words of the DNS conflict refusals (19.10, 19.12)', () => {
+  const conflict = { error: 'ROUTING_PRESET_DNS_CONFLICT', node: 'de-1', preset: 'Office', panel: false, domain: 'domain:corp.example' };
+
+  it('names the other preset, the node and the name', () => {
+    const r = routingPresetRefusal(res(409, conflict));
+    expect(r).toEqual({ code: 'ROUTING_PRESET_DNS_CONFLICT', node: 'de-1', preset: 'Office', panel: false, domain: 'domain:corp.example' });
+    expect(presetRefusalWords(r!, t)).toBe('routes.presetDnsConflict {"preset":"Office","node":"de-1","domain":"domain:corp.example"}');
+  });
+
+  it('says the panel-wide rules in its own words when they are the other side', () => {
+    const r = routingPresetRefusal(res(409, { ...conflict, preset: 'the panel-wide DNS rules', panel: true }));
+    expect(presetRefusalWords(r!, t)).toBe('routes.presetDnsConflictPanel {"node":"de-1","domain":"domain:corp.example"}');
+  });
+
+  it('reads the node limit and takes both only under 409', () => {
+    const r = routingPresetRefusal(res(409, { error: 'ROUTING_PRESET_DNS_NODE_LIMIT', node: 'de-1', count: 19 }));
+    expect(presetRefusalWords(r!, t)).toBe('routes.presetDnsNodeLimit {"node":"de-1","count":19}');
+    expect(routingPresetRefusal(res(400, conflict))).toBeNull();
+    expect(routingPresetRefusal(res(400, { error: 'ROUTING_PRESET_DNS_NODE_LIMIT' }))).toBeNull();
+  });
+
+  it('a body with missing fields still gives a sentence, with empty names', () => {
+    expect(routingPresetRefusal(res(409, { error: 'ROUTING_PRESET_DNS_CONFLICT' }))).toEqual({
+      code: 'ROUTING_PRESET_DNS_CONFLICT',
+      node: '',
+      preset: '',
+      panel: false,
+      domain: '',
+    });
+  });
+});

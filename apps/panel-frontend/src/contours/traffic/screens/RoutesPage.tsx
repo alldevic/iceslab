@@ -9,6 +9,7 @@ import { noteKeyFor } from '@/contours/traffic/lib/devicePresets';
 import { PaneTab } from '@/contours/traffic/components/Routes/PaneTab';
 import { exportJson, parseImport, policyRules } from '@/contours/traffic/lib/routeExchange';
 import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Box, Stack, Text, UnstyledButton } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
@@ -61,7 +62,9 @@ export function RoutesPage() {
   const { t } = useTranslation();
   // The pane people come here for. Stated rather than inherited from the order
   // of the tabs, so moving a tab cannot silently change what opens.
-  const [pane, setPane] = useState<Pane>('policy');
+  // /subscription/routes?preset=ID (the node screen links here) opens that preset.
+  const wantedPreset = useSearchParams()[0].get('preset');
+  const [pane, setPane] = useState<Pane>(wantedPreset ? 'device' : 'policy');
   const [policyDraft, setPolicyDraft] = useState<NodePolicy | null>(null);
   // A draft is a policy or preset that exists only here: written by New, or
   // read out of an imported file. The pane shows it as an unsaved row until
@@ -371,6 +374,7 @@ export function RoutesPage() {
         <DevicePane
           presets={presets}
           defaultPreset={defaultPreset}
+          initialPreset={wantedPreset}
           squads={squads}
           draft={deviceDraft}
           draftKey={draftSeq}

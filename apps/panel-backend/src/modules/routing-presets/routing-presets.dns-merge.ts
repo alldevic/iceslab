@@ -148,6 +148,16 @@ export function resolveDnsConflicts(sources: readonly NamedDnsSource[]): { kept:
 }
 
 /**
+ * The names of a carried rule that the node's own (manual) DNS also names: the
+ * manual server comes first in the push, so for these names it answers and the
+ * rule's server does not (19.10). Written as the rule wrote them. 19.12 marks them.
+ */
+export function overriddenNames(manual: DnsCfg | null | undefined, rule: { match: readonly string[] }): string[] {
+  const own = new Set((manual?.servers ?? []).flatMap((s) => (s.domains ?? []).map(normalizeDnsName)));
+  return own.size === 0 ? [] : rule.match.filter((m) => own.has(normalizeDnsName(m)));
+}
+
+/**
  * The node's `dns` for a push: the manual one first (its servers keep their
  * place, so a manual server wins over a carried one for the same name), then
  * the carried servers, one per distinct server with all its names, each

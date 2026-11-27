@@ -395,6 +395,11 @@ export const nodes = {
     dnsReachSome:
       'Only {{executing}} executes the node DNS. Clients connected through {{missing}} ask for names outside this setting.',
     dnsReachNoneTag: 'DNS DOES NOT WORK HERE',
+    dnsCarriedTitle: 'Rules from presets',
+    dnsCarriedIntro: 'These rules came to the node from presets and the panel-wide rules and are not edited here. They act for all clients of the node; open the preset to change them.',
+    dnsCarriedPanel: 'Panel-wide rules',
+    dnsCarriedPresetUnknown: 'preset',
+    dnsCarriedOverridden: 'The names {{names}} are also in the node\'s manual DNS: it answers first, this server is not asked for them.',
     dnsReachNone:
       'No core of this node executes DNS: {{cores}}. The setting is saved, but it does not affect client lookups.',
     coreFault: 'the core is not working: {{error}}',

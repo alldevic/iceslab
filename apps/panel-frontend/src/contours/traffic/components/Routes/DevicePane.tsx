@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 export function DevicePane({
   presets,
   defaultPreset,
+  initialPreset,
   squads,
   draft,
   draftKey,
@@ -19,13 +20,15 @@ export function DevicePane({
 }: {
   presets: RoutingPreset[];
   defaultPreset: RoutingPresetId;
+  /** A preset asked for by the address; the default one when absent. */
+  initialPreset?: string | null;
   squads: Squad[];
   draft: RoutingPreset | null;
   draftKey: number;
   onDraftDone: () => void;
 }) {
   const { t } = useTranslation();
-  const [selected, setSelected] = useState<string>(defaultPreset);
+  const [selected, setSelected] = useState<string>(initialPreset ?? defaultPreset);
 
   const preset = draft ?? presets.find((p) => p.id === selected) ?? presets[0]!;
   // A squad holds one preset, a built-in or an own one (A-229).

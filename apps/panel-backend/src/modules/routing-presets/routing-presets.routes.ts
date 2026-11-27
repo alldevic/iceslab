@@ -1,10 +1,12 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
+import { isRoutingPresetId } from '@iceslab/shared';
 import { requireAuth } from '../auth/auth.hook.js';
 import { DeviceRouteRuleSchema, MAX_PRESET_RULES, RoutingPresetRulesError } from './routing-presets.rules.js';
 import { DnsRulesSchema } from './routing-presets.dns.js';
 import { RoutingPresetDnsConflictError, RoutingPresetDnsLimitError } from './routing-presets.nodes.js';
 import * as service from './routing-presets.service.js';
+import { presetNodeList } from './routing-presets.node-list.js';
 
 /**
  * A-229 part 2: /api/routing-presets. The shape is the one the panel's
@@ -34,7 +36,7 @@ function refusal(reply: FastifyReply, err: unknown): FastifyReply | null {
     return reply.code(409).send({ error: err.code, message: err.message, ...err.use });
   }
   if (err instanceof RoutingPresetDnsConflictError) {
-    return reply.code(409).send({ error: err.code, message: err.message, node: err.node, preset: err.other, domain: err.domain });
+    return reply.code(409).send({ error: err.code, message: err.message, node: err.node, preset: err.other, panel: err.otherIsPanel, domain: err.domain });
   }
   if (err instanceof RoutingPresetDnsLimitError) {
     return reply.code(409).send({ error: err.code, message: err.message, node: err.node, count: err.count });
@@ -50,6 +52,19 @@ export async function routingPresetsRoutes(app: FastifyInstance): Promise<void> 
 
   app.get('/api/routing-presets', auth, async (_req, reply) => {
     return reply.send({ presets: await service.listRoutingPresets() });
+  });
+
+  // 19.12: the nodes that get the preset's DNS rules, and in what state. A built-in key is
+  // answered too (the panel-wide rules, every node); the other ids must be uuids.
+  app.get('/api/routing-presets/:id/nodes', auth, async (request, reply) => {
+    try {
+      const id = (request.params as { id?: string }).id ?? '';
+      return reply.send(await presetNodeList(isRoutingPresetId(id) ? id : IdParam.parse(request.params).id));
+    } catch (err) {
+      const r = refusal(reply, err);
+      if (r) return r;
+      throw err;
+    }
   });
 
   app.post('/api/routing-presets', auth, async (request, reply) => {

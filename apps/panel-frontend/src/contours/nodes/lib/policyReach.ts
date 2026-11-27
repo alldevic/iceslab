@@ -1,4 +1,4 @@
-﻿import type { NodeCore } from '@/lib/domain/nodes';
+﻿import { coreLabel, type NodeCore } from '@/lib/domain/nodes';
 
 /**
  * Достанет ли политика уровня ноды до этой машины.
@@ -82,12 +82,6 @@ export function policyCoverage(cores: NodeCore[] | null | undefined): PolicyCove
     missing: busy.filter((c) => c.rendersPolicy === false).map(coreLabel),
     unknown: busy.filter((c) => c.rendersPolicy === undefined).map(coreLabel),
   };
-}
-
-/** Имя ядра для перечисления. Движок называется только когда он не родной для
- *  протокола: иначе строка «hysteria (hysteria)» повторяет сама себя. */
-export function coreLabel(c: NodeCore): string {
-  return c.engine && c.engine !== c.name ? `${c.name} (${c.engine})` : c.name;
 }
 
 /**

@@ -1,5 +1,4 @@
-import type { NodeCore } from '@/lib/domain/nodes';
-import { coreLabel } from '@/contours/nodes/lib/policyReach';
+import { coreLabel, type NodeCore } from '@/lib/domain/nodes';
 
 /**
  * Which cores of a node execute the node's DNS setting.

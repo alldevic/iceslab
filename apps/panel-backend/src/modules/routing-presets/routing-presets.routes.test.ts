@@ -359,7 +359,7 @@ describe('19.10: the DNS rules go to the nodes of the preset', () => {
     const res = await put(pb, { name: 'Beta2', dnsRules: dns([['domain:example.com'], '10.99.0.2']) });
     expect(res.statusCode, res.body).toBe(409);
     const body = JSON.parse(res.body);
-    expect(body).toMatchObject({ error: 'ROUTING_PRESET_DNS_CONFLICT', preset: 'Alpha', node: 'shared-node', domain: expect.stringMatching(/example\.com$/) });
+    expect(body).toMatchObject({ error: 'ROUTING_PRESET_DNS_CONFLICT', preset: 'Alpha', panel: false, node: 'shared-node', domain: expect.stringMatching(/example\.com$/) });
     expect(body.message).toContain('"Alpha"');
     expect(body.message).toContain('"shared-node"');
     const row = await prisma.routingPreset.findUniqueOrThrow({ where: { id: pb } });
@@ -401,5 +401,103 @@ describe('19.10: the DNS rules go to the nodes of the preset', () => {
     expect(res.statusCode, res.body).toBe(409);
     expect(JSON.parse(res.body)).toMatchObject({ error: 'ROUTING_PRESET_DNS_NODE_LIMIT', node: 'full-node', count: 18 });
     expect(await carried(node.id)).toBeNull();
+  });
+});
+
+describe('19.12: GET /api/routing-presets/:id/nodes', () => {
+  const dns = (...rules: [string[], string][]) => rules.map(([match, server]) => ({ match, server, note: '' }));
+  const put = (id: string, payload: Record<string, unknown>) =>
+    app.inject({ method: 'PUT', url: `/api/routing-presets/${id}`, headers: auth(), payload });
+  const nodesOf = async (id: string, status = 200) => {
+    const res = await app.inject({ method: 'GET', url: `/api/routing-presets/${id}/nodes`, headers: auth() });
+    expect(res.statusCode, res.body).toBe(status);
+    return JSON.parse(res.body) as {
+      scope: string;
+      ruleCount: number;
+      nodes: { id: string; name: string; state: string; carried: number; cores: { name: string; rendersDns?: boolean }[] | null; skipped: Record<string, unknown>[] }[];
+    };
+  };
+  const presetNamed = async (name: string) => JSON.parse((await create({ name, rules: [] })).body).id as string;
+
+  it('a preset nobody holds has no nodes', async () => {
+    const id = await presetNamed('Lonely');
+    await makeNode();
+    expect(await nodesOf(id)).toEqual({ scope: 'preset', ruleCount: 0, nodes: [] });
+  });
+
+  it('two squads with a node in common: each node once, with the state of the transfer', async () => {
+    const [a, shared, b] = [await makeNode({ name: 'a-node' }), await makeNode({ name: 'shared-node' }), await makeNode({ name: 'b-node' })];
+    const pa = await presetNamed('Alpha');
+    await makeSquad([a.id, shared.id], { presetId: pa });
+    await makeSquad([shared.id, b.id], { presetId: pa });
+    await inboundSyncQueue.obliterate({ force: true });
+    expect((await put(pa, { dnsRules: dns([['example.com'], '10.99.0.1']) })).statusCode).toBe(200);
+    await inboundSyncQueue.obliterate({ force: true });
+    // The node that has taken its config is «sent»; the others wait for the push.
+    await prisma.node.update({ where: { id: a.id }, data: { lastInboundSyncAt: new Date(), appliedRevision: 5, desiredRevision: 5 } });
+    const list = await nodesOf(pa);
+    expect(list.ruleCount).toBe(1);
+    expect(list.nodes.map((n) => [n.name, n.state, n.carried])).toEqual([
+      ['a-node', 'sent', 1],
+      ['b-node', 'waiting', 1],
+      ['shared-node', 'waiting', 1],
+    ]);
+  });
+
+  it('gives the cores as the node reported them, none for a node that has not', async () => {
+    const [x, y] = [await makeNode({ name: 'x-node' }), await makeNode({ name: 'y-node' })];
+    await prisma.node.update({
+      where: { id: x.id },
+      data: { cores: { observedAt: new Date().toISOString(), cores: [{ name: 'xray', engine: 'xray', rendersDns: true }, { name: 'hysteria', engine: 'hysteria', rendersDns: false }] } },
+    });
+    const p = await presetNamed('Cores');
+    await makeSquad([x.id, y.id], { presetId: p });
+    const list = await nodesOf(p);
+    expect(list.nodes[0]!.cores!.map((c) => [c.name, c.rendersDns])).toEqual([['xray', true], ['hysteria', false]]);
+    expect(list.nodes[1]!.cores).toBeNull();
+  });
+
+  it('marks a rule the node\'s own DNS takes, a DoT rule, and a rule left out by a conflict, naming the other preset', async () => {
+    const n = await makeNode({ name: 'own-dns', dns: { servers: [{ address: '9.9.9.9', domains: ['domain:example.com'] }] } });
+    const pa = await presetNamed('Alpha');
+    const pb = await presetNamed('Beta');
+    await makeSquad([n.id], { presetId: pa });
+    expect(
+      (await put(pa, { dnsRules: dns([['example.com', 'other.org'], '10.99.0.1'], [['dot.example'], 'tls://dns.example'], [['clash.example'], '10.99.0.3']) })).statusCode,
+    ).toBe(200);
+    // 19.11 recorded that Beta's rule was left out for Alpha's.
+    await prisma.node.update({
+      where: { id: n.id },
+      data: { presetDnsConflicts: [{ kind: 'conflict', presetId: pb, otherPresetId: pa, domain: 'clash.example', server: '10.99.0.9' }] },
+    });
+    await prisma.routingPreset.update({ where: { id: pb }, data: { dnsRules: dns([['clash.example'], '10.99.0.9']) } });
+    await makeSquad([n.id], { presetId: pb });
+
+    const alpha = (await nodesOf(pa)).nodes[0]!;
+    expect(alpha.carried).toBe(2);
+    expect(alpha.skipped).toEqual([
+      { index: 0, kind: 'manual', names: ['example.com'] },
+      { index: 1, kind: 'server-kind' },
+    ]);
+    expect((await nodesOf(pb)).nodes[0]!.skipped).toEqual([{ index: 0, kind: 'conflict', otherPreset: 'Alpha', names: ['clash.example'] }]);
+  });
+
+  it('a built-in preset has the panel-wide rules on every node', async () => {
+    await makeNode({ name: 'one' });
+    await makeNode({ name: 'two' });
+    await prisma.appSetting.upsert({
+      where: { key: 'subscriptionDnsRules' },
+      update: { value: dns([['example.com'], '10.99.0.1']) },
+      create: { key: 'subscriptionDnsRules', value: dns([['example.com'], '10.99.0.1']) },
+    });
+    const list = await nodesOf('ru-split');
+    expect(list.scope).toBe('panel');
+    expect(list.ruleCount).toBe(1);
+    expect(list.nodes.map((n) => n.name)).toEqual(['one', 'two']);
+  });
+
+  it('refuses a missing or malformed preset', async () => {
+    await nodesOf('00000000-0000-4000-8000-000000000099', 404);
+    await nodesOf('not-a-uuid', 400);
   });
 });

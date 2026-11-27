@@ -187,3 +187,41 @@ describe('19.10: the rules carried from presets ride in the same dns', () => {
     expect(req && 'dns' in req).toBe(false);
   });
 });
+
+describe('19.12: the node answer shows what it carries, apart from the manual dns', () => {
+  const get = async (id: string) =>
+    JSON.parse((await app.inject({ method: 'GET', url: `/api/nodes/${id}`, headers: auth() })).body) as {
+      dns: unknown;
+      carriedDns: { presetId: string | null; rules: { match: string[]; server: string; overridden: string[] }[] }[];
+    };
+
+  it('is empty for a node nothing reaches', async () => {
+    expect((await get((await makeNode(YANDEX)).id)).carriedDns).toEqual([]);
+  });
+
+  it('lists each source with its rules and the names the node\'s own dns takes, and leaves dns alone', async () => {
+    const node = await makeNode({ servers: [{ address: '9.9.9.9', domains: ['domain:example.com'] }] });
+    const preset = await prisma.routingPreset.create({ data: { name: 'Alpha' }, select: { id: true } });
+    await prisma.node.update({
+      where: { id: node.id },
+      data: {
+        presetDnsRules: [
+          { presetId: preset.id, rules: [{ match: ['example.com', 'other.org'], server: '10.99.0.1' }, { match: ['x.org'], server: '10.99.0.2' }] },
+          { presetId: null, rules: [{ match: ['panel.org'], server: '10.99.0.3' }] },
+        ],
+      },
+    });
+    const dto = await get(node.id);
+    expect(dto.carriedDns).toEqual([
+      {
+        presetId: preset.id,
+        rules: [
+          { match: ['example.com', 'other.org'], server: '10.99.0.1', overridden: ['example.com'] },
+          { match: ['x.org'], server: '10.99.0.2', overridden: [] },
+        ],
+      },
+      { presetId: null, rules: [{ match: ['panel.org'], server: '10.99.0.3', overridden: [] }] },
+    ]);
+    expect(dto.dns).toEqual(stored({ servers: [{ address: '9.9.9.9', domains: ['domain:example.com'] }] }));
+  });
+});

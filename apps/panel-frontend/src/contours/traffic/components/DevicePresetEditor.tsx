@@ -4,6 +4,7 @@ import { Chip } from '@/contours/traffic/components/RoutePolicy/Chip';
 import { IconAction } from '@/contours/traffic/components/RoutePolicy/IconAction';
 import { DnsFormatsTable } from '@/contours/traffic/components/DevicePreset/DnsFormatsTable';
 import { DnsRulesEditor } from '@/contours/traffic/components/DevicePreset/DnsRulesEditor';
+import { PresetNodes } from '@/contours/traffic/components/DevicePreset/PresetNodes';
 import { PanelDnsRules } from '@/contours/traffic/components/DevicePreset/PanelDnsRules';
 import { InfoIcon } from '@/contours/traffic/components/DevicePreset/icons';
 import { NoEntryIcon, TrashIcon } from '@/contours/traffic/components/RoutePolicy/icons';
@@ -230,6 +231,7 @@ export function DevicePresetEditor({
           <DnsRulesEditor rows={dnsRows} onChange={setDnsRows} refused={dnsRefused} onTouch={clearDnsRefused} />
         </Box>
       )}
+      <PresetNodes preset={preset} dirty={dirty} />
       <DnsFormatsTable />
 
       <Box

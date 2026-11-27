@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { Box, Stack, Text } from '@mantine/core';
-import { dnsReach } from '@/contours/nodes/lib/dnsReach';
+import { dnsReach } from '@/lib/domain/dnsReach';
 import type { NodeCore } from '@/lib/domain/nodes';
 import { AMBER, MIST, MONO, RED, SNOW } from '@/contours/nodes/lib/colors';
 

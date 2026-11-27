@@ -15,6 +15,7 @@ import { intendedEngines, reportedEngines } from './node-engines.js';
 import { readCoreVersions } from './node-core-versions.js';
 import { reportedAwgProtocol } from './node-core-gate.js';
 import type { CascadeEngineNeed } from './node-cascade-needs.js';
+import { overriddenNames, type StoredPresetDns } from '../routing-presets/routing-presets.dns-merge.js';
 import { publicHysteriaTls, type PublicHysteriaTls } from './hysteria-tls-shape.js';
 
 // G (Zashchita / hardening) - public shape of the nodes.hardening jsonb blob.
@@ -141,6 +142,10 @@ export interface PublicNodeDto {
   /** Э3 F: the resolver this node's users get, null = the host's own. Shape is
    *  DnsCfg in packages/shared. */
   dns: DnsCfg | null;
+  /** 19.12: the DNS rules the node carries from presets and the panel-wide rules (nodes.preset_dns_rules), apart from the
+   *  manual `dns`. presetId null = the panel-wide rules; the screen names the preset from its list. `overridden` = the names
+   *  of the rule the node's own DNS also names, which it answers first. Empty = nothing carried. */
+  carriedDns: { presetId: string | null; rules: { match: string[]; server: string; overridden: string[] }[] }[];
   /** 18.6: the operator's IPv6 setting, auto | on | off (IPV6_MODES in shared). A row
    *  the column does not hold reads as auto. */
   ipv6Mode: Ipv6Mode;
@@ -254,6 +259,7 @@ export const NODE_DTO_FIELDS = [
   'intendedEngines',
   'coreVersions',
   'engines',
+  'carriedDns',
   'hiddenByCascade',
   'cascadeNeedsEngines',
   'cores[].reason',
@@ -262,6 +268,15 @@ export const NODE_DTO_FIELDS = [
   'hysteriaTls',
   'cores[].tls',
 ] as const;
+
+function publicCarriedDns(node: Node): PublicNodeDto['carriedDns'] {
+  const stored = Array.isArray(node.presetDnsRules) ? (node.presetDnsRules as unknown as StoredPresetDns[]) : [];
+  const manual = (node.dns as DnsCfg | null) ?? null;
+  return stored.map((s) => ({
+    presetId: s.presetId,
+    rules: s.rules.map((r) => ({ match: [...r.match], server: r.server, overridden: overriddenNames(manual, r) })),
+  }));
+}
 
 /**
  * Public DTO for a node, strips internal cert/key material and lifecycle
@@ -298,6 +313,7 @@ export function mapNodeToPublic(node: Node): PublicNodeDto {
     intendedEngines: intended,
     policyId: node.policyId,
     dns: (node.dns as DnsCfg | null) ?? null,
+    carriedDns: publicCarriedDns(node),
     ipv6Mode: readIpv6Mode(node.ipv6Mode),
     cores: (node.cores as NodeCores | null) ?? null,
     coreVersions: readCoreVersions(node.coreVersions),

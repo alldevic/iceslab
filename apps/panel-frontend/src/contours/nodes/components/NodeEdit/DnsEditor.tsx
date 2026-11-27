@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Box, Select, Stack, Switch, Text, Textarea, TextInput } from '@mantine/core';
 import { Caption } from '@/contours/nodes/components/NodeEdit/Caption';
+import { CarriedDns } from '@/contours/nodes/components/NodeEdit/CarriedDns';
 import { DnsReach } from '@/contours/nodes/components/NodeEdit/DnsReach';
 import { PlainButton } from '@/contours/nodes/components/NodeEdit/PlainButton';
 import { ServerIcon } from '@/contours/nodes/components/NodeEdit/icons';
@@ -17,7 +18,7 @@ import {
   type DnsQueryStrategy,
   type DnsServerForm,
 } from '@/contours/nodes/lib/nodeDnsForm';
-import type { NodeCore } from '@/lib/domain/nodes';
+import type { CarriedDnsSource, NodeCore } from '@/lib/domain/nodes';
 
 /** Built-in resolvers of a node with no DNS of its own (core.DefaultResolvers in apps/node). */
 const BUILT_IN = '1.1.1.1, 8.8.8.8, localhost';
@@ -31,10 +32,13 @@ export function DnsEditor({
   value,
   onChange,
   cores,
+  carried,
 }: {
   value: DnsForm;
   onChange: (next: DnsForm) => void;
   cores: NodeCore[] | null | undefined;
+  /** What the node carries from presets (19.12), shown apart and read only. */
+  carried?: CarriedDnsSource[];
 }) {
   const { t } = useTranslation();
   // expectIps, strategy and cache stay folded unless the node already uses them.
@@ -172,6 +176,8 @@ export function DnsEditor({
           {t('nodeEdit.dnsReset')}
         </PlainButton>
       </Box>
+
+      <CarriedDns carried={carried} />
 
       <DnsReach cores={cores} />
     </Stack>

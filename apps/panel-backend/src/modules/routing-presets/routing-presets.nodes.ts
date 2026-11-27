@@ -47,10 +47,13 @@ export class RoutingPresetDnsConflictError extends Error {
     );
     this.name = 'RoutingPresetDnsConflictError';
     this.other = other.presetId === null ? PANEL_DNS_NAME : other.name;
+    this.otherIsPanel = other.presetId === null;
     this.domain = conflict.domain;
   }
   /** The second preset (or the panel-wide rules), named. */
   readonly other: string;
+  /** The other side is the panel-wide rules, not a preset: the screen says it in its own words (19.12). */
+  readonly otherIsPanel: boolean;
   readonly domain: string;
 }
 
@@ -105,7 +108,7 @@ export async function nodesOfPreset(presetId: string, db: Db = prisma): Promise<
   return [...((await presetNodeIndex(db)).get(presetId) ?? [])];
 }
 
-async function readPanelRules(db: Db): Promise<{ match: string[]; server: string }[]> {
+export async function readPanelRules(db: Db): Promise<{ match: string[]; server: string }[]> {
   const row = await db.appSetting.findUnique({ where: { key: 'subscriptionDnsRules' }, select: { value: true } });
   const parsed = DnsRulesSchema.safeParse(row?.value);
   return parsed.success && dnsRuleProblem(parsed.data) === null ? parsed.data.map((r) => ({ match: r.match, server: r.server })) : [];
@@ -280,7 +283,7 @@ export async function recomputeAfterChange(scope: Omit<DnsPlanScope, 'refuse' | 
 /** The refusal of an assignment as an HTTP answer, or null for any other error. The preset field carries it to the form. */
 export function dnsAssignRefusal(err: unknown): { status: number; body: Record<string, unknown> } | null {
   if (err instanceof RoutingPresetDnsConflictError) {
-    return { status: 409, body: { error: err.code, message: err.message, field: 'customRoutingPresetId', node: err.node, preset: err.other, domain: err.domain } };
+    return { status: 409, body: { error: err.code, message: err.message, field: 'customRoutingPresetId', node: err.node, preset: err.other, panel: err.otherIsPanel, domain: err.domain } };
   }
   if (err instanceof RoutingPresetDnsLimitError) {
     return { status: 409, body: { error: err.code, message: err.message, field: 'customRoutingPresetId', node: err.node, count: err.count } };

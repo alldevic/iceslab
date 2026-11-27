@@ -27,6 +27,12 @@ export function presetRefusalWords(r: RoutingPresetRefusal, t: Translate): strin
       return t('routes.presetDnsMatchInvalid', { entries: r.entries.join(', ') });
     case 'ROUTING_PRESET_DNS_SERVER_INVALID':
       return t('routes.presetDnsServerInvalid', { entries: r.entries.join(', ') });
+    case 'ROUTING_PRESET_DNS_CONFLICT':
+      return r.panel
+        ? t('routes.presetDnsConflictPanel', { node: r.node, domain: r.domain })
+        : t('routes.presetDnsConflict', { preset: r.preset, node: r.node, domain: r.domain });
+    case 'ROUTING_PRESET_DNS_NODE_LIMIT':
+      return t('routes.presetDnsNodeLimit', { node: r.node, count: r.count });
     case 'ROUTING_PRESET_BUILT_IN':
       return t('routes.presetBuiltInRefused');
     case 'NOT_FOUND':

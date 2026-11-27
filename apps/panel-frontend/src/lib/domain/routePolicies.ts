@@ -1,4 +1,4 @@
-import type { DnsRule } from '@iceslab/shared';
+import type { DnsRule, NodeCoreInfo } from '@iceslab/shared';
 import { api } from '@/lib/net/client';
 import { listFieldKnown } from '@/lib/domain/nodeFields';
 
@@ -204,6 +204,44 @@ export async function deleteRoutingPreset(id: string): Promise<void> {
 }
 
 /**
+ * 19.12: the nodes that get the DNS rules of a preset (GET /api/routing-presets/:id/nodes).
+ * `scope` panel: a built-in preset, whose rules are the panel-wide ones, on every node.
+ */
+export type DnsSkippedKind = 'server-kind' | 'conflict' | 'limit' | 'manual';
+
+export interface DnsSkippedRule {
+  /** Position in the rules of the source. */
+  index: number;
+  kind: DnsSkippedKind;
+  /** conflict: the other preset's name, null = the panel-wide rules, '' = a preset that is gone. */
+  otherPreset?: string | null;
+  names?: string[];
+}
+
+export interface PresetNode {
+  id: string;
+  name: string;
+  online: boolean;
+  /** none: nothing is carried; sent: carried and applied; waiting: carried, the node has not applied its config. */
+  state: 'none' | 'sent' | 'waiting';
+  carried: number;
+  /** As reported; null = never reported. */
+  cores: NodeCoreInfo[] | null;
+  skipped: DnsSkippedRule[];
+}
+
+export interface PresetNodes {
+  scope: 'preset' | 'panel';
+  ruleCount: number;
+  nodes: PresetNode[];
+}
+
+export async function getPresetNodes(id: string): Promise<PresetNodes> {
+  const { data } = await api.get<PresetNodes>(`/api/routing-presets/${encodeURIComponent(id)}/nodes`);
+  return data;
+}
+
+/**
  * A refused preset write, read by code (A-229, BACK-2). Null: not one of
  * these, the caller says the server's sentence. The input is checked first;
  * entries and holders that are not strings or named rows are skipped.
@@ -215,6 +253,9 @@ export async function deleteRoutingPreset(id: string): Promise<void> {
  *   404 NOT_FOUND (the preset went away)
  *   409 NAME_TAKEN {field: 'name'}
  *   409 ROUTING_PRESET_IN_USE {users, squads, userCount, squadCount}
+ *   409 ROUTING_PRESET_DNS_CONFLICT {node, preset, panel, domain} (19.10: another preset, or the panel-wide
+ *       rules (`panel: true`), gives the name another server on that node; `preset` is its name)
+ *   409 ROUTING_PRESET_DNS_NODE_LIMIT {node, count} (the node would have more than 16 DNS servers)
  */
 export type RoutingPresetRefusal =
   | {
@@ -226,6 +267,8 @@ export type RoutingPresetRefusal =
       entries: string[];
     }
   | { code: 'ROUTING_PRESET_BUILT_IN' | 'NOT_FOUND' | 'NAME_TAKEN' }
+  | { code: 'ROUTING_PRESET_DNS_CONFLICT'; node: string; preset: string; panel: boolean; domain: string }
+  | { code: 'ROUTING_PRESET_DNS_NODE_LIMIT'; node: string; count: number }
   | {
       code: 'ROUTING_PRESET_IN_USE';
       users: string[];
@@ -243,6 +286,8 @@ const PRESET_STATUS: Record<string, number> = {
   NOT_FOUND: 404,
   NAME_TAKEN: 409,
   ROUTING_PRESET_IN_USE: 409,
+  ROUTING_PRESET_DNS_CONFLICT: 409,
+  ROUTING_PRESET_DNS_NODE_LIMIT: 409,
 };
 
 export function routingPresetRefusal(err: unknown): RoutingPresetRefusal | null {
@@ -269,6 +314,13 @@ export function routingPresetRefusal(err: unknown): RoutingPresetRefusal | null 
     code === 'ROUTING_PRESET_DNS_SERVER_INVALID'
   ) {
     return { code, entries: strings(d.entries) };
+  }
+  if (code === 'ROUTING_PRESET_DNS_CONFLICT') {
+    const text = (v: unknown) => (typeof v === 'string' ? v : '');
+    return { code, node: text(d.node), preset: text(d.preset), panel: d.panel === true, domain: text(d.domain) };
+  }
+  if (code === 'ROUTING_PRESET_DNS_NODE_LIMIT') {
+    return { code, node: typeof d.node === 'string' ? d.node : '', count: typeof d.count === 'number' ? d.count : 0 };
   }
   if (code === 'ROUTING_PRESET_IN_USE') {
     const users = named(d.users, 'username');

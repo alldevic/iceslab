@@ -207,7 +207,7 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
             dnsPlan = await planDnsTransfer({ presetId: null, rules: input.subscriptionDnsRules ?? [] });
           } catch (err) {
             if (err instanceof RoutingPresetDnsConflictError) {
-              return reply.code(409).send({ error: err.code, message: err.message, node: err.node, preset: err.other, domain: err.domain });
+              return reply.code(409).send({ error: err.code, message: err.message, node: err.node, preset: err.other, panel: err.otherIsPanel, domain: err.domain });
             }
             if (err instanceof RoutingPresetDnsLimitError) {
               return reply.code(409).send({ error: err.code, message: err.message, node: err.node, count: err.count });

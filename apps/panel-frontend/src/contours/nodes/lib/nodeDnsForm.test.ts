@@ -6,6 +6,7 @@ import {
   dnsHasAdvanced,
   dnsPatch,
   dnsProblems,
+  carriedSummary,
   dnsSummary,
   emptyDnsServer,
   splitList,
@@ -167,5 +168,17 @@ describe('dnsSummary', () => {
     expect(dnsSummary({ dns: stored })).toEqual({ servers: 2, domains: 2 });
     expect(dnsSummary({ dns: null })).toEqual({ servers: 0, domains: 0 });
     expect(dnsSummary({})).toEqual({ servers: 0, domains: 0 });
+  });
+});
+
+describe('carriedSummary (19.12)', () => {
+  it('counts the rules carried from presets and the panel, apart from the manual dns', () => {
+    const rule = { match: ['a.test'], server: '10.0.0.1', overridden: [] };
+    expect(carriedSummary({ carriedDns: [{ presetId: 'p', rules: [rule, rule] }, { presetId: null, rules: [rule] }, { presetId: 'q', rules: [] }] })).toEqual({ rules: 3, sources: 2 });
+  });
+
+  it('is zero for a node that carries none and for a server older than the field', () => {
+    expect(carriedSummary({ carriedDns: [] })).toEqual({ rules: 0, sources: 0 });
+    expect(carriedSummary({})).toEqual({ rules: 0, sources: 0 });
   });
 });

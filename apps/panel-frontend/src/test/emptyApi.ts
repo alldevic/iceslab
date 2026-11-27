@@ -13,7 +13,7 @@ import type { listSrrRules } from '@/lib/domain/srr';
 import type { listTemplates } from '@/lib/domain/subscriptionTemplates';
 import type { listGeoSets } from '@/lib/domain/geoSets';
 import type { listNamedOutbounds } from '@/lib/domain/namedOutbounds';
-import type { listRoutePolicies, listRoutingPresets } from '@/lib/domain/routePolicies';
+import type { getPresetNodes, listRoutePolicies, listRoutingPresets } from '@/lib/domain/routePolicies';
 import type { listNodePolicies } from '@/lib/domain/nodePolicies';
 import type { getRecipeRegistry, getRecipeSources } from '@/lib/domain/recipes';
 import type { getPublicSettings, getSettings, getSystemVersion, listApiTokens } from '@/lib/domain/settings';
@@ -143,6 +143,7 @@ export const EMPTY_ROUTES: RouteEntry[] = [
   typed<typeof listNamedOutbounds>(/^\/api\/named-outbounds$/, { outbounds: [] }),
   typed<typeof listRoutePolicies>(/^\/api\/route-policies$/, { policies: [] }),
   typed<typeof listRoutingPresets>(/^\/api\/routing-presets$/, { presets: [] }),
+  typed<typeof getPresetNodes>(/^\/api\/routing-presets\/[^/]+\/nodes$/, { scope: 'preset', ruleCount: 0, nodes: [] }),
   typed<typeof listNodePolicies>(/^\/api\/node-policies$/, { policies: [] }),
   none(/^\/api\/node-policies\/[^/]+$/),
 

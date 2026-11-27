@@ -7,8 +7,8 @@ import { loadFailure } from '@/lib/ui/loadView';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { apiErrorMessage } from '@/lib/net/client';
 import { LoadFailed } from '@/ui/LoadFailed';
-import { dnsReach } from '@/contours/nodes/lib/dnsReach';
-import { dnsSummary } from '@/contours/nodes/lib/nodeDnsForm';
+import { dnsReach } from '@/lib/domain/dnsReach';
+import { carriedSummary, dnsSummary } from '@/contours/nodes/lib/nodeDnsForm';
 import { AMBER, CARD, CYAN, DISPLAY, FAINT, HAIRLINE, MIST, MONO, MOSS, RED, SNOW, WELL } from '@/contours/nodes/lib/colors';
 
 /**
@@ -61,11 +61,13 @@ export function DnsPage() {
 function NodeDnsRow({ node }: { node: Node }) {
   const { t } = useTranslation();
   const { servers, domains } = dnsSummary(node);
+  const carried = carriedSummary(node);
   const reach = dnsReach(node.cores?.cores);
   // Идёт речь о настройке, которой нет: тогда «исполняют ли ядра» ничего не
   // говорит, и строка про ядра не нужна. Предупреждение о ядрах появляется
   // только там, где настройка есть.
   const configured = servers > 0;
+  const carriedLine = carried.rules > 0 ? t('dnsPage.carried', { rules: carried.rules }) : null;
 
   return (
     <Box
@@ -82,7 +84,7 @@ function NodeDnsRow({ node }: { node: Node }) {
       <Stack gap={2} style={{ minWidth: 0, flex: 1 }}>
         <Text style={{ fontFamily: DISPLAY, fontSize: 13, color: SNOW }}>{node.name}</Text>
         <Text style={{ fontFamily: MONO, fontSize: 10, lineHeight: '14px', color: FAINT }}>
-          {configured ? t('dnsPage.summary', { servers, domains }) : t('dnsPage.builtIn')}
+          {[configured ? t('dnsPage.summary', { servers, domains }) : t('dnsPage.builtIn'), carriedLine].filter(Boolean).join(' · ')}
         </Text>
       </Stack>
 

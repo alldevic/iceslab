@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dnsReach } from '@/contours/nodes/lib/dnsReach';
+import { dnsReach } from '@/lib/domain/dnsReach';
 import type { NodeCore } from '@/lib/domain/nodes';
 
 /** Core as the agent sends it; the type comes from the contract. */
