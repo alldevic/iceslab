@@ -137,6 +137,11 @@ func validatePeer(p Peer) error {
 	if err := validateAllowedIP(p.AllowedIP); err != nil {
 		return err
 	}
+	if p.AllowedIP6 != "" {
+		if err := validateAllowedIP6(p.AllowedIP6); err != nil {
+			return err
+		}
+	}
 	if p.PresharedKey != "" {
 		if err := validateWGKey(p.PresharedKey); err != nil {
 			return fmt.Errorf("preshared key: %w", err)

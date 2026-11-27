@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { randomSubnet6, SUBNET6_RE, subnet6Problem } from '@/contours/profiles/lib/subnet6';
+import { randomSubnet6, SUBNET6_RE, subnet6ChangeRestarts, subnet6Problem } from '@/contours/profiles/lib/subnet6';
 import { defaults } from '@/contours/profiles/lib/profileDefaults';
 import { profileConfigOf } from '@/contours/profiles/lib/profileConfig';
 import type { Profile } from '@/lib/domain/profiles';
@@ -58,5 +58,20 @@ describe('subnet6 in the form of a saved profile', () => {
   it('a new profile starts without one', () => {
     expect(defaults(null).awgSubnet6).toBe('');
     expect(defaults(null).wgSubnet6).toBe('');
+  });
+});
+
+describe('the restart warning (18.10)', () => {
+  const v6 = 'fd12:3456:789a:1::/64';
+  it('shows on a saved profile when the subnet is added, changed or removed', () => {
+    expect(subnet6ChangeRestarts(true, '', v6)).toBe(true);
+    expect(subnet6ChangeRestarts(true, v6, 'fd12:3456:789a:2::/64')).toBe(true);
+    expect(subnet6ChangeRestarts(true, v6, '')).toBe(true);
+  });
+  it('stays away from a new profile, an unchanged value and one that is not valid yet', () => {
+    expect(subnet6ChangeRestarts(false, '', v6)).toBe(false);
+    expect(subnet6ChangeRestarts(true, v6, ` ${v6} `)).toBe(false);
+    expect(subnet6ChangeRestarts(true, '', '')).toBe(false);
+    expect(subnet6ChangeRestarts(true, '', 'fd12')).toBe(false);
   });
 });

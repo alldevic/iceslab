@@ -16,6 +16,7 @@ import { IconKey } from '@tabler/icons-react';
 import { PresharedKeySwitch } from '@/contours/profiles/components/ProfileForm/PresharedKeySwitch';
 import { GenerateWarning } from '@/contours/profiles/components/ProfileForm/GenerateWarning';
 import { confirmGenerate } from '@/contours/profiles/lib/confirmGenerate';
+import { Subnet6Warning } from '@/contours/profiles/components/ProfileForm/Subnet6Warning';
 import { randomSubnet6 } from '@/contours/profiles/lib/subnet6';
 import { randomAwgHeaders } from '@/contours/profiles/lib/awgPresets';
 import { showGenerateWarning, useGenerateGate } from '@/contours/profiles/lib/generateImpact';
@@ -33,6 +34,7 @@ export function AmneziawgSection({
   profileId,
   awgKnown,
   awgRefusal,
+  savedSubnet6,
 }: {
   generateAwgKeys: () => Promise<void>;
   applyAwgPreset: (preset: 'tspu' | 'mobile' | 'custom') => void;
@@ -44,6 +46,8 @@ export function AmneziawgSection({
   awgKnown: boolean;
   /** 409 AWG_PROTOCOL_MISMATCH последнего сохранения. */
   awgRefusal: CoreGateRefusal | null;
+  /** The IPv6 subnet as saved, '' for a new profile: what the warning compares to. */
+  savedSubnet6: string;
 }) {
   const { t } = useTranslation();
   // The warning reads the cached count; the press asks the server again (A-225).
@@ -173,6 +177,7 @@ export function AmneziawgSection({
                   {t('profiles.form.cfg.generate')}
                 </Button>
               </Group>
+              <Subnet6Warning isEdit={isEdit} saved={savedSubnet6} value={form.values.awgSubnet6} />
               <Group justify="space-between" align="center" wrap="nowrap" gap="md">
                 <Text size="sm" fw={500}>
                   {t('profiles.form.cfg.awgPresetLabel')}

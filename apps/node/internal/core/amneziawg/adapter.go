@@ -82,6 +82,13 @@ type Config struct {
 
 	// runCmd is an injection point for tests. nil → real exec.CommandContext.
 	runCmd func(ctx context.Context, name string, args ...string) ([]byte, error)
+
+	// Ip6tablesBin is the ip6tables the IPv6 probe runs (milestone 18.10);
+	// empty is "ip6tables" from PATH, which the PostUp lines use as well.
+	Ip6tablesBin string
+
+	// ip6 is the probe's cached answer, shared with the 3.1 instance.
+	ip6 *ipv6Probe
 }
 
 // Adapter implements core.CoreAdapter for AmneziaWG.
@@ -179,6 +186,9 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 	if cfg.runCmd == nil {
 		cfg.runCmd = realRunCmd
 	}
+	if cfg.ip6 == nil {
+		cfg.ip6 = &ipv6Probe{}
+	}
 	a := newOne(cfg, logger)
 	if !plain && cfg.Inbound.Interface != V3Interface {
 		v3 := cfg
@@ -190,6 +200,9 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 }
 
 func newOne(cfg Config, logger *slog.Logger) *Adapter {
+	if cfg.ip6 == nil {
+		cfg.ip6 = &ipv6Probe{}
+	}
 	a := &Adapter{
 		cfg:       cfg,
 		logger:    logger,
@@ -579,12 +592,14 @@ func (a *Adapter) AddUser(user core.User) error {
 			onPlain.AmneziaWGPeers = make([]core.AmneziaWGPeer, 0, len(user.AmneziaWGPeers))
 			for _, p := range user.AmneziaWGPeers {
 				p.AllowedIP, p.AllowedIP3 = p.WireguardAllowedIP, ""
+				p.AllowedIP6, p.AllowedIP3v6 = p.WireguardAllowedIP6, ""
 				p.PresharedKey, p.PresharedKey3 = p.WireguardPresharedKey, ""
 				onPlain.AmneziaWGPeers = append(onPlain.AmneziaWGPeers, p)
 			}
 			return a.addPeer(onPlain)
 		}
 		user.AmneziaWGPublicKey, user.AmneziaWGAllowedIP = user.WireguardPublicKey, user.WireguardAllowedIP
+		user.AmneziaWGAllowedIP6 = user.WireguardAllowedIP6
 		return a.addPeer(user)
 	}
 	if err := a.addPeer(user); err != nil {
@@ -602,6 +617,7 @@ func (a *Adapter) AddUser(user core.User) error {
 		for _, p := range user.AmneziaWGPeers {
 			if p.AllowedIP3 != "" {
 				p.AllowedIP, p.AllowedIP3 = p.AllowedIP3, ""
+				p.AllowedIP6, p.AllowedIP3v6 = p.AllowedIP3v6, ""
 				p.PresharedKey, p.PresharedKey3 = p.PresharedKey3, ""
 				on3.AmneziaWGPeers = append(on3.AmneziaWGPeers, p)
 			}
@@ -615,6 +631,7 @@ func (a *Adapter) AddUser(user core.User) error {
 		return a.v3.RemoveUser(user.UserID)
 	}
 	on3.AmneziaWGAllowedIP, on3.AmneziaWGAllowedIP3 = user.AmneziaWGAllowedIP3, ""
+	on3.AmneziaWGAllowedIP6, on3.AmneziaWGAllowedIP3v6 = user.AmneziaWGAllowedIP3v6, ""
 	return a.v3.addPeer(on3)
 }
 
@@ -628,14 +645,14 @@ func peersOf(user core.User) (peers []Peer, explicit bool) {
 			if p.PublicKey == "" || p.AllowedIP == "" {
 				continue
 			}
-			peers = append(peers, Peer{PublicKey: p.PublicKey, AllowedIP: ensureCIDR(p.AllowedIP), PresharedKey: p.PresharedKey})
+			peers = append(peers, Peer{PublicKey: p.PublicKey, AllowedIP: ensureCIDR(p.AllowedIP), AllowedIP6: ensureCIDR(p.AllowedIP6), PresharedKey: p.PresharedKey})
 		}
 		return peers, true
 	}
 	if user.AmneziaWGPublicKey == "" || user.AmneziaWGAllowedIP == "" {
 		return nil, false
 	}
-	return []Peer{{PublicKey: user.AmneziaWGPublicKey, AllowedIP: ensureCIDR(user.AmneziaWGAllowedIP)}}, false
+	return []Peer{{PublicKey: user.AmneziaWGPublicKey, AllowedIP: ensureCIDR(user.AmneziaWGAllowedIP), AllowedIP6: ensureCIDR(user.AmneziaWGAllowedIP6)}}, false
 }
 
 func (a *Adapter) addPeer(user core.User) error {
@@ -1084,6 +1101,10 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	a.restartMu.Lock()
 	defer a.restartMu.Unlock()
 
+	// IPv6 needs NAT on the host (milestone 18.10); asked before mu, it forks.
+	// A push that carries subnet6 to a host without it is served on IPv4.
+	ipv6OK := wire.Subnet6 == "" || a.hostCanNAT6()
+
 	a.mu.Lock()
 	// Slice 50: prefer the panel-pushed port over install-time fallback.
 	// Pre-slice-50 panel paths still work because port=0 falls through to
@@ -1101,6 +1122,9 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	// instance stays plain even when a push carries an obfuscation block, and
 	// validate then refuses it rather than dropping it unseen.
 	newInbound.Plain = a.plain()
+	if !ipv6OK {
+		newInbound.Address6 = ""
+	}
 	// Preserve install-time PostUp/PostDown and Interface defaults, those
 	// aren't in the panel wire. Interface name is install-time identity; if
 	// the wire expressed a new one it'd be a separate diffRestart anyway.
@@ -1716,10 +1740,15 @@ func sortedPeers(in map[string][]Peer) []Peer {
 	return out
 }
 
-// ensureCIDR appends /32 to a bare IP. Pass-through if already in CIDR form.
+// ensureCIDR appends /32 to a bare IPv4 and /128 to a bare IPv6. Pass-through
+// if already in CIDR form, and "" stays "" (an absent address is not one to
+// invent a mask for).
 func ensureCIDR(ip string) string {
-	if strings.Contains(ip, "/") {
+	if ip == "" || strings.Contains(ip, "/") {
 		return ip
+	}
+	if strings.Contains(ip, ":") {
+		return ip + "/128"
 	}
 	return ip + "/32"
 }

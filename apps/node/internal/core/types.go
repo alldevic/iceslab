@@ -39,6 +39,12 @@ type User struct {
 	WireguardPublicKey string
 	WireguardAllowedIP string
 
+	// Device 1's IPv6 on each interface kind (milestone 18.10), for an
+	// interface that carries IPv6 in the tunnel; empty otherwise.
+	AmneziaWGAllowedIP6   string
+	AmneziaWGAllowedIP3v6 string
+	WireguardAllowedIP6   string
+
 	// AmneziaWGPeers: one peer per device of the user (milestone 9.4), each
 	// with its own key and an address per interface. Non-nil replaces the
 	// single fields above, which an older panel sends instead; non-nil and
@@ -56,6 +62,11 @@ type AmneziaWGPeer struct {
 	AllowedIP          string
 	AllowedIP3         string
 	WireguardAllowedIP string
+	// The device's IPv6 on the same interfaces (milestone 18.10), empty where
+	// that interface does not carry IPv6.
+	AllowedIP6          string
+	AllowedIP3v6        string
+	WireguardAllowedIP6 string
 	// The device's preshared key on each interface kind (milestone 9.5), empty
 	// where that interface's profile does not ask for one. The panel sends the
 	// one secret of the device to every interface whose profile has the flag on.

@@ -387,3 +387,23 @@ describe('the amneziawg inbound against the agent', () => {
     );
   });
 });
+
+/**
+ * IPv6 inside the WireGuard-family tunnel (18.9 names the fields, 18.10 makes the
+ * agent read and report them): the peer's addresses and the agent's fact, by
+ * their Go tags. The names are the ones transport.ts spells.
+ */
+describe('the tunnel IPv6 fields against the agent', () => {
+  it('has the peer and credential addresses the panel pushes', () => {
+    expect(jsonKeysOf('AmneziaWGPeerDto')).toEqual(
+      expect.arrayContaining(['allowedIp6', 'allowedIp3v6', 'wireguardAllowedIp6']),
+    );
+    expect(jsonKeysOf('ProtocolCredentials')).toEqual(
+      expect.arrayContaining(['amneziawgAllowedIp6', 'amneziawgAllowedIp3v6', 'wireguardAllowedIp6']),
+    );
+  });
+
+  it('has the fact the panel reads, on the core row', () => {
+    expect(jsonKeysOf('CoreStatus')).toContain('awgIpv6');
+  });
+});

@@ -244,6 +244,35 @@ func TestAwgProtocolTravelsOnlyWhenKnown(t *testing.T) {
 	}
 }
 
+// ipv6Core answers the awgIpv6 fact the way the adapter does: from a check it
+// is given, in place of an `ip6tables -t nat -S` on the machine running the test.
+type ipv6Core struct {
+	fakeCore
+	nat6 func() bool
+}
+
+func (c *ipv6Core) AwgIpv6() bool { return c.nat6() }
+
+// Milestone 18.10: the amneziawg row carries awgIpv6 when the host can NAT
+// IPv6, and says nothing when it cannot (the panel reads absent as no).
+func TestAwgIpv6TravelsOnTheAmneziawgRowOnlyWhenTheHostCanNat(t *testing.T) {
+	yes := healthBody(t,
+		&ipv6Core{fakeCore{name: "amneziawg", running: true}, func() bool { return true }},
+		&fakeCore{name: "hysteria", running: true},
+	)
+	if !strings.Contains(yes, `"awgIpv6":true`) || strings.Count(yes, `"awgIpv6"`) != 1 {
+		t.Errorf("the fact belongs on the amneziawg row, true: %s", yes)
+	}
+	no := healthBody(t, &ipv6Core{fakeCore{name: "amneziawg", running: true}, func() bool { return false }})
+	if strings.Contains(no, `"awgIpv6"`) {
+		t.Errorf("a host without IPv6 NAT must send no fact: %s", no)
+	}
+	// An agent that cannot tell (a core that does not report it) sends none.
+	if body := healthBody(t, &generationCore{fakeCore{name: "amneziawg", running: true}, 3}); strings.Contains(body, `"awgIpv6"`) {
+		t.Errorf("a core that does not report the fact sent it: %s", body)
+	}
+}
+
 // The machine's arch travels with every health answer: the panel's update
 // command needs it to pick a release file and its sha256.
 func TestHealthNamesTheMachineArch(t *testing.T) {

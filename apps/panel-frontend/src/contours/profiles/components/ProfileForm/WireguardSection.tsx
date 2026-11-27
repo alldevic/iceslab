@@ -6,6 +6,7 @@ import { PresharedKeySwitch } from '@/contours/profiles/components/ProfileForm/P
 import { GenerateWarning } from '@/contours/profiles/components/ProfileForm/GenerateWarning';
 import { confirmGenerate } from '@/contours/profiles/lib/confirmGenerate';
 import { showGenerateWarning, useGenerateGate } from '@/contours/profiles/lib/generateImpact';
+import { Subnet6Warning } from '@/contours/profiles/components/ProfileForm/Subnet6Warning';
 import { randomSubnet6 } from '@/contours/profiles/lib/subnet6';
 import type { FormValues } from '@/contours/profiles/lib/profileFormValues';
 
@@ -20,12 +21,15 @@ export function WireguardSection({
   form,
   isEdit,
   profileId,
+  savedSubnet6,
 }: {
   generateWgKeys: () => Promise<void>;
   keypairPending: boolean;
   form: UseFormReturnType<FormValues>;
   isEdit: boolean;
   profileId: string | null;
+  /** The IPv6 subnet as saved, '' for a new profile: what the warning compares to. */
+  savedSubnet6: string;
 }) {
   const { t } = useTranslation();
   // The warning reads the cached count; the press asks the server again (A-225).
@@ -96,6 +100,7 @@ export function WireguardSection({
           {t('profiles.form.cfg.generate')}
         </Button>
       </Group>
+      <Subnet6Warning isEdit={isEdit} saved={savedSubnet6} value={form.values.wgSubnet6} />
       {isEdit && showGenerateWarning(impact) && <GenerateWarning impact={impact} />}
       <PresharedKeySwitch form={form} field="wgPresharedKey" />
     </Stack>

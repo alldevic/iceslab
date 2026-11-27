@@ -655,6 +655,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 					cs.AwgProtocol = g.AwgProtocol()
 					cs.AwgGenerations = g.AwgGenerations()
 				}
+				if g, ok := adapter.(core.AwgIpv6Reporter); ok {
+					cs.AwgIpv6 = g.AwgIpv6()
+				}
 			}
 			// The certificate this core serves (E30a), for the panel's "Cores"
 			// beside the certificate it minted. Absent = unknown.
@@ -1004,7 +1007,8 @@ func amneziawgPeers(in []dto.AmneziaWGPeerDto) []core.AmneziaWGPeer {
 		out = append(out, core.AmneziaWGPeer{
 			PublicKey: p.PublicKey, AllowedIP: p.AllowedIP, AllowedIP3: p.AllowedIP3,
 			WireguardAllowedIP: p.WireguardAllowedIP,
-			PresharedKey:       p.PresharedKey, PresharedKey3: p.PresharedKey3,
+			AllowedIP6:         p.AllowedIP6, AllowedIP3v6: p.AllowedIP3v6, WireguardAllowedIP6: p.WireguardAllowedIP6,
+			PresharedKey: p.PresharedKey, PresharedKey3: p.PresharedKey3,
 			WireguardPresharedKey: p.WireguardPresharedKey,
 		})
 	}
@@ -1039,6 +1043,8 @@ func (s *Server) addUser(req dto.AddUserRequest) []string {
 		AmneziaWGAllowedIP3: req.Credentials.AmneziaWGAllowedIP3,
 		WireguardPublicKey:  req.Credentials.WireguardPublicKey,
 		WireguardAllowedIP:  req.Credentials.WireguardAllowedIP,
+		AmneziaWGAllowedIP6: req.Credentials.AmneziaWGAllowedIP6, AmneziaWGAllowedIP3v6: req.Credentials.AmneziaWGAllowedIP3v6,
+		WireguardAllowedIP6: req.Credentials.WireguardAllowedIP6,
 		AmneziaWGPeers:      amneziawgPeers(req.Credentials.AmneziaWGPeers),
 		TuicUUID:            req.Credentials.TuicUUID,
 		TuicPassword:        req.Credentials.TuicPassword,

@@ -79,6 +79,12 @@ type InboundConfig struct {
 	// (panel-backend amneziawg.service) is handing out from.
 	Address string
 
+	// Address6 is the server's IPv6 inside the tunnel, in CIDR form
+	// (e.g. "fd00:1::1/64"), from the profile's subnet6 (milestone 18.10).
+	// Empty: no IPv6 on this interface, and the rendered file is the one of
+	// before. Written as the second element of Address.
+	Address6 string `json:",omitempty"`
+
 	// Plain renders an upstream-WireGuard interface (milestone 9.1) instead of
 	// an AmneziaWG one: none of the obfuscation lines below is written, since
 	// wg-quick refuses a config on the first key it does not know, and
@@ -134,6 +140,11 @@ type Peer struct {
 	PublicKey string
 	// AllowedIP is the peer's IP in CIDR /32 form, e.g. "10.0.0.2/32".
 	AllowedIP string
+	// AllowedIP6 is the peer's IPv6 in CIDR /128 form (milestone 18.10), the
+	// second element of its AllowedIPs. Empty for a peer with no IPv6, and
+	// not rendered on an interface that has no Address6. Absent from a state
+	// file written before it.
+	AllowedIP6 string `json:",omitempty"`
 	// PresharedKey is mixed into this peer's handshake (milestone 9.5); empty
 	// renders no line at all: `PresharedKey = ` with nothing after it is not
 	// "no key", wg-quick refuses it. A secret: String keeps it out of any log.
@@ -142,7 +153,7 @@ type Peer struct {
 
 // String is the peer without its secret, for %v in an error or a log line.
 func (p Peer) String() string {
-	return fmt.Sprintf("{PublicKey:%s AllowedIP:%s}", p.PublicKey, p.AllowedIP)
+	return fmt.Sprintf("{PublicKey:%s AllowedIP:%s AllowedIP6:%s}", p.PublicKey, p.AllowedIP, p.AllowedIP6)
 }
 
 func (c *InboundConfig) withDefaults() InboundConfig {
@@ -198,6 +209,15 @@ func (c *InboundConfig) withDefaults() InboundConfig {
 		if peers := peerNetwork(out.Address); peers != "" {
 			out.PostUp = append(out.PostUp, "iptables -t nat -A POSTROUTING -s "+peers+" ! -o %i -j MASQUERADE")
 		}
+		// IPv6 (milestone 18.10): the same three rules through ip6tables, NAT66
+		// from the peers' private prefix to the node's own address. Only where
+		// the interface has an IPv6 address at all.
+		if peers6 := peerNetwork6(out.Address6); peers6 != "" {
+			out.PostUp = append(out.PostUp,
+				"ip6tables -I FORWARD 1 -i %i -j ACCEPT",
+				"ip6tables -I FORWARD 1 -o %i -j ACCEPT",
+				"ip6tables -t nat -A POSTROUTING -s "+peers6+" ! -o %i -j MASQUERADE")
+		}
 	}
 	if len(out.PostDown) == 0 {
 		out.PostDown = []string{
@@ -206,6 +226,12 @@ func (c *InboundConfig) withDefaults() InboundConfig {
 		}
 		if peers := peerNetwork(out.Address); peers != "" {
 			out.PostDown = append(out.PostDown, "iptables -t nat -D POSTROUTING -s "+peers+" ! -o %i -j MASQUERADE")
+		}
+		if peers6 := peerNetwork6(out.Address6); peers6 != "" {
+			out.PostDown = append(out.PostDown,
+				"ip6tables -D FORWARD -i %i -j ACCEPT",
+				"ip6tables -D FORWARD -o %i -j ACCEPT",
+				"ip6tables -t nat -D POSTROUTING -s "+peers6+" ! -o %i -j MASQUERADE")
 		}
 	}
 	return out
@@ -218,6 +244,16 @@ func peerNetwork(address string) string {
 	first, _, _ := strings.Cut(address, ",")
 	p, err := netip.ParsePrefix(strings.TrimSpace(first))
 	if err != nil || !p.Addr().Is4() {
+		return ""
+	}
+	return p.Masked().String()
+}
+
+// peerNetwork6 is peerNetwork for the interface's Address6:
+// fd00:1::1/64 -> fd00:1::/64. Empty when it is empty or not IPv6.
+func peerNetwork6(address6 string) string {
+	p, err := netip.ParsePrefix(strings.TrimSpace(address6))
+	if err != nil || !p.Addr().Is6() || p.Addr().Is4In6() {
 		return ""
 	}
 	return p.Masked().String()
@@ -262,6 +298,20 @@ func validateAllowedIP(s string) error {
 	return nil
 }
 
+// validateAllowedIP6 is validateAllowedIP for the IPv6 half of a peer: a /128
+// of an IPv6 address, nothing else (a wider prefix would let the peer claim
+// the network, and an IPv4 one belongs in AllowedIP).
+func validateAllowedIP6(s string) error {
+	p, err := netip.ParsePrefix(s)
+	if err != nil {
+		return fmt.Errorf("AllowedIP6 not a valid CIDR: %w", err)
+	}
+	if !p.Addr().Is6() || p.Addr().Is4In6() || p.Bits() != 128 {
+		return fmt.Errorf("AllowedIP6 %q is not an IPv6 /128", s)
+	}
+	return nil
+}
+
 // validateIField enforces "looks like an AmneziaWG I-signature": either a plain
 // hex string, or a 2.0 CPS (Custom Protocol Signature) built from the tags
 // `<b 0xHEX>` (fixed bytes), `<r N>` (N random bytes) and `<t>` (timestamp),
@@ -296,6 +346,9 @@ func (c *InboundConfig) validate() error {
 	}
 	if err := validateWGKey(c.PrivateKey); err != nil {
 		return fmt.Errorf("PrivateKey: %w", err)
+	}
+	if c.Address6 != "" && peerNetwork6(c.Address6) == "" {
+		return fmt.Errorf("Address6 %q is not an IPv6 CIDR", c.Address6)
 	}
 	if c.Plain {
 		return c.validatePlain()
@@ -391,7 +444,11 @@ func renderConfig(inbound InboundConfig, peers []Peer) (string, error) {
 	fmt.Fprintln(&b, "[Interface]")
 	fmt.Fprintf(&b, "PrivateKey = %s\n", cfg.PrivateKey)
 	fmt.Fprintf(&b, "ListenPort = %d\n", cfg.ListenPort)
-	fmt.Fprintf(&b, "Address = %s\n", cfg.Address)
+	if cfg.Address6 != "" {
+		fmt.Fprintf(&b, "Address = %s, %s\n", cfg.Address, cfg.Address6)
+	} else {
+		fmt.Fprintf(&b, "Address = %s\n", cfg.Address)
+	}
 	switch {
 	case cfg.Plain:
 		// Plain WireGuard stops at the address: wg-quick rejects the whole file
@@ -491,7 +548,16 @@ func renderHooksAndPeers(b *strings.Builder, cfg InboundConfig, peers []Peer) (s
 			}
 			fmt.Fprintf(b, "PresharedKey = %s\n", p.PresharedKey)
 		}
-		fmt.Fprintf(b, "AllowedIPs = %s\n", p.AllowedIP)
+		allowed := p.AllowedIP
+		// The peer's IPv6 only where the interface has one: an address outside
+		// any interface prefix routes nowhere.
+		if p.AllowedIP6 != "" && cfg.Address6 != "" {
+			if err := validateAllowedIP6(p.AllowedIP6); err != nil {
+				return "", fmt.Errorf("peer AllowedIP6: %w", err)
+			}
+			allowed += ", " + p.AllowedIP6
+		}
+		fmt.Fprintf(b, "AllowedIPs = %s\n", allowed)
 	}
 
 	return b.String(), nil

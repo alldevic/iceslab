@@ -61,7 +61,7 @@ type AmneziaWGPeerDto struct {
 	WireguardAllowedIP string `json:"wireguardAllowedIp,omitempty"`
 	// The peer's IPv6 on each interface kind (milestone 18.9), derived by the
 	// panel from the IPv4 address; present only for an interface that carries
-	// IPv6 in the tunnel. Read by the agent from milestone 18.10 on.
+	// IPv6 in the tunnel. Read by the agent (milestone 18.10).
 	AllowedIP6          string `json:"allowedIp6,omitempty"`
 	AllowedIP3v6        string `json:"allowedIp3v6,omitempty"`
 	WireguardAllowedIP6 string `json:"wireguardAllowedIp6,omitempty"`
@@ -841,7 +841,7 @@ type CoreStatus struct {
 	// listed. Only the amneziawg core sets it.
 	AwgGenerations []int `json:"awgGenerations,omitempty"`
 	// AwgIpv6: this agent can bring up IPv6 inside the WireGuard-family tunnel
-	// (milestone 18.9 names the fact, 18.10 sets it). Only the amneziawg core.
+	// (milestone 18.9 names the fact, 18.10 sets it: ip6tables with a nat table on the host). Only the amneziawg core.
 	// Absent is no, and the panel sends the tunnel no IPv6 then.
 	AwgIpv6 bool `json:"awgIpv6,omitempty"`
 	// Provisioned tells "this core has a config and should be running" apart

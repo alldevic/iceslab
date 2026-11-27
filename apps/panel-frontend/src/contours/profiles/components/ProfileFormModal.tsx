@@ -122,6 +122,8 @@ export function ProfileFormModal({
 }: Props) {
   const { t } = useTranslation();
   const isEdit = profile !== null;
+  // What the profile has saved, for the restart warning beside the field (18.10).
+  const savedSubnet6 = profile === null ? '' : String((profile.config as { subnet6?: unknown }).subnet6 ?? '');
   const mode: Mode = isEdit ? 'edit' : 'create';
   const [exportOpen, exportCtl] = useDisclosure(false);
   const [advOpen, advCtl] = useDisclosure(false);
@@ -432,6 +434,7 @@ export function ProfileFormModal({
               profileId={profile?.id ?? null}
               awgKnown={awgKnown}
               awgRefusal={awgRefusal ?? null}
+              savedSubnet6={savedSubnet6}
             />
           )}
 
@@ -442,6 +445,7 @@ export function ProfileFormModal({
               generateWgKeys={generateWgKeys}
               keypairPending={keypairPending}
               profileId={profile?.id ?? null}
+              savedSubnet6={savedSubnet6}
             />
           )}
 

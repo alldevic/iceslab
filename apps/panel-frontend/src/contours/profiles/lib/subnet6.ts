@@ -13,6 +13,16 @@ export function subnet6Problem(value: string): boolean {
   return v !== '' && !SUBNET6_RE.test(v);
 }
 
+/**
+ * Saving a changed IPv6 subnet on a saved profile makes the agent bring the
+ * interface up again (milestone 18.10): every device on the profile reconnects.
+ * A new profile has nothing to drop. A subnet that is not valid yet is not a
+ * change that can be saved.
+ */
+export function subnet6ChangeRestarts(isEdit: boolean, saved: string, value: string): boolean {
+  return isEdit && !subnet6Problem(value) && saved.trim() !== value.trim();
+}
+
 /** A random ULA /64: `fd`, a 40-bit global id, a 16-bit subnet id. */
 export function randomSubnet6(random: (n: number) => Uint8Array = (n) => crypto.getRandomValues(new Uint8Array(n))): string {
   const b = random(7);

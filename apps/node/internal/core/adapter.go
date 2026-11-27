@@ -444,3 +444,10 @@ type AwgProtocolReporter interface {
 	// AwgGenerations: the interface generations this agent carries (t07-6).
 	AwgGenerations() []int
 }
+
+// AwgIpv6Reporter is an OPTIONAL interface for the AmneziaWG core: whether this
+// agent can bring up IPv6 inside the tunnel, which takes ip6tables with a nat
+// table on the host (milestone 18.10). Goroutine-safe and cheap, like the rest.
+type AwgIpv6Reporter interface {
+	AwgIpv6() bool
+}

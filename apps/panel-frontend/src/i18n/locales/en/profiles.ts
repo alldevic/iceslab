@@ -242,6 +242,8 @@ export const profiles = {
         subnet6Label: 'IPv6 subnet (optional)',
         subnet6Hint:
           'A ULA /64 for the tunnel. Can be added to a saved profile. Only nodes that report IPv6 in the tunnel use it; the others run the profile on IPv4.',
+        subnet6Restart:
+          'Saving a changed IPv6 subnet restarts the tunnel interface on every node that carries IPv6 for this profile: all devices on it disconnect for a moment and then reconnect. Clients that already have their config keep to IPv4 until they reload it.',
         subnet6Shape: 'A ULA /64 like fd12:3456:789a:1::/64',
         awgSubnetLockedHint: 'Changing it after keys are handed out strands every peer already on this subnet',
         awgServerPrivLabel: 'Server private key',

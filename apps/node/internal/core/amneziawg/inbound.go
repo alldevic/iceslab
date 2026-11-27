@@ -3,6 +3,7 @@ package amneziawg
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 )
@@ -17,8 +18,8 @@ import (
 type inboundCfgWire struct {
 	Subnet string `json:"subnet"`
 	// Subnet6 is the interface's IPv6 prefix, a ULA /64 (milestone 18.9). The
-	// panel sends it only for a tunnel that carries IPv6; the agent reads it
-	// from milestone 18.10 on, and ignores it until then.
+	// panel sends it only for a tunnel that carries IPv6; the agent brings it
+	// up when the host can NAT IPv6 (milestone 18.10), and ignores it where not.
 	Subnet6          string         `json:"subnet6,omitempty"`
 	ServerPrivateKey string         `json:"serverPrivateKey"`
 	ServerPublicKey  string         `json:"serverPublicKey"` // unused on agent
@@ -156,6 +157,12 @@ func (w inboundCfgWire) toInboundConfig(iface string, listenPort int) (InboundCo
 	if err != nil {
 		return InboundConfig{}, err
 	}
+	var addr6 string
+	if w.Subnet6 != "" {
+		if addr6, err = serverAddress6FromSubnet(w.Subnet6); err != nil {
+			return InboundConfig{}, err
+		}
+	}
 	// Prefer the port declared on the wire (per-inbound, set in panel UI);
 	// fall back to the install-time default the caller passes in.
 	port := listenPort
@@ -185,6 +192,7 @@ func (w inboundCfgWire) toInboundConfig(iface string, listenPort int) (InboundCo
 		ListenPort: port,
 		PrivateKey: w.ServerPrivateKey,
 		Address:    addr,
+		Address6:   addr6,
 		Jc:         w.Obfuscation.Jc,
 		Jmin:       w.Obfuscation.Jmin,
 		Jmax:       w.Obfuscation.Jmax,
@@ -222,10 +230,31 @@ func serverAddressFromSubnet(subnet string) (string, error) {
 	return fmt.Sprintf("%s/%d", host.String(), ones), nil
 }
 
+// serverAddress6FromSubnet is serverAddressFromSubnet for the IPv6 prefix: the
+// first host, `::1` of the prefix. Input "fd00:1::/64" gives "fd00:1::1/64".
+func serverAddress6FromSubnet(subnet string) (string, error) {
+	p, err := netip.ParsePrefix(strings.TrimSpace(subnet))
+	if err != nil {
+		return "", fmt.Errorf("parse subnet6 %q: %w", subnet, err)
+	}
+	if !p.Addr().Is6() || p.Addr().Is4In6() {
+		return "", fmt.Errorf("subnet6 %q is not IPv6", subnet)
+	}
+	// Room for the server and at least one peer.
+	if p.Bits() > 126 {
+		return "", fmt.Errorf("subnet6 %q is too small for a server and a peer", subnet)
+	}
+	b := p.Masked().Addr().As16()
+	b[15]++
+	return netip.PrefixFrom(netip.AddrFrom16(b), p.Bits()).String(), nil
+}
+
 // diffKind classifies a transition between two InboundConfig values:
 //   - diffNone: byte-equivalent, no work
 //   - diffSubnet: subnet/address changed, reject when peers exist (cannot
-//     re-allocate without rotating every client)
+//     re-allocate without rotating every client). The IPv6 address is not
+//     this: peers keep their IPv4, the v6 part is derived from it, so a
+//     change of it only needs the interface to come up again (diffRestart)
 //   - diffSyncconf: only S1-S4 / Jc/Jmin/Jmax changed, `awg syncconf` reloads
 //     these without bouncing the interface
 //   - diffRestart: H1-H4 / PrivateKey / ListenPort / Interface changed,
@@ -263,7 +292,10 @@ func classifyDiff(old, new InboundConfig) diffKind {
 	// reported jc=4 until awg-quick down/up bounced the interface. So
 	// treat junk/magic-size changes as diffRestart, same as H1-H4 / key /
 	// port, all interface-init-time-only fields.
+	// The IPv6 half of the address appearing, going or changing: the interface
+	// comes up again with the same peers (milestone 18.10).
 	if old.PrivateKey != new.PrivateKey ||
+		old.Address6 != new.Address6 ||
 		old.ListenPort != new.ListenPort ||
 		old.Interface != new.Interface ||
 		old.H1 != new.H1 || old.H2 != new.H2 || old.H3 != new.H3 || old.H4 != new.H4 ||
