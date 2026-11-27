@@ -76,3 +76,10 @@ describe('buildMieruUri', () => {
     expect(uri).toContain('pa%3As%2Fw@');
   });
 });
+
+describe('buildMieruUri IPv6', () => {
+  it('brackets an IPv6 host', () => {
+    const uri = buildMieruUri({ username: 'u', password: 'p', host: '2001:db8::1', port: 2012, mtu: 1400, name: 'n' });
+    expect(uri).toContain('p@[2001:db8::1]:2012');
+  });
+});

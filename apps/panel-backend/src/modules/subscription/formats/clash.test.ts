@@ -659,3 +659,16 @@ describe('buildClashYaml', () => {
     });
   });
 });
+
+describe('buildClashYaml IPv6 server', () => {
+  it('quotes an IPv6 literal and the document parses to the bare address', async () => {
+    const { parse } = await import('yaml');
+    const out = buildClashYaml([{ ...hysteriaEp, host: '2001:db8::1' }, { ...ssEp, host: '2001:db8::1' }, { ...xrayEp, host: '2001:db8::1' }]);
+    expect(out).toContain('server: "2001:db8::1"');
+    const doc = parse(out) as { proxies: { server: string }[] };
+    expect(doc.proxies.map((p) => p.server)).toEqual(['2001:db8::1', '2001:db8::1', '2001:db8::1']);
+  });
+  it('leaves a name unquoted as before', () => {
+    expect(buildClashYaml([hysteriaEp])).toContain('server: n1.example.com\n');
+  });
+});

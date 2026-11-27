@@ -332,3 +332,10 @@ describe('the AmneziaVPN QR text', () => {
     });
   }
 });
+
+describe('buildAmneziaVpnLink IPv6', () => {
+  it('hostName is the bare address', () => {
+    const env = decodeVpnKey(buildAmneziaVpnLink({ ...baseOpts, host: '2001:db8::1' })) as Record<string, unknown>;
+    expect(env.hostName).toBe('2001:db8::1');
+  });
+});

@@ -21,3 +21,9 @@ describe('buildAnytlsUri', () => {
     expect(uri).toBe('anytls://p@h:443');
   });
 });
+
+describe('buildAnytlsUri IPv6', () => {
+  it('brackets an IPv6 host', () => {
+    expect(buildAnytlsUri({ password: 'p', host: '2001:db8::1', port: 443, allowInsecure: false })).toBe('anytls://p@[2001:db8::1]:443');
+  });
+});

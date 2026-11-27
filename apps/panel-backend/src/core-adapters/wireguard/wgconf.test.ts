@@ -68,3 +68,9 @@ describe('buildWireguardClientConfig', () => {
     }
   });
 });
+
+describe('buildWireguardClientConfig IPv6 endpoint', () => {
+  it('brackets an IPv6 host in Endpoint', () => {
+    expect(buildWireguardClientConfig({ ...base, host: '2001:db8::1' })).toContain('Endpoint = [2001:db8::1]:51820\n');
+  });
+});

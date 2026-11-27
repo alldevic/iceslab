@@ -1,4 +1,5 @@
 import type { AwgGeometry3 } from '@iceslab/shared';
+import { hostPort } from '../../lib/util/ip.js';
 
 /**
  * Client-side wg-quick config builder for AmneziaWG.
@@ -174,7 +175,7 @@ function peerBlock(lines: string[], opts: AmneziawgClientConfigOpts, allowed: st
   lines.push(`PublicKey = ${opts.serverPublicKey}`);
   if (opts.presharedKey) lines.push(`PresharedKey = ${opts.presharedKey}`);
   lines.push(`AllowedIPs = ${allowed}`);
-  lines.push(`Endpoint = ${opts.host}:${opts.port}`);
+  lines.push(`Endpoint = ${hostPort(opts.host, opts.port)}`);
   lines.push(`PersistentKeepalive = ${opts.persistentKeepalive ?? 25}`);
 
   return lines.join('\n') + '\n';

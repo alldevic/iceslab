@@ -1,3 +1,5 @@
+import { hostPort } from '../../lib/util/ip.js';
+
 /**
  * Trojan + REALITY URI builder. Slice 24c part 3.
  *
@@ -87,5 +89,5 @@ export function buildTrojanRealityUri(opts: TrojanRealityUriOpts): string {
   // Password is the userinfo segment, must be URL-encoded for safety.
   // UUIDs (which we use as passwords) don't actually need encoding, but
   // future arbitrary passwords might.
-  return `trojan://${encodeURIComponent(opts.password)}@${opts.host}:${opts.port}?${params.toString()}#${encodeURIComponent(opts.name)}`;
+  return `trojan://${encodeURIComponent(opts.password)}@${hostPort(opts.host, opts.port)}?${params.toString()}#${encodeURIComponent(opts.name)}`;
 }

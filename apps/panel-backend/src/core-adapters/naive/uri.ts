@@ -1,3 +1,5 @@
+import { hostPort } from '../../lib/util/ip.js';
+
 /**
  * Client URI builder for NaiveProxy.
  *
@@ -35,5 +37,5 @@ export function buildNaiveUri(opts: NaiveUriOpts): string {
   }
   const query = params.toString();
   const queryPart = query ? `?${query}` : '';
-  return `naive+https://${userinfo}@${opts.host}:${opts.port}${queryPart}#${encodeURIComponent(opts.name)}`;
+  return `naive+https://${userinfo}@${hostPort(opts.host, opts.port)}${queryPart}#${encodeURIComponent(opts.name)}`;
 }

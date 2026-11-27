@@ -644,3 +644,10 @@ describe('buildSingboxJson', () => {
     });
   });
 });
+
+describe('buildSingboxJson IPv6 server', () => {
+  it('server is the bare address', () => {
+    const cfg = parse(buildSingboxJson([{ ...hysteriaEp, host: '2001:db8::1' }]));
+    expect(cfg.outbounds.find((o) => o.type === 'hysteria2')?.server).toBe('2001:db8::1');
+  });
+});

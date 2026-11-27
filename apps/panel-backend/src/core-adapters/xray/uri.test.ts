@@ -119,3 +119,11 @@ describe('buildVlessRealityUri', () => {
     expect(uri).not.toContain('flow=');
   });
 });
+
+describe('buildVlessRealityUri IPv6', () => {
+  it('brackets an IPv6 host, bare or bracketed on input', () => {
+    const o = { uuid: 'u', publicKey: 'p', shortId: 's', sni: 'x.com', name: 'n' };
+    expect(buildVlessRealityUri({ ...o, host: '2001:db8::1', port: 443 })).toContain('u@[2001:db8::1]:443?');
+    expect(buildVlessRealityUri({ ...o, host: '[2001:db8::1]', port: 443 })).toContain('u@[2001:db8::1]:443?');
+  });
+});

@@ -75,6 +75,7 @@ import { getLogger } from '../../lib/infra/logger.js';
 import { endpointId, endpointKey, isLaterDevice } from './endpoint-identity.js';
 import { expandCascadeEntry } from './cascade-entries.js';
 import { resolveBindingConfig } from '../profiles/profiles.service.js';
+import { normalizeHost } from '../../lib/util/ip.js';
 
 // ───── Domain errors ─────
 
@@ -1083,7 +1084,7 @@ export async function generateSubscription(
 
       // Per-host overrides win over binding/profile values. NULL fields on
       // the host row preserve the underlying value.
-      const host = hostRow?.addressOverride ?? baseHost;
+      const host = normalizeHost(hostRow?.addressOverride ?? baseHost);
       const port = hostRow?.portOverride ?? basePort;
       const hostRemark = hostRow?.remark ?? '';
       // The line a user reads in their client. A named host wins outright and
@@ -1581,7 +1582,7 @@ export async function generateSubscription(
       // and the subscription quietly emitted the profile's hostname instead.
       // Every other protocol resolves address overrides before the protocol
       // switch (`host` above), naive was the one exception.
-      const naiveHost = hostOverrides?.addressOverride ?? (cfg.hostname || host);
+      const naiveHost = normalizeHost(hostOverrides?.addressOverride ?? (cfg.hostname || host));
       endpoints.push({
         protocol: 'naive',
         nodeName,

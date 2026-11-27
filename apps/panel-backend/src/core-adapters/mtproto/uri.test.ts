@@ -89,3 +89,10 @@ describe('buildMtprotoTmeUri', () => {
     expect(uri).not.toContain('#');
   });
 });
+
+describe('mtproto IPv6', () => {
+  it('server is the bare address', () => {
+    const uri = buildMtprotoUri({ secret: 'eeAA', host: '2001:db8::1', port: 443, name: 'n' });
+    expect(new URL(uri).searchParams.get('server')).toBe('2001:db8::1');
+  });
+});

@@ -1,3 +1,5 @@
+import { hostPort } from '../../lib/util/ip.js';
+
 /**
  * VLESS + REALITY + Vision URI builder for Xray-core clients (v2rayN,
  * NekoRay, Hiddify in Xray mode, etc).
@@ -124,5 +126,5 @@ export function buildVlessRealityUri(opts: VlessRealityUriOpts): string {
     params.set('headerType', 'none');
   }
 
-  return `vless://${opts.uuid}@${opts.host}:${opts.port}?${params.toString()}#${encodeURIComponent(opts.name)}`;
+  return `vless://${opts.uuid}@${hostPort(opts.host, opts.port)}?${params.toString()}#${encodeURIComponent(opts.name)}`;
 }

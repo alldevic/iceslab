@@ -1,3 +1,5 @@
+import { hostPort } from '../../lib/util/ip.js';
+
 /**
  * Share links for the SOCKS5 and HTTP doors on the xray process (the Telegram
  * entries, 2026-09-23). Login = username, password = xrayUuid, no TLS.
@@ -19,14 +21,14 @@ export interface PlainProxyUriOpts {
  */
 export function buildSocksUri(opts: PlainProxyUriOpts): string {
   const auth = Buffer.from(`${opts.username}:${opts.password}`, 'utf8').toString('base64');
-  return `socks://${auth}@${opts.host}:${opts.port}#${encodeURIComponent(opts.name)}`;
+  return `socks://${auth}@${hostPort(opts.host, opts.port)}#${encodeURIComponent(opts.name)}`;
 }
 
 /** `http://user:pass@host:port#name`, each half percent-encoded. */
 export function buildHttpProxyUri(opts: PlainProxyUriOpts): string {
   const user = encodeURIComponent(opts.username);
   const pass = encodeURIComponent(opts.password);
-  return `http://${user}:${pass}@${opts.host}:${opts.port}#${encodeURIComponent(opts.name)}`;
+  return `http://${user}:${pass}@${hostPort(opts.host, opts.port)}#${encodeURIComponent(opts.name)}`;
 }
 
 /**

@@ -392,3 +392,28 @@ describe('reordering hosts', () => {
     expect(await serverNames(user.subscriptionToken)).toEqual(['Direct', 'CDN']);
   });
 });
+
+describe('an IPv6 addressOverride', () => {
+  it('gives the same link with and without brackets, the address bracketed in the URI', async () => {
+    const { user } = await seed();
+    // Seeding does not return the host row of the binding's auto-created
+    // "Default" host; read the one the seed created by its remark.
+    const hosts = JSON.parse((await app.inject({ method: 'GET', url: '/api/hosts', headers: auth() })).body);
+    const host = (hosts.hosts ?? hosts).find((h: { remark: string }) => h.remark === 'Direct');
+    const linkFor = async (address: string): Promise<string> => {
+      const put = await app.inject({
+        method: 'PUT',
+        url: `/api/hosts/${host.id}`,
+        headers: auth(),
+        payload: { addressOverride: address },
+      });
+      expect(put.statusCode, put.body).toBe(200);
+      const res = await app.inject({ method: 'GET', url: `/sub/${user.subscriptionToken}?format=plain` });
+      expect(res.statusCode).toBe(200);
+      return Buffer.from(res.body, 'base64').toString('utf8').split('\n').filter(Boolean)[0]!;
+    };
+    const bare = await linkFor('2001:db8::1');
+    expect(bare).toContain('@[2001:db8::1]:443?');
+    expect(await linkFor('[2001:DB8::1]')).toBe(bare);
+  });
+});

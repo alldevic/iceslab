@@ -74,3 +74,36 @@ export function isPublicRoutableIp(ip: string): boolean {
   if (lower.startsWith('2001:db8:') || lower === '2001:db8::') return false;
   return true;
 }
+
+/**
+ * One spelling of a connection host for everything the subscription emits:
+ * an IPv6 literal comes out WITHOUT brackets, lower-case and in the compressed
+ * form (`[2001:0DB8::1]` and `2001:db8::1` both give `2001:db8::1`). Names and
+ * IPv4 pass through untouched, byte for byte, so nothing that works today moves.
+ * Anything that is not an address (including a zone-qualified `fe80::1%eth0`,
+ * which no client can use off the box) is returned as given, minus brackets.
+ */
+export function normalizeHost(host: string): string {
+  const bare = /^\[(.*)\]$/.exec(host)?.[1] ?? host;
+  if (isIP(bare) !== 6) return bare;
+  try {
+    return new URL(`http://[${bare}]`).hostname.slice(1, -1);
+  } catch {
+    return bare;
+  }
+}
+
+/**
+ * `host:port` for a link or an `Endpoint =` line: an IPv6 literal gets the
+ * brackets the syntax needs, a name or IPv4 is joined as before. Accepts the
+ * host in either spelling.
+ */
+export function hostPort(host: string, port: number | string): string {
+  const h = normalizeHost(host);
+  return `${h.includes(':') ? `[${h}]` : h}:${port}`;
+}
+
+/** True for an IPv6 literal (either spelling), the one host shape a YAML plain scalar cannot carry. */
+export function isIpv6Literal(host: string): boolean {
+  return isIP(normalizeHost(host)) === 6;
+}

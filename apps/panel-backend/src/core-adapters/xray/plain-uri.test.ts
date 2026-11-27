@@ -24,3 +24,10 @@ describe('share links for the Telegram doors', () => {
     expect(uri).not.toContain('#');
   });
 });
+
+describe('plain doors IPv6', () => {
+  it('socks:// and http:// bracket an IPv6 host', () => {
+    expect(buildSocksUri({ ...opts, host: '2001:db8::1', name: 'x' })).toContain('@[2001:db8::1]:1080#');
+    expect(buildHttpProxyUri({ ...opts, host: '2001:db8::1', name: 'x' })).toContain('@[2001:db8::1]:1080#');
+  });
+});

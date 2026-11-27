@@ -1,3 +1,5 @@
+import { hostPort } from '../../lib/util/ip.js';
+
 /**
  * Shadowsocks URI builder. Slice 24d.
  *
@@ -65,7 +67,7 @@ export function buildShadowsocksUri(opts: ShadowsocksUriOpts): string {
   // Legacy AEAD and single-tenant: `<method>:<UserPSK>`.
   const password = ssClientPassword(opts.method, opts.userPsk, opts.serverPsk);
   const userinfo = base64UrlNoPad(`${opts.method}:${password}`);
-  return `ss://${userinfo}@${opts.host}:${opts.port}#${encodeURIComponent(opts.name)}`;
+  return `ss://${userinfo}@${hostPort(opts.host, opts.port)}#${encodeURIComponent(opts.name)}`;
 }
 
 /** base64url without padding, the URI-safe encoding clients expect. */

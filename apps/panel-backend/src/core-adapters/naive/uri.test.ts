@@ -41,3 +41,9 @@ describe('buildNaiveUri', () => {
     expect(uri).toContain(':8443?');
   });
 });
+
+describe('buildNaiveUri IPv6', () => {
+  it('brackets an IPv6 host', () => {
+    expect(buildNaiveUri({ ...baseOpts, host: '2001:db8::1' })).toContain('@[2001:db8::1]:443?');
+  });
+});

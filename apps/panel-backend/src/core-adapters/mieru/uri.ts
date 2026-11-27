@@ -1,3 +1,5 @@
+import { hostPort } from '../../lib/util/ip.js';
+
 /**
  * Mieru profile builder. Slice 40.
  *
@@ -85,5 +87,5 @@ export function buildMieruUri(opts: MieruUriOpts): string {
   params.set('user', opts.username);
   const query = params.toString();
   const userinfo = encodeURIComponent(opts.password);
-  return `mieru://${userinfo}@${opts.host}:${opts.port}${query ? `?${query}` : ''}#${encodeURIComponent(opts.name)}`;
+  return `mieru://${userinfo}@${hostPort(opts.host, opts.port)}${query ? `?${query}` : ''}#${encodeURIComponent(opts.name)}`;
 }

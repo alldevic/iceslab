@@ -6,6 +6,7 @@ import { clashCanUsePanelGeo, clashDeviceRuleLines, clashDomainRuleBody, clashNe
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { asArray, asObject, defaultFrame, openFrame, type Frame } from '../subscription.frames.js';
 import type { SelfHostedGeo } from '../../geo-sets/geo-self-host.js';
+import { isIpv6Literal } from '../../../lib/util/ip.js';
 
 /**
  * Clash YAML subscription formatter (targets Clash Meta / Mihomo, covers
@@ -34,6 +35,12 @@ import type { SelfHostedGeo } from '../../geo-sets/geo-self-host.js';
 function yamlString(value: string): string {
   if (/^[A-Za-z0-9_\-./]+$/.test(value)) return value;
   return JSON.stringify(value); // double-quoted, JSON escapes are valid YAML
+}
+
+// `server:` stays bare for names and IPv4 (the golden files pin that); an IPv6
+// literal holds colons, so it is quoted.
+function yamlHost(host: string): string {
+  return isIpv6Literal(host) ? yamlString(host) : host;
 }
 
 /**
@@ -262,7 +269,7 @@ export function buildClashYaml(
       const lines = [
         `  - name: ${yamlString(name)}`,
         `    type: hysteria2`,
-        `    server: ${e.host}`,
+        `    server: ${yamlHost(e.host)}`,
         `    port: ${e.port}`,
         // Stash spells the password `auth`.
         `    ${stash ? 'auth' : 'password'}: ${yamlString(e.password)}`,
@@ -300,7 +307,7 @@ export function buildClashYaml(
         [
           `  - name: ${yamlString(name)}`,
           `    type: ${e.subprotocol === 'socks' ? 'socks5' : 'http'}`,
-          `    server: ${e.host}`,
+          `    server: ${yamlHost(e.host)}`,
           `    port: ${e.port}`,
           `    username: ${yamlString(e.username)}`,
           `    password: ${yamlString(e.password)}`,
@@ -338,7 +345,7 @@ export function buildClashYaml(
       const block = [
         `  - name: ${yamlString(name)}`,
         `    type: ${sub === 'trojan' ? 'trojan' : sub === 'vmess' ? 'vmess' : 'vless'}`,
-        `    server: ${e.host}`,
+        `    server: ${yamlHost(e.host)}`,
         `    port: ${e.port}`,
         sub === 'trojan' ? `    password: ${yamlString(e.uuid)}` : `    uuid: ${e.uuid}`,
       ];
@@ -420,7 +427,7 @@ export function buildClashYaml(
         [
           `  - name: ${yamlString(name)}`,
           `    type: ss`,
-          `    server: ${e.host}`,
+          `    server: ${yamlHost(e.host)}`,
           `    port: ${e.port}`,
           `    cipher: ${yamlString(e.method)}`,
           `    password: ${yamlString(e.password)}`,
@@ -435,7 +442,7 @@ export function buildClashYaml(
         [
           `  - name: ${yamlString(name)}`,
           `    type: tuic`,
-          `    server: ${e.host}`,
+          `    server: ${yamlHost(e.host)}`,
           `    port: ${e.port}`,
           // Stash takes v4 and v5 and wants the version said.
           ...(stash ? ['    version: 5'] : []),
@@ -457,7 +464,7 @@ export function buildClashYaml(
         [
           `  - name: ${yamlString(name)}`,
           `    type: anytls`,
-          `    server: ${e.host}`,
+          `    server: ${yamlHost(e.host)}`,
           `    port: ${e.port}`,
           `    password: ${yamlString(e.password)}`,
           `    sni: ${yamlString(e.serverName)}`,
@@ -474,7 +481,7 @@ export function buildClashYaml(
         [
           `  - name: ${yamlString(name)}`,
           `    type: ss`,
-          `    server: ${e.host}`,
+          `    server: ${yamlHost(e.host)}`,
           `    port: ${e.port}`,
           `    cipher: ${yamlString(e.ssMethod)}`,
           `    password: ${yamlString(e.ssPassword)}`,
@@ -510,7 +517,7 @@ export function buildClashYaml(
         [
           `  - name: ${yamlString(name)}`,
           `    type: mieru`,
-          `    server: ${e.host}`,
+          `    server: ${yamlHost(e.host)}`,
           `    port: ${e.port}`,
           // Stash writes the transport in lower case (`tcp` or `udp`).
           `    transport: ${stash ? 'tcp' : 'TCP'}`,

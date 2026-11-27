@@ -66,3 +66,9 @@ describe('buildTrojanRealityUri', () => {
     expect(uri).toContain('serviceName=GunSvc');
   });
 });
+
+describe('buildTrojanRealityUri IPv6', () => {
+  it('brackets an IPv6 host', () => {
+    expect(buildTrojanRealityUri({ ...baseOpts, host: '2001:db8::1' })).toContain('@[2001:db8::1]:443?');
+  });
+});

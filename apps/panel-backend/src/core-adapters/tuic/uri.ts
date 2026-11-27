@@ -1,3 +1,5 @@
+import { hostPort } from '../../lib/util/ip.js';
+
 /**
  * TUIC v5 share-link builder (sing-box engine).
  *
@@ -34,5 +36,5 @@ export function buildTuicUri(opts: TuicUriOpts): string {
 
   const auth = `${encodeURIComponent(opts.uuid)}:${encodeURIComponent(opts.password)}`;
   const frag = opts.name ? `#${encodeURIComponent(opts.name)}` : '';
-  return `tuic://${auth}@${opts.host}:${opts.port}?${params.toString()}${frag}`;
+  return `tuic://${auth}@${hostPort(opts.host, opts.port)}?${params.toString()}${frag}`;
 }

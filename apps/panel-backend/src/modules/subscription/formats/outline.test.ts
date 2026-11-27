@@ -110,3 +110,9 @@ describe('outlineAccessKey', () => {
     expect(outlineAccessKey('http://panel.example.com/sub/abc123', '0a1b2c3d', 'de-1')).toBeUndefined();
   });
 });
+
+describe('buildOutlineJson IPv6', () => {
+  it('server is the bare address', () => {
+    expect(JSON.parse(buildOutlineJson([ss('v6', '2001:db8::1', 8388)])).server).toBe('2001:db8::1');
+  });
+});

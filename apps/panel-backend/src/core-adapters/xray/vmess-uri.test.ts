@@ -73,3 +73,9 @@ describe('buildVmessUri', () => {
     expect(o.sid).toBeUndefined();
   });
 });
+
+describe('buildVmessUri IPv6', () => {
+  it('puts the address in add without brackets', () => {
+    expect(decode(buildVmessUri({ ...base, host: '2001:db8::1' })).add).toBe('2001:db8::1');
+  });
+});

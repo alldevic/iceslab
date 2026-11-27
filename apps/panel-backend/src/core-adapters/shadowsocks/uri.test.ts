@@ -97,3 +97,9 @@ describe('ssClientPassword', () => {
     expect(ssClientPassword('2022-blake3-aes-256-gcm', 'U')).toBe('U');
   });
 });
+
+describe('buildShadowsocksUri IPv6', () => {
+  it('brackets an IPv6 host', () => {
+    expect(buildShadowsocksUri({ ...baseOpts, host: '2001:db8::1' })).toContain('@[2001:db8::1]:8388#');
+  });
+});

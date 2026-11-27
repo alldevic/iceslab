@@ -1,3 +1,5 @@
+import { hostPort } from '../../lib/util/ip.js';
+
 /**
  * AnyTLS share-link builder (sing-box engine).
  *
@@ -29,5 +31,5 @@ export function buildAnytlsUri(opts: AnytlsUriOpts): string {
   const auth = encodeURIComponent(opts.password);
   const frag = opts.name ? `#${encodeURIComponent(opts.name)}` : '';
   const q = params.toString();
-  return `anytls://${auth}@${opts.host}:${opts.port}${q ? `?${q}` : ''}${frag}`;
+  return `anytls://${auth}@${hostPort(opts.host, opts.port)}${q ? `?${q}` : ''}${frag}`;
 }

@@ -169,3 +169,16 @@ describe('xray transports in Quantumult X, Loon and Surge', () => {
     }
   });
 });
+
+describe('IPv6 host in the proxy-line formats', () => {
+  const v6ss = { ...ss, host: '2001:db8::1' } as SubscriptionEndpoint;
+  const v6vless = { ...vlessReality, host: '2001:db8::1' } as SubscriptionEndpoint;
+  it('Quantumult X brackets it (host:port in one field)', () => {
+    expect(buildQuantumultXConf([v6ss])).toContain('shadowsocks=[2001:db8::1]:8388,');
+    expect(buildQuantumultXConf([v6vless])).toContain('vless=[2001:db8::1]:443,');
+  });
+  it('Surge and Loon keep it bare (address and port are separate fields)', () => {
+    expect(buildSurgeConf([v6ss])).toContain('eu-1 = ss, 2001:db8::1, 8388,');
+    expect(buildLoonConf([v6ss])).toContain('eu-1 = Shadowsocks,2001:db8::1,8388,');
+  });
+});

@@ -32,3 +32,9 @@ describe('buildTuicUri', () => {
     expect(uri).not.toContain('allow_insecure');
   });
 });
+
+describe('buildTuicUri IPv6', () => {
+  it('brackets an IPv6 host', () => {
+    expect(buildTuicUri({ uuid: 'u', password: 'p', host: '2001:db8::1', port: 443 })).toContain('u:p@[2001:db8::1]:443?');
+  });
+});

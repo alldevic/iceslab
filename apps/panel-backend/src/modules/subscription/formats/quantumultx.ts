@@ -1,5 +1,6 @@
 import { transportServed } from '@iceslab/shared';
 import { emitsVisionFlow, isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
+import { hostPort } from '../../../lib/util/ip.js';
 
 /**
  * Quantumult X server_local proxy-line list (`?format=quantumultx`). One
@@ -27,7 +28,7 @@ export function buildQuantumultXConf(endpoints: SubscriptionEndpoint[]): string 
   for (const e of endpoints) {
     const tag = safeTag(e.nodeName);
     if (e.protocol === 'shadowsocks') {
-      lines.push(`shadowsocks=${e.host}:${e.port}, method=${e.method}, password=${e.password}, udp-relay=true, tag=${tag}`);
+      lines.push(`shadowsocks=${hostPort(e.host, e.port)}, method=${e.method}, password=${e.password}, udp-relay=true, tag=${tag}`);
     } else if (e.protocol === 'xray' && !isPlainXray(e)) {
       // socks/http (the Telegram doors) are carried by plain, clash, sing-box and
       // xray-json only, by decision of 23.09; this format leaves them out.
@@ -51,17 +52,17 @@ export function buildQuantumultXConf(endpoints: SubscriptionEndpoint[]): string 
         ? [`reality-base64-pubkey=${e.publicKey}`, `reality-hex-shortid=${e.shortId}`]
         : [];
       if (sub === 'vless') {
-        const p = [`vless=${e.host}:${e.port}`, 'method=none', `password=${e.uuid}`, ...tlsParts, ...realityParts];
+        const p = [`vless=${hostPort(e.host, e.port)}`, 'method=none', `password=${e.uuid}`, ...tlsParts, ...realityParts];
         if (emitsVisionFlow(e)) p.push(`vless-flow=${e.flow}`);
         p.push('udp-relay=true', `tag=${tag}`);
         lines.push(p.join(', '));
       } else if (sub === 'vmess') {
-        const p = [`vmess=${e.host}:${e.port}`, 'method=none', `password=${e.uuid}`, ...tlsParts, ...realityParts, 'udp-relay=true', `tag=${tag}`];
+        const p = [`vmess=${hostPort(e.host, e.port)}`, 'method=none', `password=${e.uuid}`, ...tlsParts, ...realityParts, 'udp-relay=true', `tag=${tag}`];
         lines.push(p.join(', '));
       } else if (sub === 'trojan') {
         // "trojan: over-tls=true or obfs=wss": WebSocket only over TLS (the table).
         const transport = ws ? wsParts : ['over-tls=true', `tls-host=${e.sni}`];
-        const p = [`trojan=${e.host}:${e.port}`, `password=${e.uuid}`, ...transport, ...realityParts, 'udp-relay=true', `tag=${tag}`];
+        const p = [`trojan=${hostPort(e.host, e.port)}`, `password=${e.uuid}`, ...transport, ...realityParts, 'udp-relay=true', `tag=${tag}`];
         lines.push(p.join(', '));
       }
     }

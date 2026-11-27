@@ -1090,3 +1090,9 @@ describe('the split presets embed the region\'s lists (f12-21)', () => {
     expect(text(cfg.routing.rules)).toContain('domain:yandex.ru');
   });
 });
+
+describe('buildXrayJson IPv6 address', () => {
+  it('the vnext address is the bare address', () => {
+    expect(buildXrayJson([{ ...xrayEp, host: '2001:db8::1' }])).toContain('"address": "2001:db8::1"');
+  });
+});

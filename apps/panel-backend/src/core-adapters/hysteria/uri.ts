@@ -1,3 +1,5 @@
+import { hostPort } from '../../lib/util/ip.js';
+
 /**
  * Hysteria 2 URI builder. The wire format is consumed directly by Hiddify,
  * NekoRay, v2rayN, the upstream `hysteria` client, and IcePath-VPN.
@@ -121,5 +123,5 @@ export function buildHysteriaUri(opts: HysteriaUriOpts): string {
     params.set('insecure', '1');
     params.set('pinSHA256', opts.pinSha256);
   }
-  return `hysteria2://${encodeURIComponent(opts.password)}@${opts.host}:${opts.port}/?${params.toString()}#${encodeURIComponent(opts.name)}`;
+  return `hysteria2://${encodeURIComponent(opts.password)}@${hostPort(opts.host, opts.port)}/?${params.toString()}#${encodeURIComponent(opts.name)}`;
 }
