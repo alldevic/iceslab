@@ -4,6 +4,7 @@ import { backendSource, exportedConst } from '@/test-support/backendSource';
 import { AWG_H_MIN } from '@/contours/profiles/lib/awgHeaders';
 import { AWG_S_GAP, WG_KEY_RE } from '@/contours/profiles/lib/awgRules';
 import { WG_SUBNET_RE } from '@/contours/profiles/lib/wireguardRules';
+import { SUBNET6_RE } from '@/contours/profiles/lib/subnet6';
 import { MIERU_MTU } from '@/contours/profiles/lib/mieruMtu';
 import {
   FLOW_COMPATIBLE_TRANSPORTS,
@@ -84,5 +85,20 @@ describe('the plain WireGuard rules of the form against WireguardConfigSchema', 
 
   it('there is no obfuscation member, so the form sends none', () => {
     expect(schema).not.toContain('obfuscation:');
+  });
+});
+
+describe('the tunnel IPv6 subnet of the form against the backend (18.9)', () => {
+  const subnet = backendSource('amneziawg/amneziawg.subnet.ts');
+
+  it('the pattern is the one the schema checks subnet6 with', () => {
+    const m = subnet.match(/export const SUBNET6_PATTERN = \/(.+)\/i;/);
+    expect(m?.[1]).toBe(SUBNET6_RE.source);
+    expect(SUBNET6_RE.flags).toBe('i');
+  });
+
+  it('both profile schemas take it as optional, through the one Subnet6Schema', () => {
+    expect(exportedConst(inbounds, 'WireguardConfigSchema')).toContain('subnet6: Subnet6Schema.optional()');
+    expect(inbounds.match(/subnet6: Subnet6Schema\.optional\(\)/g)).toHaveLength(2);
   });
 });

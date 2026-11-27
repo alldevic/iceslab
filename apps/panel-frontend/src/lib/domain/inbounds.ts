@@ -84,6 +84,8 @@ export interface AmneziawgObfuscation {
 
 export interface AmneziawgInboundConfig {
   subnet: string;
+  /** 18.9: the tunnel's ULA /64; absent = IPv4 only. */
+  subnet6?: string;
   serverPrivateKey: string;
   serverPublicKey: string;
   obfuscation: AmneziawgObfuscation;

@@ -742,11 +742,14 @@ export async function updateProfile(
   // on: does it now overlap the other generation's interface there.
   if (existing.protocol === 'amneziawg' || existing.protocol === 'wireguard') {
     const subnetOf = (c: unknown) => ((c ?? {}) as { subnet?: string }).subnet;
+    // 18.9: the IPv6 half of the tunnel is the same question (assertAwgSubnetFree).
+    const subnet6Of = (c: unknown) => ((c ?? {}) as { subnet6?: string }).subnet6;
     // Plain WireGuard has no generation: its awgProtocol is always null.
     const nextAwg =
       existing.protocol !== 'amneziawg' ? null : input.awgProtocol !== undefined ? input.awgProtocol : existing.awgProtocol;
     const moved =
       subnetOf(nextConfig) !== subnetOf(existing.config) ||
+      subnet6Of(nextConfig) !== subnet6Of(existing.config) ||
       profileAwgProtocol({ protocol: existing.protocol, awgProtocol: nextAwg }) !== profileAwgProtocol(existing);
     if (moved) {
       const deployed = await prisma.profileNodeBinding.findMany({

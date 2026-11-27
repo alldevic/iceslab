@@ -239,6 +239,10 @@ export const profiles = {
         awgGenerationPending: 'Generation 3.1 will be handed out after the next steps of phase 7.',
         awgSubnetLabel: 'Subnet (CIDR)',
         awgSubnetHint: 'Avoid 10.0.0.0/24, it collides with some hosters',
+        subnet6Label: 'IPv6 subnet (optional)',
+        subnet6Hint:
+          'A ULA /64 for the tunnel. Can be added to a saved profile. Only nodes that report IPv6 in the tunnel use it; the others run the profile on IPv4.',
+        subnet6Shape: 'A ULA /64 like fd12:3456:789a:1::/64',
         awgSubnetLockedHint: 'Changing it after keys are handed out strands every peer already on this subnet',
         awgServerPrivLabel: 'Server private key',
         awgServerPubLabel: 'Server public key',
@@ -279,6 +283,12 @@ export const profiles = {
       title: 'Deploy "{{name}}" to nodes',
       hint: 'Tick the nodes you want this profile on. Unticking takes every inbound of the profile off the node, on all its ports (users lose URLs for that node). Port for new bindings: {{port}}. A second port on the same node is set from a host.',
       boundPorts: 'Listens on ports: {{ports}}',
+      // 18.9: a profile with an IPv6 subnet on a node that will not carry it.
+      noTunnelIpv6: {
+        off: 'IPv6 mode of this node is off: the profile runs here on IPv4 only.',
+        address: 'This node has no global IPv6 address: the profile runs here on IPv4 only.',
+        agent: 'The agent on this node does not report IPv6 in the tunnel: the profile runs here on IPv4 only.',
+      },
       removesPorts_one: 'Takes off the inbound on port {{ports}}',
       removesPorts_other: 'Takes off {{count}} inbounds, ports {{ports}}',
       port: 'Port for new bindings',

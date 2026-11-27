@@ -7,6 +7,7 @@ import {
   type AmneziawgInboundCfg,
   type WireguardInboundCfg,
 } from '@iceslab/shared';
+import { isSubnet6 } from '../amneziawg/amneziawg.subnet.js';
 
 const NameSchema = z
   .string()
@@ -351,10 +352,21 @@ export const WgKeySchema = z
   .string()
   .regex(WG_KEY_PATTERN, 'must be a WireGuard key: 44 base64 characters ending in "="');
 
+/**
+ * The tunnel's IPv6 subnet (milestone 18.9), optional on AmneziaWG and plain
+ * WireGuard alike: a ULA /64, `fdXX:XXXX:XXXX:XXXX::/64`. A peer's address in it
+ * is derived from its IPv4 one (ipv6OfIpv4), so it only has to be a prefix.
+ */
+const Subnet6Schema = z
+  .string()
+  .refine(isSubnet6, 'must be a ULA /64 such as "fd12:3456:789a:1::/64" (fc00::/7, four groups, ::/64)');
+
 export const AmneziawgConfigSchema = z
   .object({
     /** Subnet handed to peers, e.g. "10.0.0.0/24". */
     subnet: z.string().regex(/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/),
+    /** The IPv6 half of the tunnel, see Subnet6Schema. Absent = IPv4 only. */
+    subnet6: Subnet6Schema.optional(),
     serverPrivateKey: WgKeySchema,
     /** Public key paired with privateKey, emitted in client config. */
     serverPublicKey: WgKeySchema,
@@ -441,6 +453,8 @@ export const WireguardConfigSchema = z.object({
    *  AmneziaWG profile's subnet on a node that serves both
    *  (assertAwgSubnetFree). */
   subnet: z.string().regex(/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/),
+  /** As for AmneziaWG: the tunnel's ULA /64, optional. */
+  subnet6: Subnet6Schema.optional(),
   serverPrivateKey: WgKeySchema,
   /** Public key paired with privateKey, emitted in the client config. */
   serverPublicKey: WgKeySchema,

@@ -99,3 +99,15 @@ describe('buildAmneziawgClientConfig IPv6 endpoint', () => {
     expect(buildAmneziawgClientConfig({ ...baseOpts, host: '2001:db8::1' })).toContain('Endpoint = [2001:db8::1]:51820\n');
   });
 });
+
+describe('buildAmneziawgClientConfig second address (18.9)', () => {
+  it('writes the IPv6 after the IPv4 on one Address line, comma separated', () => {
+    const out = buildAmneziawgClientConfig({ ...baseOpts, allowedIp6: 'fd12:3456:789a:1:0:0:a00:2a/128' });
+    expect(out).toContain('Address = 10.0.0.42/32, fd12:3456:789a:1:0:0:a00:2a/128\n');
+    expect(out.match(/^Address = /gm)).toHaveLength(1);
+  });
+
+  it('without allowedIp6 the Address line is what it always was', () => {
+    expect(buildAmneziawgClientConfig(baseOpts)).toContain('Address = 10.0.0.42/32\n');
+  });
+});

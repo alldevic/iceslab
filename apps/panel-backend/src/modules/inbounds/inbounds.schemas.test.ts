@@ -260,3 +260,40 @@ describe('publicHost', () => {
     expect(UpdateInboundSchema.parse({ publicHost: '[2001:db8::1]' }).publicHost).toBe('2001:db8::1');
   });
 });
+
+describe('subnet6, the tunnel IPv6 prefix (18.9)', () => {
+  const awg = (subnet6?: string) =>
+    AmneziawgConfigSchema.safeParse({ ...base, ...(subnet6 === undefined ? {} : { subnet6 }), obfuscation: {} });
+  const wg = (subnet6?: string) =>
+    WireguardConfigSchema.safeParse({ ...base, ...(subnet6 === undefined ? {} : { subnet6 }) });
+
+  it('is optional, and a profile without it serializes as before (no key)', () => {
+    const a = awg();
+    const w = wg();
+    expect(a.success && 'subnet6' in a.data).toBe(false);
+    expect(w.success && 'subnet6' in w.data).toBe(false);
+  });
+
+  it('takes a ULA /64 on both AmneziaWG and plain WireGuard', () => {
+    for (const parse of [awg, wg]) {
+      const r = parse('fd12:3456:789a:1::/64');
+      expect(r.success).toBe(true);
+      if (r.success) expect((r.data as { subnet6?: string }).subnet6).toBe('fd12:3456:789a:1::/64');
+    }
+  });
+
+  it.each([
+    ['a global prefix', '2001:db8:1:2::/64'],
+    ['a link-local one', 'fe80:0:0:1::/64'],
+    ['a ULA that is not a /64', 'fd12:3456:789a:1::/48'],
+    ['an address with host bits', 'fd12:3456:789a:1::1/64'],
+    ['an IPv4 subnet', '10.0.0.0/24'],
+    ['an empty string', ''],
+  ])('refuses %s, on the field', (_name, value) => {
+    for (const parse of [awg, wg]) {
+      const r = parse(value);
+      expect(r.success).toBe(false);
+      if (!r.success) expect(r.error.issues[0]?.path).toEqual(['subnet6']);
+    }
+  });
+});

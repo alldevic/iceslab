@@ -26,6 +26,12 @@ export interface AmneziawgClientConfigOpts {
    * (e.g. "10.0.0.42/32"). Caller should already have appended the suffix.
    */
   allowedIp: string;
+  /**
+   * 18.9: the device's IPv6 in the tunnel, CIDR /128 form, for a tunnel that
+   * carries one. Written as a second address on the `Address` line; absent, the
+   * line is what it always was.
+   */
+  allowedIp6?: string;
   /** Server's WireGuard public key (base64, 32 bytes). */
   serverPublicKey: string;
   /**
@@ -133,7 +139,7 @@ export function buildAmneziawgClientConfig(opts: AmneziawgClientConfigOpts): str
 
   lines.push('[Interface]');
   lines.push(`PrivateKey = ${opts.privateKey}`);
-  lines.push(`Address = ${opts.allowedIp}`);
+  lines.push(`Address = ${opts.allowedIp6 ? `${opts.allowedIp}, ${opts.allowedIp6}` : opts.allowedIp}`);
   if (opts.dns?.length) {
     lines.push(`DNS = ${opts.dns.join(', ')}`);
   }

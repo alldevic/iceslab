@@ -517,6 +517,8 @@ export function observedCores(
       ...(Array.isArray(c.awgGenerations)
         ? { awgGenerations: c.awgGenerations.filter((g) => AWG_PROTOCOLS.includes(g)) }
         : {}),
+      // 18.9: whether the agent carries IPv6 in the wg tunnel; only a boolean.
+      ...(typeof c.awgIpv6 === 'boolean' ? { awgIpv6: c.awgIpv6 } : {}),
       ...(c.provisioned !== undefined ? { provisioned: c.provisioned } : {}),
       ...(c.reason ? { reason: c.reason } : {}),
       ...(c.installed !== undefined ? { installed: c.installed } : {}),

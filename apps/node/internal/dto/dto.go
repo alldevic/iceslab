@@ -59,6 +59,12 @@ type AmneziaWGPeerDto struct {
 	AllowedIP          string `json:"allowedIp,omitempty"`
 	AllowedIP3         string `json:"allowedIp3,omitempty"`
 	WireguardAllowedIP string `json:"wireguardAllowedIp,omitempty"`
+	// The peer's IPv6 on each interface kind (milestone 18.9), derived by the
+	// panel from the IPv4 address; present only for an interface that carries
+	// IPv6 in the tunnel. Read by the agent from milestone 18.10 on.
+	AllowedIP6          string `json:"allowedIp6,omitempty"`
+	AllowedIP3v6        string `json:"allowedIp3v6,omitempty"`
+	WireguardAllowedIP6 string `json:"wireguardAllowedIp6,omitempty"`
 	// The device's preshared key on each interface kind (milestone 9.5); absent
 	// where that interface's profile does not ask for one, and from an older
 	// panel. A secret: never logged.
@@ -87,6 +93,11 @@ type ProtocolCredentials struct {
 	// AmneziaWGAllowedIP.
 	WireguardPublicKey string `json:"wireguardPublicKey,omitempty"`
 	WireguardAllowedIP string `json:"wireguardAllowedIp,omitempty"`
+	// Device 1's IPv6 on each interface kind (milestone 18.9), see
+	// AmneziaWGPeerDto.
+	AmneziaWGAllowedIP6   string `json:"amneziawgAllowedIp6,omitempty"`
+	AmneziaWGAllowedIP3v6 string `json:"amneziawgAllowedIp3v6,omitempty"`
+	WireguardAllowedIP6   string `json:"wireguardAllowedIp6,omitempty"`
 	// AmneziaWGPeers: one peer per device of the user (milestone 9.4), each with
 	// its own key and its addresses on the 1.x, 3.1 and plain WireGuard
 	// interfaces. When present the agent takes it for both flavours and ignores
@@ -829,6 +840,10 @@ type CoreStatus struct {
 	// interface with it, so the panel refuses a 3.1 profile where 3 is not
 	// listed. Only the amneziawg core sets it.
 	AwgGenerations []int `json:"awgGenerations,omitempty"`
+	// AwgIpv6: this agent can bring up IPv6 inside the WireGuard-family tunnel
+	// (milestone 18.9 names the fact, 18.10 sets it). Only the amneziawg core.
+	// Absent is no, and the panel sends the tunnel no IPv6 then.
+	AwgIpv6 bool `json:"awgIpv6,omitempty"`
 	// Provisioned tells "this core has a config and should be running" apart
 	// from "nobody has configured this core yet". The installer registers an
 	// adapter for every protocol the operator might switch on later, so an

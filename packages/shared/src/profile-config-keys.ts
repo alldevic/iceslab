@@ -70,12 +70,12 @@ export const PROFILE_CONFIG_KEYS: Record<ProtocolName, ProfileConfigKeys> = {
     setByPush: [],
   },
   amneziawg: {
-    form: ['subnet', 'serverPrivateKey', 'serverPublicKey', 'obfuscation', 'presharedKey'],
+    form: ['subnet', 'subnet6', 'serverPrivateKey', 'serverPublicKey', 'obfuscation', 'presharedKey'],
     keptByServer: [],
     setByPush: [],
   },
   wireguard: {
-    form: ['subnet', 'serverPrivateKey', 'serverPublicKey', 'presharedKey'],
+    form: ['subnet', 'subnet6', 'serverPrivateKey', 'serverPublicKey', 'presharedKey'],
     keptByServer: [],
     setByPush: [],
   },

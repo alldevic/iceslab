@@ -31,18 +31,18 @@ export interface WgClientOpts {
  * switch and whether the tunnel carries an IPv6 address of its own. Such a tunnel
  * keeps `::/0` whatever the switch says (the switch acts only on tunnels without
  * IPv6, decision of 18.7); a tunnel without one is as before. No tunnel carries
- * an address of its own until 9.9/18.9, so today the second case is every one.
+ * an address of its own until its endpoint has `allowedIp6` (18.9).
  */
 export function wgClientAllowedIps(
   opts: Pick<WgClientOpts, 'dropIpv6'> | undefined,
-  tunnel?: Pick<WgconfEndpoint, 'allowedIp'>,
+  tunnel?: Pick<WgconfEndpoint, 'allowedIp' | 'allowedIp6'>,
 ): string[] | undefined {
   return opts?.dropIpv6 && !tunnelHasIpv6(tunnel) ? ['0.0.0.0/0'] : undefined;
 }
 
 /** The tunnel's `Address =` holds an IPv6 address (a v4 one is `10.8.0.2/32`). */
-export function tunnelHasIpv6(tunnel: Pick<WgconfEndpoint, 'allowedIp'> | undefined): boolean {
-  return tunnel?.allowedIp.includes(':') === true;
+export function tunnelHasIpv6(tunnel: Pick<WgconfEndpoint, 'allowedIp' | 'allowedIp6'> | undefined): boolean {
+  return tunnel?.allowedIp6 !== undefined || tunnel?.allowedIp.includes(':') === true;
 }
 
 /** The `dns` the builders take: undefined for none, so no key is added. */
@@ -215,6 +215,7 @@ function buildPicked(
       ...shared,
       privateKey: picked.privateKey,
       allowedIp: picked.allowedIp,
+      ...(picked.allowedIp6 ? { allowedIp6: picked.allowedIp6 } : {}),
       serverPublicKey: picked.serverPublicKey,
       ...(picked.presharedKey ? { presharedKey: picked.presharedKey } : {}),
       host: picked.host,
@@ -226,6 +227,7 @@ function buildPicked(
     ...shared,
     privateKey: awg.privateKey,
     allowedIp: awg.allowedIp,
+    ...(awg.allowedIp6 ? { allowedIp6: awg.allowedIp6 } : {}),
     serverPublicKey: awg.serverPublicKey,
     ...(awg.presharedKey ? { presharedKey: awg.presharedKey } : {}),
     host: awg.host,

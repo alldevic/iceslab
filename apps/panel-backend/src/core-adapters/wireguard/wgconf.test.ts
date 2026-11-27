@@ -74,3 +74,12 @@ describe('buildWireguardClientConfig IPv6 endpoint', () => {
     expect(buildWireguardClientConfig({ ...base, host: '2001:db8::1' })).toContain('Endpoint = [2001:db8::1]:51820\n');
   });
 });
+
+describe('buildWireguardClientConfig second address (18.9)', () => {
+  it('writes the IPv6 after the IPv4 on one Address line, and only then', () => {
+    const out = buildWireguardClientConfig({ ...base, allowedIp6: 'fd12:3456:789a:3:0:0:a4d:4d05/128' });
+    expect(out).toContain('Address = 10.77.77.5/32, fd12:3456:789a:3:0:0:a4d:4d05/128\n');
+    expect(out.match(/^Address = /gm)).toHaveLength(1);
+    expect(buildWireguardClientConfig(base)).toContain('Address = 10.77.77.5/32\n');
+  });
+});

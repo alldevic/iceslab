@@ -374,6 +374,12 @@ export interface AmneziawgSubscriptionEndpoint extends SubscriptionEndpointBase,
   privateKey: string;
   /** IP allocated to this device inside the inbound's subnet, CIDR /32 form. */
   allowedIp: string;
+  /**
+   * 18.9: the device's IPv6 in the profile's `subnet6`, CIDR /128 form, present
+   * only when this node carries IPv6 in the tunnel for this interface. The
+   * `.conf` writes it as a second `Address`; absent, the config is as before.
+   */
+  allowedIp6?: string;
   /** Server's WireGuard public key (the inbound's interface PublicKey). */
   serverPublicKey: string;
   /** Junk/header obfuscation parameters: must match the server inbound. */
@@ -413,6 +419,8 @@ export interface WireguardSubscriptionEndpoint extends SubscriptionEndpointBase,
   privateKey: string;
   /** IP allocated to this device inside the plain profile's subnet, CIDR /32. */
   allowedIp: string;
+  /** The device's IPv6 in the profile's `subnet6`, CIDR /128; see the AmneziaWG one. */
+  allowedIp6?: string;
   /** Server's WireGuard public key (the inbound's interface PublicKey). */
   serverPublicKey: string;
 }

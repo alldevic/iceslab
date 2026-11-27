@@ -68,3 +68,12 @@ describe('the 3.1 client .conf', () => {
     expect(plain).toContain('H1 = 1111111111\n');
   });
 });
+
+describe('the 3.1 client .conf with a second address (18.9)', () => {
+  it('writes both addresses on the Address line, the 3.1 block untouched', () => {
+    const v6 = buildAmneziawgClientConfig({ ...opts, allowedIp6: 'fd12:3456:789a:2:0:0:a43:4302/128' });
+    expect(v6).toContain('Address = 10.67.67.2/32, fd12:3456:789a:2:0:0:a43:4302/128\n');
+    // Everything but that line is the golden's.
+    expect(v6.replace(', fd12:3456:789a:2:0:0:a43:4302/128', '')).toBe(buildAmneziawgClientConfig(opts));
+  });
+});

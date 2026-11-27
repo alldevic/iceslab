@@ -21,6 +21,7 @@ describe('profileFacts: the card reads keys the config holds (A-287)', () => {
     const awg = profileFacts('amneziawg', SEEDED.amneziawg[0], false);
     expect(awg.map((f) => [f.label, f.value])).toEqual([
       ['subnet', '10.77.0.0/24'],
+      ['subnet6', 'fd12:3456:789a:1::/64'],
       ['jc', '5'],
       ['s1', '20'],
     ]);

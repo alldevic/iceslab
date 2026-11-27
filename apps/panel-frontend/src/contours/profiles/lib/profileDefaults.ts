@@ -54,6 +54,7 @@ export function defaults(profile: Profile | null): FormValues {
 
     awgGeneration: profileAwgGeneration(profile?.awgProtocol),
     awgSubnet: '10.66.66.0/24',
+    awgSubnet6: '',
     awgServerPriv: '',
     awgServerPub: '',
     awgPreset: 'tspu',
@@ -79,6 +80,7 @@ export function defaults(profile: Profile | null): FormValues {
     // overlapping subnets (assertAwgSubnetFree).
     wgPresharedKey: false,
     wgSubnet: '10.77.77.0/24',
+    wgSubnet6: '',
     wgServerPriv: '',
     wgServerPub: '',
 
@@ -153,6 +155,7 @@ export function defaults(profile: Profile | null): FormValues {
       return {
         ...base,
         awgSubnet: (cfg.subnet as string) ?? base.awgSubnet,
+        awgSubnet6: (cfg.subnet6 as string) ?? base.awgSubnet6,
         awgServerPriv: (cfg.serverPrivateKey as string) ?? '',
         awgServerPub: (cfg.serverPublicKey as string) ?? '',
         awgPreset: 'custom',
@@ -179,6 +182,7 @@ export function defaults(profile: Profile | null): FormValues {
       return {
         ...base,
         wgSubnet: (cfg.subnet as string) ?? base.wgSubnet,
+        wgSubnet6: (cfg.subnet6 as string) ?? base.wgSubnet6,
         wgServerPriv: (cfg.serverPrivateKey as string) ?? '',
         wgServerPub: (cfg.serverPublicKey as string) ?? '',
         wgPresharedKey: cfg.presharedKey === true,

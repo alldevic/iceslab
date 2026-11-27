@@ -9,6 +9,7 @@ import { mtprotoBackstop } from './mtproto-backstop.js';
 import { reachOfUsers } from './user-reach.js';
 import { enqueueNodePush } from '../inbounds/inbounds.queue.js';
 import { awgBindingsOfNode, wgCredentialsOf, wireguardBindingOfNode } from '../amneziawg/awg-addresses.js';
+import { tunnelIpv6OfNode } from '../amneziawg/awg-ipv6.js';
 
 // ───── Job data shapes ─────
 
@@ -186,6 +187,8 @@ export async function syncAddUser(userId: string): Promise<void> {
             reachesWg: !!wgBinding && inboundIds.includes(wgBinding),
           },
         ],
+        // 18.9: the same interfaces as the push gives IPv6 to.
+        awg.one || awg.three || wgBinding ? await tunnelIpv6OfNode(node.id) : undefined,
       );
       await transport.addUser({
         ...base,

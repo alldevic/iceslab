@@ -603,6 +603,16 @@ export interface AmneziawgPeerCred {
   allowedIp3?: string;
   wireguardAllowedIp?: string;
   /**
+   * The peer's IPv6 on each interface kind (milestone 18.9), derived from the
+   * IPv4 address (low 32 bits of the profile's `subnet6`). Their own fields and
+   * not a list in the IPv4 ones: an older agent reads those as one prefix.
+   * Sent only for an interface that carries IPv6 in the tunnel (the node's
+   * `awgIpv6` fact, a mode other than off, not given to a cascade chain).
+   */
+  allowedIp6?: string;
+  allowedIp3v6?: string;
+  wireguardAllowedIp6?: string;
+  /**
    * The device's preshared key (milestone 9.5) on each interface kind: only
    * where that interface's profile has `presharedKey` on, absent otherwise and
    * from an older panel. One secret per device, sent to every interface whose
@@ -640,6 +650,10 @@ export interface ProtocolCredentials {
    */
   wireguardPublicKey?: string;
   wireguardAllowedIp?: string;
+  /** Device 1's IPv6 on each interface kind (milestone 18.9), see AmneziawgPeerCred. */
+  amneziawgAllowedIp6?: string;
+  amneziawgAllowedIp3v6?: string;
+  wireguardAllowedIp6?: string;
   /**
    * One peer per device of the user (milestone 9.4), for the AmneziaWG and
    * plain WireGuard interfaces alike. The agent takes the list and ignores the
@@ -1045,6 +1059,11 @@ export interface AmneziawgInboundCfg {
   /** Subnet in CIDR notation (e.g. "10.66.66.0/24"). Server takes .1, peers
    *  .2..N. Panel-side `amneziawg.service` does the per-user allocation. */
   subnet: string;
+  /** Milestone 18.9: the interface's IPv6 prefix, a ULA /64. On the wire ONLY
+   *  for an interface that carries IPv6 in the tunnel (the panel strips it
+   *  otherwise, so the request stays byte for byte what it was); the server
+   *  takes the address derived from its IPv4 one. */
+  subnet6?: string;
   /** Server WG private key (base64-standard, like `wg genkey`). */
   serverPrivateKey: string;
   /** Its public half. The agent ignores it; clients get it in their config. */
@@ -1075,6 +1094,8 @@ export interface AmneziawgInboundCfg {
 export interface WireguardInboundCfg {
   /** Subnet in CIDR notation; server takes .1, peers .2..N. */
   subnet: string;
+  /** Milestone 18.9, as for AmneziaWG. */
+  subnet6?: string;
   /** Server WG private key (base64-standard, like `wg genkey`). */
   serverPrivateKey: string;
   /** Its public half; clients get it in their config. */
@@ -2080,6 +2101,14 @@ export interface CoreStatus {
    * overwrites the live 1.x interface with it, silently.
    */
   awgGenerations?: AwgProtocol[];
+  /**
+   * Whether this AGENT can bring up IPv6 inside the WireGuard-family tunnel
+   * (milestone 18.9 names it, 18.10 makes the agent report it). Only the
+   * amneziawg core reports it, for AmneziaWG and plain WireGuard alike.
+   * ⚠ Absent is "no": every agent before 18.10, and the panel sends no IPv6 to
+   * the tunnel of a node that does not say so.
+   */
+  awgIpv6?: boolean;
   /** Whether this core is CONFIGURED, i.e. has an inbound and is expected to
    *  run. The installer registers an adapter for every protocol the operator
    *  might switch on later, and an unconfigured one sits idle by design.
@@ -2410,6 +2439,8 @@ export interface NodeCoreInfo {
   awgProtocol?: AwgProtocol;
   /** See CoreStatus.awgGenerations. Inventory: it changes with the agent. */
   awgGenerations?: AwgProtocol[];
+  /** See CoreStatus.awgIpv6. Inventory: it changes with the agent. */
+  awgIpv6?: boolean;
   provisioned?: boolean;
   /** See CoreStatus.reason. Inventory: it changes with a push, not a tick. */
   reason?: string;

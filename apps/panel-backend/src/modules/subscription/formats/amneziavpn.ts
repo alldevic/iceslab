@@ -30,7 +30,11 @@ export function buildAwgVpnLink(
   if (!awg) return '';
 
   const dns = wgClientDns(opts);
-  const clientAllowedIps = wgClientAllowedIps(opts, awg);
+  // 18.9: the key carries the IPv4 address only (`client_ip`), so the tunnel
+  // is IPv4 as far as AllowedIPs goes: whether the Amnezia app takes two
+  // addresses there is for a client check (Q3 of the milestone), and until then
+  // it is not told one. The `.conf` carries both.
+  const clientAllowedIps = wgClientAllowedIps(opts, { allowedIp: awg.allowedIp });
   return buildAmneziaVpnLink({
     ...(dns ? { dns } : {}),
     ...(clientAllowedIps ? { clientAllowedIps } : {}),

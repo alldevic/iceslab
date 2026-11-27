@@ -16,6 +16,7 @@ import { IconKey } from '@tabler/icons-react';
 import { PresharedKeySwitch } from '@/contours/profiles/components/ProfileForm/PresharedKeySwitch';
 import { GenerateWarning } from '@/contours/profiles/components/ProfileForm/GenerateWarning';
 import { confirmGenerate } from '@/contours/profiles/lib/confirmGenerate';
+import { randomSubnet6 } from '@/contours/profiles/lib/subnet6';
 import { randomAwgHeaders } from '@/contours/profiles/lib/awgPresets';
 import { showGenerateWarning, useGenerateGate } from '@/contours/profiles/lib/generateImpact';
 import type { UseFormReturnType } from '@mantine/form';
@@ -151,6 +152,27 @@ export function AmneziawgSection({
               {isEdit && showGenerateWarning(impact) && (
                 <GenerateWarning impact={impact} />
               )}
+              {/* 18.9: the IPv6 half of the tunnel, optional. Unlike the IPv4 subnet it
+                  can be added to a profile already saved: no address is allocated from
+                  it, a peer's IPv6 is derived from its IPv4 one. A node that cannot
+                  carry it runs the profile without (marked where it is deployed). */}
+              <Group align="flex-end" wrap="nowrap" gap="xs" style={{ maxWidth: 520 }}>
+                <TextInput
+                  flex={1}
+                  label={t('profiles.form.cfg.subnet6Label')}
+                  placeholder="fd12:3456:789a:1::/64"
+                  description={t('profiles.form.cfg.subnet6Hint')}
+                  inputWrapperOrder={['label', 'input', 'description', 'error']}
+                  {...form.getInputProps('awgSubnet6')}
+                />
+                <Button
+                  variant="light"
+                  type="button"
+                  onClick={() => form.setFieldValue('awgSubnet6', randomSubnet6())}
+                >
+                  {t('profiles.form.cfg.generate')}
+                </Button>
+              </Group>
               <Group justify="space-between" align="center" wrap="nowrap" gap="md">
                 <Text size="sm" fw={500}>
                   {t('profiles.form.cfg.awgPresetLabel')}

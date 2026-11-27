@@ -6,6 +6,7 @@ import { PresharedKeySwitch } from '@/contours/profiles/components/ProfileForm/P
 import { GenerateWarning } from '@/contours/profiles/components/ProfileForm/GenerateWarning';
 import { confirmGenerate } from '@/contours/profiles/lib/confirmGenerate';
 import { showGenerateWarning, useGenerateGate } from '@/contours/profiles/lib/generateImpact';
+import { randomSubnet6 } from '@/contours/profiles/lib/subnet6';
 import type { FormValues } from '@/contours/profiles/lib/profileFormValues';
 
 /**
@@ -80,6 +81,20 @@ export function WireguardSection({
           required
           {...form.getInputProps('wgServerPub')}
         />
+      </Group>
+      {/* 18.9: the IPv6 half of the tunnel, optional, as on AmneziaWG. */}
+      <Group align="flex-end" wrap="nowrap" gap="xs" style={{ maxWidth: 520 }}>
+        <TextInput
+          flex={1}
+          label={t('profiles.form.cfg.subnet6Label')}
+          placeholder="fd12:3456:789a:2::/64"
+          description={t('profiles.form.cfg.subnet6Hint')}
+          inputWrapperOrder={['label', 'input', 'description', 'error']}
+          {...form.getInputProps('wgSubnet6')}
+        />
+        <Button variant="light" type="button" onClick={() => form.setFieldValue('wgSubnet6', randomSubnet6())}>
+          {t('profiles.form.cfg.generate')}
+        </Button>
       </Group>
       {isEdit && showGenerateWarning(impact) && <GenerateWarning impact={impact} />}
       <PresharedKeySwitch form={form} field="wgPresharedKey" />

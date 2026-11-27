@@ -2,6 +2,8 @@ import { prisma } from '../../prisma.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import type { AmneziawgPeerCred } from '@iceslab/shared';
 import { allocatePeer, DEFAULT_SUBNET, preallocatePeers, type PeerDevice } from './amneziawg.service.js';
+import { ipv6OfIpv4 } from './amneziawg.subnet.js';
+import { NO_TUNNEL_IPV6, type TunnelIpv6 } from './awg-ipv6.js';
 import { ensureDevicesForUsers, type WgDeviceRow } from '../wg-devices/wg-devices.service.js';
 
 /**
@@ -51,7 +53,7 @@ export async function wireguardBindingOfNode(nodeId: string): Promise<string | u
  */
 async function profileOf(
   bindingId: string | undefined,
-): Promise<{ profileId: string; subnet: string; presharedKey: boolean } | null> {
+): Promise<{ profileId: string; subnet: string; subnet6?: string; presharedKey: boolean } | null> {
   if (!bindingId) return null;
   const row = await prisma.profileNodeBinding.findUnique({
     where: { id: bindingId },
@@ -60,9 +62,15 @@ async function profileOf(
   if (!row) return null;
   const config = { ...((row.profile.config ?? {}) as object), ...((row.overrides ?? {}) as object) } as {
     subnet?: string;
+    subnet6?: string;
     presharedKey?: boolean;
   };
-  return { profileId: row.profileId, subnet: config.subnet ?? DEFAULT_SUBNET, presharedKey: config.presharedKey === true };
+  return {
+    profileId: row.profileId,
+    subnet: config.subnet ?? DEFAULT_SUBNET,
+    ...(config.subnet6 ? { subnet6: config.subnet6 } : {}),
+    presharedKey: config.presharedKey === true,
+  };
 }
 
 /**
@@ -108,6 +116,10 @@ export interface WgCredentials {
   amneziawgAllowedIp3?: string;
   wireguardPublicKey?: string;
   wireguardAllowedIp?: string;
+  /** Device 1's IPv6 on each interface that carries it in the tunnel (18.9). */
+  amneziawgAllowedIp6?: string;
+  amneziawgAllowedIp3v6?: string;
+  wireguardAllowedIp6?: string;
   /** Every live device with an address there; `[]` takes the user's peers off. */
   amneziawgPeers: AmneziawgPeerCred[];
 }
@@ -120,6 +132,11 @@ export interface WgCredentials {
  * the subscription reads. Users who reach none are not in the map, and their
  * record carries no peer list (an agent reads that as no change).
  *
+ * `ipv6` (18.9, tunnelIpv6OfNode of the node): the interfaces that carry IPv6 in
+ * the tunnel. A peer on such an interface whose profile has a `subnet6` also
+ * gets its IPv6, derived from its IPv4 address; any other peer is as before,
+ * byte for byte.
+ *
  * The push and the rollout of one user both read this, so the peer set a node
  * holds for a user is the same whichever of them wrote it last. `issuedTo` are
  * the users who were just given devices.
@@ -127,6 +144,7 @@ export interface WgCredentials {
 export async function wgCredentialsOf(
   bindings: { one?: string; three?: string; wg?: string },
   users: { id: string; username: string; reachesOne: boolean; reachesThree: boolean; reachesWg: boolean }[],
+  ipv6: TunnelIpv6 = NO_TUNNEL_IPV6,
 ): Promise<{ creds: Map<string, WgCredentials>; issuedTo: string[] }> {
   const creds = new Map<string, WgCredentials>();
   const [one, three, wg] = await Promise.all([profileOf(bindings.one), profileOf(bindings.three), profileOf(bindings.wg)]);
@@ -148,6 +166,11 @@ export async function wgCredentialsOf(
       const a3 = three && u.reachesThree ? ip3.get(d.id) : undefined;
       const aw = wg && u.reachesWg ? ipWg.get(d.id) : undefined;
       if (!a1 && !a3 && !aw) continue;
+      const v6 = (addr: string | undefined, on: boolean, p: { subnet6?: string } | null) =>
+        addr && on && p?.subnet6 ? ipv6OfIpv4(p.subnet6, addr) : undefined;
+      const a16 = v6(a1, ipv6.one, one);
+      const a36 = v6(a3, ipv6.three, three);
+      const aw6 = v6(aw, ipv6.wg, wg);
       // The device's one preshared key, on each interface whose profile asks
       // for it and the device has an address on. Never an empty string: the
       // agent renders no line for an absent key, and `PresharedKey = ` for ''.
@@ -157,6 +180,9 @@ export async function wgCredentialsOf(
         ...(a1 ? { allowedIp: a1 } : {}),
         ...(a3 ? { allowedIp3: a3 } : {}),
         ...(aw ? { wireguardAllowedIp: aw } : {}),
+        ...(a16 ? { allowedIp6: a16 } : {}),
+        ...(a36 ? { allowedIp3v6: a36 } : {}),
+        ...(aw6 ? { wireguardAllowedIp6: aw6 } : {}),
         ...(a1 && psk && one?.presharedKey ? { presharedKey: psk } : {}),
         ...(a3 && psk && three?.presharedKey ? { presharedKey3: psk } : {}),
         ...(aw && psk && wg?.presharedKey ? { wireguardPresharedKey: psk } : {}),
@@ -173,6 +199,9 @@ export async function wgCredentialsOf(
       ...(first && firstPeer?.wireguardAllowedIp
         ? { wireguardPublicKey: first.publicKey, wireguardAllowedIp: firstPeer.wireguardAllowedIp }
         : {}),
+      ...(firstPeer?.allowedIp6 ? { amneziawgAllowedIp6: firstPeer.allowedIp6 } : {}),
+      ...(firstPeer?.allowedIp3v6 ? { amneziawgAllowedIp3v6: firstPeer.allowedIp3v6 } : {}),
+      ...(firstPeer?.wireguardAllowedIp6 ? { wireguardAllowedIp6: firstPeer.wireguardAllowedIp6 } : {}),
     });
   }
   return { creds, issuedTo };

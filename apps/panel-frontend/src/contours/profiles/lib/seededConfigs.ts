@@ -70,6 +70,7 @@ export const SEEDED: Record<ProtocolName, Record<string, unknown>[]> = {
   amneziawg: [
     {
       subnet: '10.77.0.0/24',
+      subnet6: 'fd12:3456:789a:1::/64',
       serverPrivateKey: 'priv',
       serverPublicKey: 'pub',
       obfuscation: {
@@ -80,7 +81,15 @@ export const SEEDED: Record<ProtocolName, Record<string, unknown>[]> = {
       presharedKey: true,
     },
   ],
-  wireguard: [{ subnet: '10.77.77.0/24', serverPrivateKey: 'priv', serverPublicKey: 'pub', presharedKey: true }],
+  wireguard: [
+    {
+      subnet: '10.77.77.0/24',
+      subnet6: 'fd12:3456:789a:2::/64',
+      serverPrivateKey: 'priv',
+      serverPublicKey: 'pub',
+      presharedKey: true,
+    },
+  ],
   naive: [{ hostname: 'naive.example.com', tlsEmail: 'ops@example.com', masqueradeRoot: '/srv/www' }],
   shadowsocks: [{ method: '2022-blake3-aes-128-gcm' }],
   mtproto: [{ domain: 'www.google.com' }],

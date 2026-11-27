@@ -14,6 +14,7 @@ import {
 import { prisma } from '../../prisma.js';
 import { effectiveEngineOf } from './node-engines.js';
 import { readCoreVersions } from './node-core-versions.js';
+import { normalizeSubnet6 } from '../amneziawg/amneziawg.subnet.js';
 
 /**
  * A host does not go onto a node whose core for it is missing or known to be
@@ -219,6 +220,26 @@ export class AwgSubnetOverlapError extends Error {
   }
 }
 
+/**
+ * The same refusal for the IPv6 half of two tunnels (milestone 18.9): two
+ * interfaces of one node on one `subnet6` route the clients' IPv6 to one link.
+ */
+export class AwgSubnet6OverlapError extends Error {
+  readonly code = 'AWG_SUBNET6_OVERLAP';
+  constructor(
+    public nodeName: string,
+    public subnet6: string,
+    public otherProfileName: string,
+    public otherSubnet6: string,
+  ) {
+    super(
+      `Node "${nodeName}" already serves tunnel profile "${otherProfileName}" on the IPv6 subnet ${otherSubnet6}, ` +
+        `which overlaps ${subnet6}. Separate interfaces need separate IPv6 subnets: give this profile a subnet6 of its own.`,
+    );
+    this.name = 'AwgSubnet6OverlapError';
+  }
+}
+
 function v4Range(cidr: string): [number, number] | null {
   const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d+)$/.exec(cidr.trim());
   if (!m) return null;
@@ -263,15 +284,24 @@ export async function assertAwgSubnetFree(
 ): Promise<void> {
   const mine = tunnelInterface(profile);
   if (mine === null) return;
-  const subnet = ((profile.config ?? {}) as { subnet?: string }).subnet ?? AWG_DEFAULT_SUBNET;
+  const mineConfig = (profile.config ?? {}) as { subnet?: string; subnet6?: string };
+  const subnet = mineConfig.subnet ?? AWG_DEFAULT_SUBNET;
   const others = await prisma.profileNodeBinding.findMany({
     where: { nodeId: node.id, profile: { protocol: { in: ['amneziawg', 'wireguard'] }, id: { not: profile.id } } },
     select: { profile: { select: { name: true, protocol: true, awgProtocol: true, config: true } } },
   });
   for (const o of others) {
     if (tunnelInterface(o.profile) === mine) continue;
-    const theirs = ((o.profile.config ?? {}) as { subnet?: string }).subnet ?? AWG_DEFAULT_SUBNET;
+    const theirsConfig = (o.profile.config ?? {}) as { subnet?: string; subnet6?: string };
+    const theirs = theirsConfig.subnet ?? AWG_DEFAULT_SUBNET;
     if (subnetsOverlap(subnet, theirs)) throw new AwgSubnetOverlapError(node.name, subnet, o.profile.name, theirs);
+    // A /64 overlaps another only by being the same one (the schema holds both
+    // to ULA /64, spelled in one way).
+    const mine6 = mineConfig.subnet6 ? normalizeSubnet6(mineConfig.subnet6) : null;
+    const theirs6 = theirsConfig.subnet6 ? normalizeSubnet6(theirsConfig.subnet6) : null;
+    if (mine6 !== null && mine6 === theirs6) {
+      throw new AwgSubnet6OverlapError(node.name, mine6, o.profile.name, theirs6);
+    }
   }
 }
 
@@ -339,6 +369,19 @@ export function coreGateReply(err: unknown): { status: 409; body: Record<string,
         subnet: err.subnet,
         otherProfileName: err.otherProfileName,
         otherSubnet: err.otherSubnet,
+      },
+    };
+  }
+  if (err instanceof AwgSubnet6OverlapError) {
+    return {
+      status: 409,
+      body: {
+        error: err.code,
+        message: err.message,
+        nodeName: err.nodeName,
+        subnet6: err.subnet6,
+        otherProfileName: err.otherProfileName,
+        otherSubnet6: err.otherSubnet6,
       },
     };
   }

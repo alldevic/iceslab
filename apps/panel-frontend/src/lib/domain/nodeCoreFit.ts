@@ -176,7 +176,9 @@ export type CoreGateRefusal =
   | { kind: 'awgAgent'; nodeName: string; neverReported: boolean }
   /** AWG_SUBNET_OVERLAP (24b59b9): профили 1.x и 3.1 одной ноды с
    *  пересекающимися подсетями. */
-  | { kind: 'awgSubnet'; nodeName: string; subnet: string; otherProfileName: string; otherSubnet: string };
+  | { kind: 'awgSubnet'; nodeName: string; subnet: string; otherProfileName: string; otherSubnet: string }
+  /** AWG_SUBNET6_OVERLAP (18.9): тот же отказ для IPv6-подсети туннеля. */
+  | { kind: 'awgSubnet6'; nodeName: string; subnet6: string; otherProfileName: string; otherSubnet6: string };
 
 const WHY = new Set(['no-arch', 'no-asset', 'unpinned']);
 
@@ -234,6 +236,12 @@ export function awgGateText(refusal: CoreGateRefusal, t: T): string | null {
         otherSubnet: refusal.otherSubnet,
         other: refusal.otherProfileName,
       });
+    case 'awgSubnet6':
+      return t('nodeCore.gateAwgSubnet6', {
+        node: refusal.nodeName,
+        subnet: refusal.subnet6,
+        other: refusal.otherProfileName,
+      });
     default:
       return null;
   }
@@ -287,6 +295,13 @@ export function coreGateRefusal(err: unknown): CoreGateRefusal | null {
     if (typeof otherProfileName !== 'string' || !otherProfileName) return null;
     if (typeof otherSubnet !== 'string' || !otherSubnet) return null;
     return { kind: 'awgSubnet', nodeName: d.nodeName, subnet, otherProfileName, otherSubnet };
+  }
+  if (d.error === 'AWG_SUBNET6_OVERLAP') {
+    const { subnet6, otherProfileName, otherSubnet6 } = d;
+    if (typeof subnet6 !== 'string' || !subnet6) return null;
+    if (typeof otherProfileName !== 'string' || !otherProfileName) return null;
+    if (typeof otherSubnet6 !== 'string' || !otherSubnet6) return null;
+    return { kind: 'awgSubnet6', nodeName: d.nodeName, subnet6, otherProfileName, otherSubnet6 };
   }
   if (typeof d.engine !== 'string' || !(ENGINE_NAMES as readonly string[]).includes(d.engine)) return null;
   const engine = d.engine as EngineName;

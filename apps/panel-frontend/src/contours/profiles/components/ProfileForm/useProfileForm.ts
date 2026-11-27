@@ -22,6 +22,7 @@ import { ssConfigPatch } from '@/contours/profiles/lib/ssServerKey';
 import { portHopProblem, portHopWords, type PortHopField } from '@/contours/profiles/lib/portHopRange';
 import { awgHeaderProblems, type AwgHField } from '@/contours/profiles/lib/awgHeaders';
 import { AWG_RULE_WORDS, awgRuleProblems, type AwgRuleField } from '@/contours/profiles/lib/awgRules';
+import { subnet6Problem } from '@/contours/profiles/lib/subnet6';
 import {
   WIREGUARD_RULE_WORDS,
   wireguardRuleProblems,
@@ -89,6 +90,9 @@ export function useProfileForm({
       wgSubnet: (_v, values) => wireguardRuleError(values, 'wgSubnet'),
       wgServerPriv: (_v, values) => wireguardRuleError(values, 'wgServerPriv'),
       wgServerPub: (_v, values) => wireguardRuleError(values, 'wgServerPub'),
+      // 18.9: the tunnel's IPv6 prefix, when one is given: a ULA /64.
+      awgSubnet6: (v, values) => (values.protocol === 'amneziawg' && subnet6Problem(v) ? t('profiles.form.cfg.subnet6Shape') : null),
+      wgSubnet6: (v, values) => (values.protocol === 'wireguard' && subnet6Problem(v) ? t('profiles.form.cfg.subnet6Shape') : null),
     },
   });
 

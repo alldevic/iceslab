@@ -75,6 +75,9 @@ export function profileConfigOf(values: FormValues): Record<string, unknown> {
     case 'amneziawg':
       return {
         subnet: values.awgSubnet,
+        // Sent only when set: a profile without it keeps the config it had, and
+        // clearing the field drops the key (the PUT replaces the config whole).
+        ...(values.awgSubnet6.trim() ? { subnet6: values.awgSubnet6.trim() } : {}),
         serverPrivateKey: values.awgServerPriv,
         serverPublicKey: values.awgServerPub,
         obfuscation: {
@@ -105,6 +108,7 @@ export function profileConfigOf(values: FormValues): Record<string, unknown> {
       // does not know and the node refuses an obfuscated push.
       return {
         subnet: values.wgSubnet,
+        ...(values.wgSubnet6.trim() ? { subnet6: values.wgSubnet6.trim() } : {}),
         serverPrivateKey: values.wgServerPriv,
         serverPublicKey: values.wgServerPub,
         ...(values.wgPresharedKey ? { presharedKey: true } : {}),

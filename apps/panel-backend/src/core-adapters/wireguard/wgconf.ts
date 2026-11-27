@@ -21,6 +21,8 @@ export interface WireguardClientConfigOpts {
    * (e.g. "10.77.77.42/32"). Caller should already have appended the suffix.
    */
   allowedIp: string;
+  /** 18.9: the device's IPv6 in the tunnel, CIDR /128; a second `Address`, as for AmneziaWG. */
+  allowedIp6?: string;
   /** Server's WireGuard public key (base64, 32 bytes). */
   serverPublicKey: string;
   /** The device's preshared key when its profile asks for one; absent or empty
@@ -49,7 +51,7 @@ export function buildWireguardClientConfig(opts: WireguardClientConfigOpts): str
 
   lines.push('[Interface]');
   lines.push(`PrivateKey = ${opts.privateKey}`);
-  lines.push(`Address = ${opts.allowedIp}`);
+  lines.push(`Address = ${opts.allowedIp6 ? `${opts.allowedIp}, ${opts.allowedIp6}` : opts.allowedIp}`);
   if (opts.dns?.length) {
     lines.push(`DNS = ${opts.dns.join(', ')}`);
   }

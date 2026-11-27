@@ -53,6 +53,7 @@ import {
 } from '@/lib/domain/portCheck';
 import { PortCheckHint, PortRefusalLine } from '@/ui/PortCheckHint';
 import { awgGenerationsKnown } from '@/lib/domain/nodeFields';
+import { tunnelIpv6Gap } from '@/lib/domain/tunnelIpv6';
 import { portInHopRange } from '@/lib/domain/portHopping';
 import {
   awgGateText,
@@ -469,6 +470,8 @@ export function DeployProfileModal({ profile, onClose }: Props) {
               // сказано до сохранения по факту ноды (a4ad8bc).
               const awgBlock = awgProfilePrediction(profile ?? undefined, node, genKnown);
               const awgWhy = awgBlock ? awgGateText(awgBlock, t) : null;
+              // 18.9: the profile has an IPv6 subnet and this node will not carry it.
+              const v6Gap = tunnelIpv6Gap(profile ?? undefined, node);
               return (
                 <Stack key={node.id} gap={4}>
                   <NodeRow
@@ -488,6 +491,15 @@ export function DeployProfileModal({ profile, onClose }: Props) {
                     onToggle={() => toggle(node.id)}
                   />
                   {fit && <NodeCoreLine fit={fit} nodeId={node.id} compact />}
+                  {v6Gap && (
+                    <Text size="xs" c="yellow" style={{ lineHeight: '15px' }}>
+                      {v6Gap === 'off'
+                        ? t('profiles.deploy.noTunnelIpv6.off')
+                        : v6Gap === 'address'
+                          ? t('profiles.deploy.noTunnelIpv6.address')
+                          : t('profiles.deploy.noTunnelIpv6.agent')}
+                    </Text>
+                  )}
                   {awgWhy && coreRefusal?.nodeName !== node.name && (
                     <Text size="xs" c="red" style={{ lineHeight: '15px' }}>
                       {awgWhy}

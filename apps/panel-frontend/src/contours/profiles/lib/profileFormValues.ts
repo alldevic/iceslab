@@ -59,6 +59,8 @@ export interface FormValues {
    *  без null: сервер хранит 1 как null, и назад уходит null (profileAwgPatch). */
   awgGeneration: AwgProtocol;
   awgSubnet: string;
+  /** Milestone 18.9: the tunnel's ULA /64, '' = none. Settable on a saved profile too. */
+  awgSubnet6: string;
   awgServerPriv: string;
   awgServerPub: string;
   awgPreset: 'tspu' | 'mobile' | 'custom';
@@ -85,6 +87,8 @@ export interface FormValues {
   // obfuscation; its own fields so a draft of one flavour never leaks into the
   // other.
   wgSubnet: string;
+  /** As awgSubnet6, for plain WireGuard. */
+  wgSubnet6: string;
   wgServerPriv: string;
   wgServerPub: string;
   wgPresharedKey: boolean;

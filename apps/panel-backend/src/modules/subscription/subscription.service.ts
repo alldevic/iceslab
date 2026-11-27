@@ -28,6 +28,8 @@ import {
 import { SINGBOX_ENTRY_PROTOCOLS } from '@iceslab/shared';
 import { subscriptionServerName } from '../../lib/util/country-flag.js';
 import { allocatePeer } from '../amneziawg/amneziawg.service.js';
+import { ipv6OfIpv4 } from '../amneziawg/amneziawg.subnet.js';
+import { tunnelIpv6OfNodes, type TunnelIpv6 } from '../amneziawg/awg-ipv6.js';
 import { ensureDevices, wgDeviceCount } from '../wg-devices/wg-devices.service.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import {
@@ -228,6 +230,8 @@ interface AmneziawgObfuscation {
 
 interface AmneziawgInboundConfig {
   subnet: string;
+  /** Milestone 18.9: the tunnel's ULA /64, when the profile has one. */
+  subnet6?: string;
   serverPrivateKey: string;
   serverPublicKey: string;
   obfuscation: AmneziawgObfuscation;
@@ -1045,6 +1049,23 @@ export async function generateSubscription(
     if (ensured.issued > 0) eventBus.emit('wg-devices.changed', { userId: user.id, reason: 'issued' });
   }
 
+  // 18.9: which interfaces of these nodes carry IPv6 in the tunnel, asked only
+  // when a tunnel profile has a `subnet6` (a fleet without one reads nothing
+  // more than before). Fresh, like the facts markExitsIpv6 reads.
+  const tunnelIpv6 = new Map<string, TunnelIpv6>();
+  const subnet6Nodes = bindings.filter(
+    (b) =>
+      (b.profile.protocol === 'amneziawg' || b.profile.protocol === 'wireguard') &&
+      (resolveBindingConfig(b.profile.config, b.overrides, b.profile.protocol) as { subnet6?: string }).subnet6,
+  );
+  if (wgDevices.length > 0 && subnet6Nodes.length > 0) {
+    for (const [id, v] of await tunnelIpv6OfNodes(subnet6Nodes.map((b) => b.node.id))) tunnelIpv6.set(id, v);
+  }
+  // The client's second address, `<ipv6>/128`, for a peer on an interface that
+  // carries IPv6 in the tunnel: none anywhere else.
+  const peerIpv6 = (nodeId: string, iface: 'one' | 'three' | 'wg', subnet6: string | undefined, ip: string) =>
+    subnet6 && tunnelIpv6.get(nodeId)?.[iface] ? { allowedIp6: `${ipv6OfIpv4(subnet6, ip)}/128` } : {};
+
   const endpoints: SubscriptionEndpoint[] = [];
   for (const b of bindings) {
     // Resolve deployable config: profile.config + binding.overrides.
@@ -1442,6 +1463,7 @@ export async function generateSubscription(
           ...hostMeta,
           privateKey: device.privateKey,
           allowedIp: `${peer.ip}/32`,
+          ...peerIpv6(b.node.id, is3 ? 'three' : 'one', cfg.subnet6, peer.ip),
           deviceId: device.id,
           deviceIndex: idx + 1,
           ...(cfg.presharedKey === true && device.presharedKey ? { presharedKey: device.presharedKey } : {}),
@@ -1490,6 +1512,7 @@ export async function generateSubscription(
           ...hostMeta,
           privateKey: device.privateKey,
           allowedIp: `${peer.ip}/32`,
+          ...peerIpv6(b.node.id, 'wg', cfg.subnet6, peer.ip),
           deviceId: device.id,
           deviceIndex: idx + 1,
           ...(cfg.presharedKey === true && device.presharedKey ? { presharedKey: device.presharedKey } : {}),

@@ -15,7 +15,11 @@ import (
 // half. We accept the field on the wire so the JSON shape stays identical
 // and ignore it during mapping.
 type inboundCfgWire struct {
-	Subnet           string         `json:"subnet"`
+	Subnet string `json:"subnet"`
+	// Subnet6 is the interface's IPv6 prefix, a ULA /64 (milestone 18.9). The
+	// panel sends it only for a tunnel that carries IPv6; the agent reads it
+	// from milestone 18.10 on, and ignores it until then.
+	Subnet6          string         `json:"subnet6,omitempty"`
 	ServerPrivateKey string         `json:"serverPrivateKey"`
 	ServerPublicKey  string         `json:"serverPublicKey"` // unused on agent
 	Obfuscation      obfuscationCfg `json:"obfuscation"`

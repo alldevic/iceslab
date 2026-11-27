@@ -488,6 +488,87 @@ describe('plain WireGuard beside AmneziaWG on one node (9.2)', () => {
   });
 });
 
+describe('subnet6 of two tunnels on one node (18.9)', () => {
+  const WG = { subnet: '10.77.77.0/24', serverPrivateKey: WG_TEST_PRIVATE_KEY, serverPublicKey: WG_TEST_PUBLIC_KEY };
+  const S6 = 'fd12:3456:789a:1::/64';
+  const awg6 = (subnet: string, subnet6?: string) => ({ ...AWG, subnet, ...(subnet6 ? { subnet6 } : {}) });
+
+  it('refuses a 3.1 profile whose subnet6 is the one a 1.x profile of the node has, with an answer that names both', async () => {
+    const nodeId = await makeNode();
+    await report(nodeId, [{ name: 'amneziawg', engine: 'amneziawg', installed: true, awgProtocol: 3, awgGenerations: [1, 3] }]);
+    const one = await makeProfile('amneziawg', awg6('10.66.66.0/24', S6));
+    const three = await makeProfile('amneziawg', awg6('10.67.67.0/24', 'FD12:3456:789A:0001::/64'), { awgProtocol: 3 });
+    expect((await bind(one, nodeId, 51820)).statusCode).toBe(201);
+    const refused = await bind(three, nodeId, 51830);
+    expect(refused.statusCode, refused.body).toBe(409);
+    expect(JSON.parse(refused.body)).toMatchObject({
+      error: 'AWG_SUBNET6_OVERLAP',
+      nodeName: expect.any(String),
+      subnet6: S6,
+      otherSubnet6: S6,
+      otherProfileName: expect.any(String),
+    });
+    expect(JSON.parse(refused.body).message).toContain('subnet6');
+  });
+
+  it('refuses plain WireGuard on the same subnet6 as an AmneziaWG profile, and the other way round', async () => {
+    const nodeId = await makeNode();
+    const awg = await makeProfile('amneziawg', awg6('10.66.66.0/24', S6));
+    const wg = await makeProfile('wireguard', { ...WG, subnet6: S6 });
+    expect((await bind(awg, nodeId, 51820)).statusCode).toBe(201);
+    const refused = await bind(wg, nodeId, 51840);
+    expect(refused.statusCode, refused.body).toBe(409);
+    expect(JSON.parse(refused.body)).toMatchObject({ error: 'AWG_SUBNET6_OVERLAP' });
+
+    const other = await makeNode();
+    expect((await bind(wg, other, 51840)).statusCode).toBe(201);
+    const back = await bind(await makeProfile('amneziawg', awg6('10.66.66.0/24', S6)), other, 51820);
+    expect(back.statusCode, back.body).toBe(409);
+    expect(JSON.parse(back.body)).toMatchObject({ error: 'AWG_SUBNET6_OVERLAP' });
+  });
+
+  it('lets distinct subnet6, and profiles with none, share a node', async () => {
+    const nodeId = await makeNode();
+    await report(nodeId, [
+      { name: 'amneziawg', engine: 'amneziawg', installed: true, awgProtocol: 3, awgGenerations: [1, 3] },
+      { name: 'wireguard', engine: 'wireguard', installed: true },
+    ]);
+    const one = await makeProfile('amneziawg', awg6('10.66.66.0/24', S6));
+    const three = await makeProfile('amneziawg', awg6('10.67.67.0/24', 'fd12:3456:789a:2::/64'), { awgProtocol: 3 });
+    const plain = await makeProfile('wireguard', WG);
+    for (const [p, port] of [[one, 51820], [three, 51830], [plain, 51840]] as const) {
+      expect((await bind(p, nodeId, port)).statusCode).toBe(201);
+    }
+  });
+
+  it('a PUT that moves a deployed profile onto the subnet6 of another interface is refused as the binding would be', async () => {
+    const nodeId = await makeNode();
+    const one = await makeProfile('amneziawg', awg6('10.66.66.0/24', S6));
+    const wg = await makeProfile('wireguard', { ...WG, subnet6: 'fd12:3456:789a:9::/64' });
+    expect((await bind(one, nodeId, 51820)).statusCode).toBe(201);
+    expect((await bind(wg, nodeId, 51840)).statusCode).toBe(201);
+    const put = (config: object) =>
+      app.inject({ method: 'PUT', url: `/api/profiles/${wg}`, headers: auth(), payload: { config } });
+    const onto = await put({ ...WG, subnet6: S6 });
+    expect(onto.statusCode, onto.body).toBe(409);
+    expect(JSON.parse(onto.body)).toMatchObject({ error: 'AWG_SUBNET6_OVERLAP' });
+    // A subnet6 can be added to a saved profile, and taken away again.
+    expect((await put({ ...WG, subnet6: 'fd12:3456:789a:a::/64' })).statusCode).toBe(200);
+    expect((await put(WG)).statusCode).toBe(200);
+  });
+
+  it('a subnet6 that is not a ULA /64 is a 400 on the profile, with nothing stored', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/profiles',
+      headers: auth(),
+      payload: { name: 'v6-bad', protocol: 'amneziawg', config: awg6('10.66.66.0/24', '2001:db8:1:2::/64') },
+    });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(await prisma.profile.count({ where: { name: 'v6-bad' } })).toBe(0);
+  });
+});
+
 describe('neededBy on the node response', () => {
   it('counts enabled hosts per core row, zero for an unneeded core, one query for the list', async () => {
     const nodeId = await makeNode();

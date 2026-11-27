@@ -3008,6 +3008,28 @@ async function awgInterfacePort(nodeId: string, generation: 1 | 3): Promise<numb
 }
 
 /**
+ * 18.9: which AmneziaWG interfaces of this node are handed to a cascade chain,
+ * i.e. which of `tproxy` / `tproxy3` getChainForNode puts into the entry's
+ * `userCore`: the same three conditions (a topology, this node its entry,
+ * AmneziaWG the entry protocol) and the same interface ports. A topology whose
+ * chain block would not render (chainInputFor refuses it) still counts as
+ * handed over: the question is where the client's traffic may go, and the
+ * answer errs toward "through the chain".
+ *
+ * ⚠ The tunnel's IPv6 stays off for such an interface until milestone 18.12:
+ * the chain's TPROXY catches IPv4 only, so a client's IPv6 would leave the
+ * entry node directly, around the cascade.
+ */
+export async function awgInterfacesInChain(nodeId: string): Promise<{ one: boolean; three: boolean }> {
+  const topology = await readTopologyForNode(nodeId);
+  if (!topology || chainRoleOf(nodeId, topology) !== 'entry' || topology.entryProtocol !== 'amneziawg') {
+    return { one: false, three: false };
+  }
+  const [one, three] = await Promise.all([awgInterfacePort(nodeId, 1), awgInterfacePort(nodeId, 3)]);
+  return { one: one !== undefined, three: three !== undefined };
+}
+
+/**
  * What the entry's user core is told, one shape per entry protocol.
  *
  * ⚠ ONLY AN ENTRY HANDS ANYTHING OVER. A transit and an exit have their whole

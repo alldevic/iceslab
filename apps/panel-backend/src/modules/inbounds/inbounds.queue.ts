@@ -17,6 +17,7 @@ import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { inboundSyncJobs } from '../../lib/infra/metrics.js';
 import { mtprotoBackstop } from '../users/mtproto-backstop.js';
 import { wgCredentialsOf } from '../amneziawg/awg-addresses.js';
+import { tunnelIpv6OfNode, type TunnelIpv6 } from '../amneziawg/awg-ipv6.js';
 import { reachOfUsers } from '../users/user-reach.js';
 import { getCascadeFragmentsForNode, getChainForNode, giveCascadeLegsReality } from '../cascades/cascade.service.js';
 import { resolvePolicyForNode } from '../node-policies/node-policies.service.js';
@@ -239,6 +240,17 @@ export async function cascadeXrayDrawingForNode(nodeId: string): Promise<Cascade
   return cascadeXrayDrawingOf(chain, chain ? null : await legacyCascadeAsPushed(nodeId));
 }
 
+/**
+ * 18.9: a tunnel config as pushed. `subnet6` is the profile's, and goes only to
+ * an interface that carries IPv6 in the tunnel (awg-ipv6.ts): everywhere else
+ * it is taken out, so the request is byte for byte what it was before the
+ * field existed, and an agent that does not know the key never sees it.
+ */
+function withTunnelSubnet6(config: unknown, carries: boolean): Record<string, unknown> {
+  const { subnet6, ...rest } = config as Record<string, unknown>;
+  return carries && subnet6 ? { ...rest, subnet6 } : rest;
+}
+
 export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]> {
   // Slice 27: walks ProfileNodeBinding rows joined to Profile, and resolves
   // the deployable config for each. Replaces the old per-node `inbounds`
@@ -259,6 +271,16 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
   // t07-6: the node's 3.1 geometry, minted on the first push that needs it.
   const awg3Geometry = bindings.some((b) => b.profile.protocol === 'amneziawg' && b.profile.awgProtocol === 3)
     ? await ensureAwg3Geometry(nodeId)
+    : null;
+
+  // 18.9: which interfaces of this node carry IPv6 in the tunnel. Asked only when
+  // a tunnel profile has a `subnet6` at all, so a fleet without one reads nothing
+  // more than before.
+  const wgFamily = (b: (typeof bindings)[number]) => b.profile.protocol === 'amneziawg' || b.profile.protocol === 'wireguard';
+  const tunnelIpv6: TunnelIpv6 | null = bindings.some(
+    (b) => wgFamily(b) && (resolveBindingConfig(b.profile.config, b.overrides, b.profile.protocol) as { subnet6?: string }).subnet6,
+  )
+    ? await tunnelIpv6OfNode(nodeId)
     : null;
 
   const inbounds = bindings.map((b) => {
@@ -311,14 +333,14 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
     // geometry (it has no obfuscation to hand over).
     if (b.profile.protocol === 'wireguard') {
       config = {
-        ...(config as Record<string, unknown>),
+        ...(withTunnelSubnet6(config, tunnelIpv6?.wg === true)),
         listenPort: b.port,
         inboundId: b.id,
       } as InboundDto['config'];
     }
     if (b.profile.protocol === 'amneziawg') {
       config = {
-        ...(config as Record<string, unknown>),
+        ...(withTunnelSubnet6(config, (b.profile.awgProtocol === 3 ? tunnelIpv6?.three : tunnelIpv6?.one) === true)),
         listenPort: b.port,
         // t07-6: which binding, so the agent can take down the interface of
         // one the push stops carrying; and, for a 3.1 profile, the generation
@@ -816,6 +838,9 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
   const inboundIdsOf = (userId: string): string[] => reach.get(userId)?.get(nodeId) ?? [];
   // A-164: WireGuard peers only for the users who reach that inbound, one per
   // device (9.4), each with an address on the interfaces the user reaches.
+  // 18.9: the interfaces that carry IPv6 in the tunnel, so a peer there gets its
+  // IPv6 (the same answer fetchEnabledInbounds used for `subnet6`).
+  const tunnelIpv6 = awgBinding || awg3Binding || wgBinding ? await tunnelIpv6OfNode(nodeId) : undefined;
   const { creds: wgCreds } = await wgCredentialsOf(
     { one: awgBinding?.id, three: awg3Binding?.id, wg: wgBinding?.id },
     users.map((u) => ({
@@ -825,6 +850,7 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
       reachesThree: !!awg3Binding && inboundIdsOf(u.id).includes(awg3Binding.id),
       reachesWg: !!wgBinding && inboundIdsOf(u.id).includes(wgBinding.id),
     })),
+    tunnelIpv6,
   );
 
   const requests: AddUserRequest[] = users.map((u) => ({

@@ -140,6 +140,8 @@ export const common = {
     gateAwgNotReported: 'Node {{node}} has not reported yet: an AmneziaWG 3.1 profile binds after the first poll.',
     gateAwgSubnet:
       'On node {{node}} subnet {{subnet}} overlaps {{otherSubnet}} of profile {{other}}: 1.x and 3.1 profiles on one node need different subnets.',
+    gateAwgSubnet6:
+      'On node {{node}} IPv6 subnet {{subnet}} is already used by profile {{other}}: tunnels on one node need different IPv6 subnets.',
     gateAfterInstall: 'The panel runs nothing on the machine. Once installed, the node reports the core by itself and the save goes through.',
     unpinnedInstall: {
       'no-arch': 'Version not pinned: the node did not report its arch, and every file and its checksum are per arch. The script installs its own default.',

@@ -213,6 +213,25 @@ describe('coreGateRefusal: the 409 of the BACK core gate', () => {
     }
   });
 
+  it('AWG_SUBNET6_OVERLAP (18.9): the IPv6 subnet and the other profile, a missing one is not read', () => {
+    const body = { error: 'AWG_SUBNET6_OVERLAP', nodeName: 'se-01', subnet6: 'fd12:3456:789a:1::/64', otherProfileName: 'awg-1x', otherSubnet6: 'fd12:3456:789a:1::/64' };
+    expect(coreGateRefusal(res(body))).toEqual({
+      kind: 'awgSubnet6',
+      nodeName: 'se-01',
+      subnet6: 'fd12:3456:789a:1::/64',
+      otherProfileName: 'awg-1x',
+      otherSubnet6: 'fd12:3456:789a:1::/64',
+    });
+    for (const key of ['subnet6', 'otherProfileName', 'otherSubnet6']) {
+      expect(coreGateRefusal(res({ ...body, [key]: '' }))).toBeNull();
+      expect(coreGateRefusal(res({ ...body, [key]: 7 }))).toBeNull();
+    }
+    const text = (k: string, o?: Record<string, unknown>) => `${k} ${JSON.stringify(o ?? {})}`;
+    expect(awgGateText(coreGateRefusal(res(body))!, text)).toBe(
+      'nodeCore.gateAwgSubnet6 {"node":"se-01","subnet":"fd12:3456:789a:1::/64","other":"awg-1x"}',
+    );
+  });
+
   it('awgGateText: the three AmneziaWG refusals in words, others null', () => {
     const t = (k: string, o?: Record<string, unknown>) => `${k} ${JSON.stringify(o ?? {})}`;
     expect(awgGateText({ kind: 'awgAgent', nodeName: 'se-01', neverReported: false }, t)).toBe('nodeCore.gateAwgAgent {"node":"se-01"}');

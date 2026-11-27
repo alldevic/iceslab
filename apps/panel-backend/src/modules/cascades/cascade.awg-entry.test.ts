@@ -9,7 +9,7 @@ import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
-import { getChainForNode, getHysteriaEntryLabels } from './cascade.service.js';
+import { awgInterfacesInChain, getChainForNode, getHysteriaEntryLabels } from './cascade.service.js';
 import { renderChainConfig, TPROXY_IN_TAG } from './chain.config.js';
 import { CHAIN_TPROXY_PORT, chainTProxyMark } from './chain.ports.js';
 import { observedCores } from '../nodes/nodes.cron.js';
@@ -288,5 +288,35 @@ describe('the policy on the tproxy listener', () => {
     }) as { route: { rules: Record<string, unknown>[] } };
     const onListener = cfg.route.rules.filter((r) => (r.inbound as string[] | undefined)?.[0] === TPROXY_IN_TAG);
     expect(onListener).toEqual([{ inbound: [TPROXY_IN_TAG], action: 'route', outbound: 'out-d0' }]);
+  });
+});
+
+describe('awgInterfacesInChain (18.9): the interfaces the chain block hands over', () => {
+  // The panel keeps the tunnel's IPv6 off an interface that is handed to the
+  // chain (until 18.12), and asks this, not a second reading of the topology.
+  it('says what the chain block says, for 1.x and 3.1, and nothing for an exit or no cascade', async () => {
+    const entry = await makeNode('ru-entry');
+    const exit = await makeNode('nl-exit');
+    await carriesBoth(entry);
+    await bindAwg(entry, 51820);
+    await bindAwg(entry, 51830, 3);
+    expect(await awgInterfacesInChain(entry)).toEqual({ one: false, three: false });
+    await makeCascade(entry, exit);
+
+    const chain = await getChainForNode(entry);
+    const userCore = chain!.userCore as { tproxy?: unknown; tproxy3?: unknown };
+    expect(await awgInterfacesInChain(entry)).toEqual({ one: userCore.tproxy !== undefined, three: userCore.tproxy3 !== undefined });
+    expect(await awgInterfacesInChain(entry)).toEqual({ one: true, three: true });
+    expect(await awgInterfacesInChain(exit)).toEqual({ one: false, three: false });
+  });
+
+  it('is the 3.1 interface alone on an entry that serves 3.1 alone, none for an entry without AmneziaWG', async () => {
+    const entry = await makeNode('ru-entry');
+    await carriesBoth(entry);
+    await bindAwg(entry, 51830, 3);
+    const bare = await makeNode('ru-bare');
+    await makeCascade(entry, await makeNode('nl-exit'));
+    expect(await awgInterfacesInChain(entry)).toEqual({ one: false, three: true });
+    expect(await awgInterfacesInChain(bare)).toEqual({ one: false, three: false });
   });
 });
