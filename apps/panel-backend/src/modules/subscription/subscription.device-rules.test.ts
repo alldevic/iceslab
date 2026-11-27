@@ -9,6 +9,7 @@ import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../routing-presets/r
 import { buildXrayJson, buildXrayJsonArray } from './formats/xrayjson.js';
 import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson } from './formats/singbox.js';
+import { effectiveDnsRules } from './subscription.device-rules.js';
 
 /**
  * A-229 part 4: device routing presets rendered from one structure.
@@ -284,5 +285,31 @@ describe.skipIf(!SINGBOX_BIN)('sing-box check accepts an own preset of every kin
       const config = buildSingboxJson(LOADABLE, { ownPresetRules: EVERY_KIND, bundle });
       expect(run(SINGBOX_BIN, (f) => ['check', '-c', f], config)).toBe('');
     }
+  });
+});
+
+describe('effectiveDnsRules (stage 19.2)', () => {
+  const r = (server: string, ...match: string[]) => ({ match, server, note: '' });
+  const own = { kind: 'custom' as const, dnsRules: [r('10.0.0.1', 'domain:corp.example')] };
+  const panel = [r('tcp://10.0.0.9', 'domain:corp.example'), r('tcp://10.0.0.8', 'geosite:category-ads-all')];
+
+  it('no sources, no rules', () => {
+    expect(effectiveDnsRules({ kind: 'builtin' }, [])).toEqual([]);
+    expect(effectiveDnsRules({ kind: 'custom', dnsRules: [] }, [])).toEqual([]);
+  });
+
+  it('only the preset: its rules', () => {
+    expect(effectiveDnsRules(own, [])).toEqual(own.dnsRules);
+  });
+
+  it('only the panel-wide ones: a built-in preset gets them, an own preset without rules too', () => {
+    expect(effectiveDnsRules({ kind: 'builtin' }, panel)).toEqual(panel);
+    expect(effectiveDnsRules({ kind: 'custom', dnsRules: [] }, panel)).toEqual(panel);
+  });
+
+  it('both: the preset first, so its rule for the same name wins', () => {
+    const out = effectiveDnsRules(own, panel);
+    expect(out).toEqual([...own.dnsRules, ...panel]);
+    expect(out[0]!.server).toBe('10.0.0.1');
   });
 });

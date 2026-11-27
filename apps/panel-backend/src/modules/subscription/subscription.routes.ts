@@ -7,10 +7,12 @@ import {
   formatDisabledForHost,
   isHappUserAgent,
   showsServerDescription,
+  type DnsRule,
   type ProtocolName,
   type RoutingPresetId,
 } from '@iceslab/shared';
 import { parseProtocolsParam, protocolsOf, withProtocols } from './subscription.protocols.js';
+import { effectiveDnsRules } from './subscription.device-rules.js';
 import * as service from './subscription.service.js';
 import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson } from './formats/singbox.js';
@@ -866,6 +868,8 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       let routingPreset: RoutingPresetId = 'proxy-all';
       let ownPresetRules: DeviceRouteRule[] | undefined;
       let customRoutingRules: Record<string, unknown>[] | undefined;
+      // Stage 19.2: the DNS rules in force, handed to the builders (not read yet).
+      let dnsRules: DnsRule[] = [];
       // R3 - operator-defined custom domain lists (direct/proxy/block), emitted
       // into xray + clash routing rules. Undefined = none = byte-identical.
       let customDomainLists: { direct: string[]; proxy: string[]; block: string[] } | undefined;
@@ -896,6 +900,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           { kind: 'builtin', id: settings.routingPreset };
         routingPreset = preset.kind === 'builtin' ? preset.id : 'proxy-all';
         ownPresetRules = preset.kind === 'custom' ? preset.rules : undefined;
+        dnsRules = effectiveDnsRules(preset, settings.dnsRules);
         // R3-b custom rules apply only to xray-routing formats (xray/xkeen).
         customRoutingRules = settings.customRoutingRules ?? undefined;
         // R3 custom domain lists apply to xray/xkeen + clash.
@@ -1062,6 +1067,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               buildClashYaml(served, {
                 routingPreset,
                 ownPresetRules,
+                dnsRules,
                 customDomainLists,
                 frame,
                 geo: await selfHostedGeo(),
@@ -1081,7 +1087,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               : undefined;
           return reply
             .type('application/json')
-            .send(buildSingboxJson(served, { bundle: sbBundle, routingPreset, ownPresetRules, frame, geo: await selfHostedGeo(), extRefs: singboxExt }));
+            .send(buildSingboxJson(served, { bundle: sbBundle, routingPreset, ownPresetRules, dnsRules, frame, geo: await selfHostedGeo(), extRefs: singboxExt }));
         }
         case 'wgconf': {
           // The file name IS the tunnel name the client shows (wg-quick has no
@@ -1118,7 +1124,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               : undefined;
           return reply
             .type('application/json')
-            .send(buildXrayJson(served, { bundle: xjBundle, routingPreset, ownPresetRules, customRules: customRoutingRules, customDomainLists, tlsFragment, frame, remarks: docRemarks, presetGeoInline: await inlineGeo() }));
+            .send(buildXrayJson(served, { bundle: xjBundle, routingPreset, ownPresetRules, dnsRules, customRules: customRoutingRules, customDomainLists, tlsFragment, frame, remarks: docRemarks, presetGeoInline: await inlineGeo() }));
         }
         case 'xrayjson-array': {
           // A1: top-level JSON array of standalone xray configs (one per
@@ -1127,7 +1133,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // `bundle` (no balancer: the client picks a server, not an outbound).
           return reply
             .type('application/json')
-            .send(buildXrayJsonArray(served, { routingPreset, ownPresetRules, customRules: customRoutingRules, customDomainLists, tlsFragment, frame, presetGeoInline: await inlineGeo() }));
+            .send(buildXrayJsonArray(served, { routingPreset, ownPresetRules, dnsRules, customRules: customRoutingRules, customDomainLists, tlsFragment, frame, presetGeoInline: await inlineGeo() }));
         }
         case 'xkeen': {
           // XKeen (xray-core on Keenetic routers): outbounds + routing +
@@ -1144,7 +1150,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               'Content-Disposition',
               `attachment; filename="${sanitizeFilename(result.json.user.username)}-xkeen.json"`,
             )
-            .send(buildXrayJson(served, { bundle: xkBundle, routingPreset, ownPresetRules, forRouter: true, customRules: customRoutingRules, customDomainLists }));
+            .send(buildXrayJson(served, { bundle: xkBundle, routingPreset, ownPresetRules, dnsRules, forRouter: true, customRules: customRoutingRules, customDomainLists }));
         }
         case 'outline':
           // Outline dynamic key: one Shadowsocks server, `?node=` picks which,

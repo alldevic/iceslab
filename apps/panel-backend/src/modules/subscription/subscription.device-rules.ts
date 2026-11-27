@@ -1,5 +1,5 @@
 import { isIP } from 'node:net';
-import { GEO_SRS_NAME } from '@iceslab/shared';
+import { GEO_SRS_NAME, type DnsRule } from '@iceslab/shared';
 import type { DeviceRouteRule } from '../routing-presets/routing-presets.builtins.js';
 import type { SelfHostedGeo } from '../geo-sets/geo-self-host.js';
 import { parseGeoRef } from '../geo-sets/geo-names.js';
@@ -259,4 +259,21 @@ export function singboxDeviceRoute(
     if (ranges.length) out.push({ port_range: ranges, ...action });
   }
   return { rules: out, ruleSets: [...sets.values()] };
+}
+
+// ---------------------------------------------------------------- DNS rules
+
+/**
+ * Stage 19.2: the DNS rules in force for a subscription. An own preset's
+ * `dnsRules` come first, then the panel-wide ones; a built-in preset has none
+ * of its own, so it gets the panel-wide ones. The formats take the first rule
+ * that matches a name, so a preset's rule beats a panel-wide rule for the same
+ * name. How a rule meets the built-in regional DNS server is the formats' to
+ * decide (19.4-19.6); this is only the order.
+ */
+export function effectiveDnsRules(
+  preset: { kind: 'builtin' } | { kind: 'custom'; dnsRules: readonly DnsRule[] },
+  panelRules: readonly DnsRule[],
+): DnsRule[] {
+  return [...(preset.kind === 'custom' ? preset.dnsRules : []), ...panelRules];
 }

@@ -1,4 +1,4 @@
-import { isRoutingPresetId, type RoutingPresetId } from '@iceslab/shared';
+import { isRoutingPresetId, type DnsRule, type RoutingPresetId } from '@iceslab/shared';
 import type { DeviceRouteRule } from './routing-presets.builtins.js';
 
 /**
@@ -13,12 +13,12 @@ import type { DeviceRouteRule } from './routing-presets.builtins.js';
 
 export type ResolvedPreset =
   | { kind: 'builtin'; id: RoutingPresetId }
-  | { kind: 'custom'; id: string; name: string; rules: DeviceRouteRule[] };
+  | { kind: 'custom'; id: string; name: string; rules: DeviceRouteRule[]; dnsRules: DnsRule[] };
 
 /** A user's or a squad's two preset columns as read, the own one with its row. */
 export interface PresetColumns {
   routingPreset: string | null;
-  customRoutingPreset: { id: string; name: string; rules: unknown } | null;
+  customRoutingPreset: { id: string; name: string; rules: unknown; dnsRules: unknown } | null;
 }
 
 /** What one row holds, or null for "inherit". A built-in key the code no
@@ -26,7 +26,13 @@ export interface PresetColumns {
 export function presetOf(row: PresetColumns): ResolvedPreset | null {
   if (row.customRoutingPreset) {
     const p = row.customRoutingPreset;
-    return { kind: 'custom', id: p.id, name: p.name, rules: Array.isArray(p.rules) ? (p.rules as DeviceRouteRule[]) : [] };
+    return {
+      kind: 'custom',
+      id: p.id,
+      name: p.name,
+      rules: Array.isArray(p.rules) ? (p.rules as DeviceRouteRule[]) : [],
+      dnsRules: Array.isArray(p.dnsRules) ? (p.dnsRules as DnsRule[]) : [],
+    };
   }
   return isRoutingPresetId(row.routingPreset) ? { kind: 'builtin', id: row.routingPreset } : null;
 }
@@ -55,5 +61,5 @@ export function resolveSquadPreset(squads: PresetColumns[]): { preset: ResolvedP
 /** The select that gives presetOf what it reads, for a user or a group. */
 export const PRESET_COLUMNS_SELECT = {
   routingPreset: true,
-  customRoutingPreset: { select: { id: true, name: true, rules: true } },
+  customRoutingPreset: { select: { id: true, name: true, rules: true, dnsRules: true } },
 } as const;

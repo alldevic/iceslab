@@ -56,6 +56,7 @@ const WRITABLE = [
   'subscriptionTlsFragment',
   'subscriptionCustomRoutingRules',
   'subscriptionCustomDomainLists',
+  'subscriptionDnsRules',
   'defaultLocale',
   'subscriptionDefaultFormat',
   'subscriptionLinkShape',

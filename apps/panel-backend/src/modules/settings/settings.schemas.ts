@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { DEFAULT_FORMAT_NAMES, ROUTING_PRESET_IDS } from '@iceslab/shared';
 import { headerSafeUrl } from '../../lib/util/header-url.js';
+import { DnsRulesSchema } from '../routing-presets/routing-presets.dns.js';
 
 /**
  * The body of `PUT /api/settings`. Its own file, away from the routes, so the
@@ -56,6 +57,11 @@ export const UpdateSettingsSchema = z.object({
     })
     .nullable()
     .optional(),
+  // Stage 19: panel-wide "names -> DNS server" rules, added to every preset
+  // (a rule of the preset with the same name wins). The same schema and the
+  // same checks as a preset's dnsRules; names, servers and geo tags are checked
+  // in the route (the refusal carries a code and the entries).
+  subscriptionDnsRules: DnsRulesSchema.nullable().optional(),
   // Subscription landing-page default language. The panel's LanguageSwitcher
   // mirrors its UI language here so the human /sub page defaults to the same
   // language the operator runs the panel in. The page also carries an in-page

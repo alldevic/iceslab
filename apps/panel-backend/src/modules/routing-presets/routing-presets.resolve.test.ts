@@ -16,7 +16,7 @@ import { presetOf, resolveSquadPreset, type PresetColumns } from './routing-pres
 
 const own = (id: string, name = id): PresetColumns => ({
   routingPreset: null,
-  customRoutingPreset: { id, name, rules: [{ match: ['geosite:google'], action: 'direct', note: '' }] },
+  customRoutingPreset: { id, name, rules: [{ match: ['geosite:google'], action: 'direct', note: '' }], dnsRules: [] },
 });
 const builtin = (key: string | null): PresetColumns => ({ routingPreset: key, customRoutingPreset: null });
 
@@ -29,6 +29,13 @@ describe('resolveSquadPreset', () => {
   it('a built-in in one squad and an own preset in another are two: the panel default, and a conflict', () => {
     expect(resolveSquadPreset([builtin('ru-split'), own('p1')])).toEqual({ preset: null, conflict: true });
     expect(resolveSquadPreset([own('p1'), own('p2')])).toEqual({ preset: null, conflict: true });
+  });
+
+  it('an own preset carries its dnsRules; a row without a list reads as none', () => {
+    const rules = [{ match: ['corp.example'], server: '10.0.0.1', note: '' }];
+    const row = { routingPreset: null, customRoutingPreset: { id: 'p', name: 'p', rules: [], dnsRules: rules } };
+    expect(presetOf(row)).toMatchObject({ kind: 'custom', dnsRules: rules });
+    expect(presetOf({ ...row, customRoutingPreset: { ...row.customRoutingPreset, dnsRules: 'junk' } })).toMatchObject({ dnsRules: [] });
   });
 
   it('nothing set is null without a conflict, and a key the code does not know is ignored', () => {

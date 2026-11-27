@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../auth/auth.hook.js';
 import { DeviceRouteRuleSchema, MAX_PRESET_RULES, RoutingPresetRulesError } from './routing-presets.rules.js';
+import { DnsRulesSchema } from './routing-presets.dns.js';
 import * as service from './routing-presets.service.js';
 
 /**
@@ -13,9 +14,9 @@ import * as service from './routing-presets.service.js';
 const NameSchema = z.string().trim().min(1, 'Name is required').max(64, 'Name too long');
 const RulesSchema = z.array(DeviceRouteRuleSchema).max(MAX_PRESET_RULES);
 
-const CreateSchema = z.object({ name: NameSchema, rules: RulesSchema });
+const CreateSchema = z.object({ name: NameSchema, rules: RulesSchema, dnsRules: DnsRulesSchema.default([]) });
 // PUT: an absent key is not an edit.
-const UpdateSchema = z.object({ name: NameSchema.optional(), rules: RulesSchema.optional() });
+const UpdateSchema = z.object({ name: NameSchema.optional(), rules: RulesSchema.optional(), dnsRules: DnsRulesSchema.optional() });
 const IdParam = z.object({ id: z.uuid() });
 
 function refusal(reply: FastifyReply, err: unknown): FastifyReply | null {

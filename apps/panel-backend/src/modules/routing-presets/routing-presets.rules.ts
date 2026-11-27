@@ -4,6 +4,7 @@ import { classifyPolicyEntry } from '../cascades/policy-entries.js';
 import { parseGeoRef } from '../geo-sets/geo-names.js';
 import { setTagNames } from '../geo-sets/geo-sets.service.js';
 import { DEVICE_ROUTE_ACTIONS } from './routing-presets.builtins.js';
+import { dnsRuleProblem } from './routing-presets.dns.js';
 
 /**
  * A-229: the checks on a device routing preset's rules, the set written into
@@ -58,7 +59,11 @@ export function matcherKind(m: string): MatcherKind | null {
 
 export class RoutingPresetRulesError extends Error {
   constructor(
-    public readonly code: 'ROUTING_PRESET_ENTRY_UNKNOWN' | 'ROUTING_PRESET_GEO_TAG_UNKNOWN',
+    public readonly code:
+      | 'ROUTING_PRESET_ENTRY_UNKNOWN'
+      | 'ROUTING_PRESET_GEO_TAG_UNKNOWN'
+      | 'ROUTING_PRESET_DNS_MATCH_INVALID'
+      | 'ROUTING_PRESET_DNS_SERVER_INVALID',
     message: string,
     public readonly entries: string[],
   ) {
@@ -86,6 +91,11 @@ export async function checkRules(rules: readonly { match: string[] }[]): Promise
       unknown,
     );
   }
+  await checkGeoTags(all);
+}
+
+/** Every `geosite:`/`geoip:` among the entries names a tag the built-in set has. */
+async function checkGeoTags(all: readonly string[]): Promise<void> {
   const missing: string[] = [];
   for (const kind of ['geosite', 'geoip'] as const) {
     const refs = all
@@ -105,4 +115,15 @@ export async function checkRules(rules: readonly { match: string[] }[]): Promise
       missing,
     );
   }
+}
+
+/**
+ * The checks on DNS rules (stage 19): names a DNS rule can carry, a server of
+ * one of the four kinds, and a `geosite:` tag the built-in set has (the same
+ * check and code as a device rule's). The limits are the schema's.
+ */
+export async function checkDnsRules(rules: readonly { match: string[]; server: string }[]): Promise<void> {
+  const problem = dnsRuleProblem(rules);
+  if (problem) throw new RoutingPresetRulesError(problem.code, problem.message, problem.entries);
+  await checkGeoTags([...new Set(rules.flatMap((r) => r.match))]);
 }

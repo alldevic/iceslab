@@ -204,6 +204,44 @@ describe('the admin door stays locked', () => {
   });
 });
 
+describe('the panel-wide DNS rules (19.2)', () => {
+  beforeEach(() => invalidateSubscriptionSettingsCache());
+  const RULES = [{ match: ['domain:corp.example'], server: 'tcp://10.0.0.1', note: 'office' }];
+  const readAdmin = async () =>
+    JSON.parse((await app.inject({ method: 'GET', url: '/api/settings', headers: auth() })).body);
+
+  it('is saved, read back, and none on a panel that never set it', async () => {
+    expect((await getSubscriptionSettings()).dnsRules).toEqual([]);
+    expect((await readAdmin()).subscriptionDnsRules).toBeNull();
+    await put({ subscriptionDnsRules: RULES });
+    expect((await readAdmin()).subscriptionDnsRules).toEqual(RULES);
+    expect((await getSubscriptionSettings()).dnsRules).toEqual(RULES);
+    await put({ subscriptionDnsRules: null });
+    expect((await getSubscriptionSettings()).dnsRules).toEqual([]);
+  });
+
+  it('refuses what a preset refuses, with the same codes', async () => {
+    const send = (rules: unknown) => app.inject({ method: 'PUT', url: '/api/settings', headers: auth(), payload: { subscriptionDnsRules: rules } });
+    const name = await send([{ match: ['keyword:x'], server: '10.0.0.1' }]);
+    expect(name.statusCode).toBe(400);
+    expect(JSON.parse(name.body)).toMatchObject({ error: 'ROUTING_PRESET_DNS_MATCH_INVALID', entries: ['keyword:x'] });
+    const server = await send([{ match: ['corp.example'], server: 'udp://10.0.0.1' }]);
+    expect(JSON.parse(server.body)).toMatchObject({ error: 'ROUTING_PRESET_DNS_SERVER_INVALID' });
+    const rule = { match: ['corp.example'], server: '10.0.0.1' };
+    expect((await send(Array.from({ length: 17 }, () => rule))).statusCode).toBe(400);
+    expect((await readAdmin()).subscriptionDnsRules).toBeNull();
+  });
+
+  it('a damaged stored value reads as an empty list', async () => {
+    for (const bad of ['junk', { a: 1 }, [{ match: ['keyword:x'], server: '10.0.0.1' }], [{ match: ['corp.example'], server: 'nope' }], [1]]) {
+      await prisma.appSetting.deleteMany({ where: { key: 'subscriptionDnsRules' } });
+      await prisma.appSetting.create({ data: { key: 'subscriptionDnsRules', value: bad as object, isPublic: false } });
+      invalidateSubscriptionSettingsCache();
+      expect((await getSubscriptionSettings()).dnsRules, JSON.stringify(bad)).toEqual([]);
+    }
+  });
+});
+
 describe('the wg config settings (9.8)', () => {
   beforeEach(() => invalidateSubscriptionSettingsCache());
 

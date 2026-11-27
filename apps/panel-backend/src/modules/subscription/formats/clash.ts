@@ -1,4 +1,4 @@
-import { transportServed, type RoutingPresetId } from '@iceslab/shared';
+import { transportServed, type DnsRule, type RoutingPresetId } from '@iceslab/shared';
 import { emitsVisionFlow, isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 import { makeTagger } from '../endpoint-identity.js';
 import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
@@ -66,6 +66,9 @@ export interface ClashBuildOpts {
   routingPreset?: RoutingPresetId;
   /** A-229: an own preset's rules, in place of the built-in preset's. */
   ownPresetRules?: readonly DeviceRouteRule[];
+  /** Stage 19.2: the DNS rules in force (the preset's own, then the panel-wide);
+   *  delivered, not read yet: the formats start writing them in 19.4-19.6. */
+  dnsRules?: readonly DnsRule[];
   /** A-236: the operator template to fill; absent = the mihomo Default. */
   frame?: Frame;
   /** A-236 step 4: the core the file is written for. `clash` (the format) is

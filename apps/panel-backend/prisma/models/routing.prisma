@@ -7,6 +7,8 @@ model RoutingPreset {
   id        String   @id @default(uuid()) @db.Uuid
   name      String   @unique @db.VarChar(64)
   rules     Json     @default("[]")
+  // Stage 19: names -> DNS server, [{ match, server, note }], validated by the API.
+  dnsRules  Json     @default("[]") @map("dns_rules")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 

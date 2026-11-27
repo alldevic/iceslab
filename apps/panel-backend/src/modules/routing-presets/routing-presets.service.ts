@@ -1,7 +1,7 @@
-import { ROUTING_PRESET_IDS, isRoutingPresetId } from '@iceslab/shared';
+import { ROUTING_PRESET_IDS, isRoutingPresetId, type DnsRule } from '@iceslab/shared';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
-import { BUILTIN_PRESET_RULES, checkRules, type DeviceRouteRule } from './routing-presets.rules.js';
+import { BUILTIN_PRESET_RULES, checkDnsRules, checkRules, type DeviceRouteRule } from './routing-presets.rules.js';
 
 /**
  * A-229 part 2: the list and the writes of device routing presets. The three
@@ -20,11 +20,15 @@ export interface PublicRoutingPreset {
   name: string;
   builtIn: boolean;
   rules: PublicRoutingPresetRule[];
+  /** Stage 19: names -> DNS server. A built-in has none of its own (the
+   *  panel-wide rules, subscriptionDnsRules, are what adds to a built-in). */
+  dnsRules: DnsRule[];
 }
 
 export interface RoutingPresetInput {
   name?: string;
   rules?: DeviceRouteRule[];
+  dnsRules?: DnsRule[];
 }
 
 export interface PresetUse {
@@ -81,13 +85,17 @@ function withIds(presetId: string, rules: readonly DeviceRouteRule[]): PublicRou
   return rules.map((r, i) => ({ id: `${presetId}:${i}`, match: [...r.match], action: r.action, note: r.note }));
 }
 
-function toDto(row: { id: string; name: string; rules: unknown }): PublicRoutingPreset {
+function dnsRulesOf(raw: unknown): DnsRule[] {
+  return Array.isArray(raw) ? (raw as DnsRule[]).map((r) => ({ match: [...r.match], server: r.server, note: r.note ?? '' })) : [];
+}
+
+function toDto(row: { id: string; name: string; rules: unknown; dnsRules: unknown }): PublicRoutingPreset {
   const rules = Array.isArray(row.rules) ? (row.rules as DeviceRouteRule[]) : [];
-  return { id: row.id, name: row.name, builtIn: false, rules: withIds(row.id, rules) };
+  return { id: row.id, name: row.name, builtIn: false, rules: withIds(row.id, rules), dnsRules: dnsRulesOf(row.dnsRules) };
 }
 
 export function builtInPresets(): PublicRoutingPreset[] {
-  return ROUTING_PRESET_IDS.map((id) => ({ id, name: id, builtIn: true, rules: withIds(id, BUILTIN_PRESET_RULES[id]) }));
+  return ROUTING_PRESET_IDS.map((id) => ({ id, name: id, builtIn: true, rules: withIds(id, BUILTIN_PRESET_RULES[id]), dnsRules: [] }));
 }
 
 export async function listRoutingPresets(): Promise<PublicRoutingPreset[]> {
@@ -97,6 +105,10 @@ export async function listRoutingPresets(): Promise<PublicRoutingPreset[]> {
 
 function stored(rules: readonly DeviceRouteRule[]): Prisma.InputJsonValue {
   return rules.map((r) => ({ match: r.match, action: r.action, note: r.note }));
+}
+
+function storedDns(rules: readonly DnsRule[]): Prisma.InputJsonValue {
+  return rules.map((r) => ({ match: r.match, server: r.server, note: r.note }));
 }
 
 function isUniqueViolation(err: unknown): boolean {
@@ -112,8 +124,11 @@ async function nameFree(name: string, exceptId?: string): Promise<void> {
 export async function createRoutingPreset(input: Required<RoutingPresetInput>): Promise<PublicRoutingPreset> {
   await nameFree(input.name);
   await checkRules(input.rules);
+  await checkDnsRules(input.dnsRules);
   try {
-    const row = await prisma.routingPreset.create({ data: { name: input.name, rules: stored(input.rules) } });
+    const row = await prisma.routingPreset.create({
+      data: { name: input.name, rules: stored(input.rules), dnsRules: storedDns(input.dnsRules) },
+    });
     return toDto(row);
   } catch (err) {
     if (isUniqueViolation(err)) throw new RoutingPresetNameTakenError(input.name);
@@ -133,12 +148,14 @@ export async function updateRoutingPreset(id: string, input: RoutingPresetInput)
   // An absent key is not an edit: a name-only save keeps the rules.
   if (input.name !== undefined) await nameFree(input.name, id);
   if (input.rules !== undefined) await checkRules(input.rules);
+  if (input.dnsRules !== undefined) await checkDnsRules(input.dnsRules);
   try {
     const row = await prisma.routingPreset.update({
       where: { id },
       data: {
         ...(input.name !== undefined ? { name: input.name } : {}),
         ...(input.rules !== undefined ? { rules: stored(input.rules) } : {}),
+        ...(input.dnsRules !== undefined ? { dnsRules: storedDns(input.dnsRules) } : {}),
       },
     });
     return toDto(row);

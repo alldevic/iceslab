@@ -2,9 +2,11 @@ import {
   DEFAULT_FORMAT_NAMES,
   isRoutingPresetId,
   type DefaultSubscriptionFormat,
+  type DnsRule,
   type RoutingPresetId,
 } from '@iceslab/shared';
 import { isIP } from 'node:net';
+import { DnsRulesSchema, dnsRuleProblem } from '../routing-presets/routing-presets.dns.js';
 import { prisma } from '../../prisma.js';
 import { getLogger } from '../../lib/infra/logger.js';
 
@@ -32,6 +34,9 @@ export interface SubscriptionSettings {
   /** R3 - operator-defined custom domain lists (direct/proxy/block), or null
    *  when every bucket is empty. Emitted into xray/xkeen + clash routing rules. */
   customDomainLists: { direct: string[]; proxy: string[]; block: string[] } | null;
+  /** Stage 19: panel-wide "names -> DNS server" rules, added to every preset's
+   *  own. Empty when none (or when the stored value is damaged). */
+  dnsRules: DnsRule[];
   /** Subscription landing-page default language, mirrored from the panel's UI
    *  language. NULL = fall back to the visitor's Accept-Language. The /sub page
    *  has an in-page RU/EN selector (?lang=) that overrides this per visitor. */
@@ -175,6 +180,13 @@ export async function getSubscriptionSettings(): Promise<SubscriptionSettings> {
       })()
     : null;
 
+  // Stage 19: DNS rules. A damaged row (not a list, a rule that is not one the
+  // write path would have accepted) reads as no rules: the subscription must
+  // keep building, and a rule the builders cannot take apart is worse than none.
+  const dnsRaw = map.get('subscriptionDnsRules');
+  const dnsParsed = DnsRulesSchema.safeParse(dnsRaw);
+  const dnsRules: DnsRule[] = dnsParsed.success && dnsRuleProblem(dnsParsed.data) === null ? dnsParsed.data : [];
+
   // Subscription page default language. Only the two known locales are honoured;
   // a missing / hand-edited garbage row yields null so /sub falls back to the
   // visitor's Accept-Language (legacy behaviour).
@@ -249,6 +261,7 @@ export async function getSubscriptionSettings(): Promise<SubscriptionSettings> {
     tlsFragment,
     customRoutingRules,
     customDomainLists,
+    dnsRules,
     defaultLocale,
     // Negative or garbage reads as "no cap": the failure mode of a bad row must
     // be a subscriber seeing everything, never a subscriber seeing nothing.

@@ -14,6 +14,7 @@ import {
 } from './settings.service.js';
 import { UpdateSettingsSchema } from './settings.schemas.js';
 import { readCapped, subscriptionProbeAnswered } from './settings.probe.js';
+import { checkDnsRules, RoutingPresetRulesError } from '../routing-presets/routing-presets.rules.js';
 import { audit } from '../audit/audit.hook.js';
 
 /** JSON with object keys sorted: jsonb hands an object back in its own key
@@ -96,6 +97,9 @@ async function peerCertificateExpiry(url: string): Promise<string | null> {
  *                                                   so SNI-based DPI cannot
  *                                                   cleanly match the handshake.
  *                                                   Default false. Xray JSON only.
+ *   - `subscriptionDnsRules` (DnsRule[], stage 19) - "names -> DNS server" rules added to
+ *                                                   every routing preset; a preset's own
+ *                                                   rule with the same name wins. Default none.
  *   - `subscriptionWgDns` (string[] of IPs)       - resolvers for the `DNS =` line of
  *                                                   WireGuard / AmneziaWG configs and
  *                                                   `dns1`/`dns2` of the vpn:// key.
@@ -181,6 +185,16 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
     admin.put('/api/settings', async (req, reply) => {
       const input = UpdateSettingsSchema.parse(req.body);
       const entries = Object.entries(input).filter(([, v]) => v !== undefined);
+      if (input.subscriptionDnsRules) {
+        try {
+          await checkDnsRules(input.subscriptionDnsRules);
+        } catch (err) {
+          if (err instanceof RoutingPresetRulesError) {
+            return reply.code(400).send({ error: err.code, message: err.message, entries: err.entries });
+          }
+          throw err;
+        }
+      }
       // The audit log keeps which settings changed, never their values (the
       // announce template, the support URL and the routing rules are the
       // operator's own text). The screen sends every key on each save, so a

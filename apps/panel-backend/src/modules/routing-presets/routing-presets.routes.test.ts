@@ -175,6 +175,81 @@ describe('writes', () => {
     expect(missing.statusCode).toBe(404);
   });
 
+  describe('dnsRules (stage 19.2)', () => {
+    const DNS = [
+      { match: ['domain:corp.example', 'full:a.corp.example'], server: 'tcp://10.0.0.1', note: 'office' },
+      { match: ['geosite:google'], server: 'https://dns.example.com/dns-query', note: '' },
+    ];
+    const put = (id: string, payload: Record<string, unknown>) =>
+      app.inject({ method: 'PUT', url: `/api/routing-presets/${id}`, headers: auth(), payload });
+
+    it('saved and read back on POST, PUT and GET; built-ins have none; absent on create is empty', async () => {
+      const made = await create({ name: 'office', rules: RULES, dnsRules: DNS });
+      expect(made.statusCode, made.body).toBe(201);
+      expect(JSON.parse(made.body).dnsRules).toEqual(DNS);
+      const plain = JSON.parse((await create({ name: 'plain', rules: [] })).body);
+      expect(plain.dnsRules).toEqual([]);
+
+      const id = JSON.parse(made.body).id as string;
+      const next = [{ match: ['corp.example'], server: '10.0.0.2', note: 'n' }];
+      expect(JSON.parse((await put(id, { dnsRules: next })).body).dnsRules).toEqual(next);
+
+      const { presets } = JSON.parse((await app.inject({ method: 'GET', url: '/api/routing-presets', headers: auth() })).body) as {
+        presets: { name: string; builtIn: boolean; dnsRules: unknown[] }[];
+      };
+      expect(presets.filter((p) => p.builtIn).map((p) => p.dnsRules)).toEqual([[], [], []]);
+      expect(presets.find((p) => p.name === 'office')!.dnsRules).toEqual(next);
+    });
+
+    it('PUT without the key keeps the saved rules; an empty list clears them', async () => {
+      const id = JSON.parse((await create({ name: 'office', rules: RULES, dnsRules: DNS })).body).id as string;
+      const renamed = await put(id, { name: 'office-2', rules: [] });
+      expect(JSON.parse(renamed.body).dnsRules).toEqual(DNS);
+      expect((await prisma.routingPreset.findUniqueOrThrow({ where: { id } })).dnsRules).toEqual(DNS);
+      expect(JSON.parse((await put(id, { dnsRules: [] })).body).dnsRules).toEqual([]);
+    });
+
+    it('refuses a name or a server a DNS rule cannot carry, each with its code and the entries', async () => {
+      for (const m of ['keyword:corp', 'regexp:^corp', '10.0.0.0/8', 'geoip:ru', 'port:53', 'ext:corp:office']) {
+        const res = await create({ name: 'm', rules: [], dnsRules: [{ match: ['domain:ok.example', m], server: '10.0.0.1' }] });
+        expect(res.statusCode, m).toBe(400);
+        expect(JSON.parse(res.body), m).toMatchObject({ error: 'ROUTING_PRESET_DNS_MATCH_INVALID', entries: [m] });
+      }
+      for (const s of ['udp://10.0.0.1', '10.0.0.1:53', 'https://', 'dns.example.com', 'tcp://dns.example.com']) {
+        const res = await create({ name: 's', rules: [], dnsRules: [{ match: ['corp.example'], server: s }] });
+        expect(res.statusCode, s).toBe(400);
+        expect(JSON.parse(res.body), s).toMatchObject({ error: 'ROUTING_PRESET_DNS_SERVER_INVALID', entries: [s] });
+      }
+      expect(await prisma.routingPreset.count()).toBe(0);
+    });
+
+    it('all four server kinds are accepted', async () => {
+      const servers = ['10.0.0.1', 'tcp://10.0.0.1:5353', 'tls://dns.example.com', 'https://dns.example.com/dns-query'];
+      const res = await create({ name: 'k', rules: [], dnsRules: servers.map((server) => ({ match: ['corp.example'], server })) });
+      expect(res.statusCode, res.body).toBe(201);
+    });
+
+    it('a geosite tag the built-in set lacks is ROUTING_PRESET_GEO_TAG_UNKNOWN, on create and on PUT', async () => {
+      await seedGeosite(['google']);
+      const bad = await create({ name: 'g', rules: [], dnsRules: [{ match: ['geosite:no-such-tag'], server: '10.0.0.1' }] });
+      expect(bad.statusCode).toBe(400);
+      expect(JSON.parse(bad.body)).toMatchObject({ error: 'ROUTING_PRESET_GEO_TAG_UNKNOWN', entries: ['geosite:no-such-tag'] });
+      const id = JSON.parse((await create({ name: 'g', rules: [] })).body).id as string;
+      const bad2 = await put(id, { dnsRules: [{ match: ['geosite:no-such-tag'], server: '10.0.0.1' }] });
+      expect(JSON.parse(bad2.body).error).toBe('ROUTING_PRESET_GEO_TAG_UNKNOWN');
+      expect((await put(id, { dnsRules: [{ match: ['geosite:google'], server: '10.0.0.1' }] })).statusCode).toBe(200);
+    });
+
+    it('the 17th rule and the 65th name are refused', async () => {
+      const rule = { match: ['corp.example'], server: '10.0.0.1' };
+      expect((await create({ name: 'a', rules: [], dnsRules: Array.from({ length: 16 }, () => rule) })).statusCode).toBe(201);
+      expect((await create({ name: 'b', rules: [], dnsRules: Array.from({ length: 17 }, () => rule) })).statusCode).toBe(400);
+      const names = (n: number) => Array.from({ length: n }, (_, i) => `d${i}.example`);
+      expect((await create({ name: 'c', rules: [], dnsRules: [{ ...rule, match: names(64) }] })).statusCode).toBe(201);
+      expect((await create({ name: 'd', rules: [], dnsRules: [{ ...rule, match: names(65) }] })).statusCode).toBe(400);
+    });
+  });
+
   it('a preset in use is not deleted: 409 with the users and squads that hold it', async () => {
     const made = JSON.parse((await create({ name: 'office', rules: RULES })).body) as { id: string };
     const user = await app.inject({

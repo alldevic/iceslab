@@ -1,4 +1,4 @@
-import { transportServed, type RoutingPresetId } from '@iceslab/shared';
+import { transportServed, type DnsRule, type RoutingPresetId } from '@iceslab/shared';
 import { emitsVisionFlow, isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 import { endpointTag, makeTagger } from '../endpoint-identity.js';
 import { ADS_GEOSITE, BUILTIN_PRESET_RULES, splitGeoTags, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
@@ -77,6 +77,9 @@ export interface XrayJsonBuildOpts {
    * preset's, and no split DNS is written (see splitDnsFor).
    */
   ownPresetRules?: readonly DeviceRouteRule[];
+  /** Stage 19.2: the DNS rules in force (the preset's own, then the panel-wide);
+   *  delivered, not read yet: the formats start writing them in 19.4-19.6. */
+  dnsRules?: readonly DnsRule[];
   /**
    * Milestone 12.5: the region's matchers of a built-in split preset, written
    * into the rules and into the regional DNS server's `domains` instead of
