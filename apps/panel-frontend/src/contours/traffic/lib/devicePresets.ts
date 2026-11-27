@@ -38,27 +38,31 @@ export const PRESET_DNS: Partial<Record<RoutingPresetId, string>> = {
 export const NEW_PRESET_ID = '__new__';
 
 export function blankPreset(): RoutingPreset {
-  return { id: NEW_PRESET_ID, name: '', builtIn: false, rules: [] };
+  return { id: NEW_PRESET_ID, name: '', builtIn: false, rules: [], dnsRules: [] };
 }
 
 /**
  * What a save of the preset editor sends. A new preset goes whole; an existing
  * one sends only what changed against what it was opened with, so a rename
- * does not restate the rules another tab just edited. Nothing changed: null.
+ * does not restate the rules another tab just edited; the DNS rules are one
+ * more such key, sent only when they differ. Nothing changed: null.
  */
 export function presetWrite(
   preset: RoutingPreset,
   name: string,
   rules: RoutingPresetInput['rules'],
   initial: RoutingPresetInput['rules'],
+  dnsRules: RoutingPresetInput['dnsRules'] = [],
+  initialDns: RoutingPresetInput['dnsRules'] = [],
 ):
   | { kind: 'create'; input: RoutingPresetInput }
   | { kind: 'update'; input: Partial<RoutingPresetInput> }
   | null {
   const typed = name.trim() || preset.name;
-  if (preset.id === NEW_PRESET_ID) return { kind: 'create', input: { name: typed, rules } };
+  if (preset.id === NEW_PRESET_ID) return { kind: 'create', input: { name: typed, rules, dnsRules } };
   const input: Partial<RoutingPresetInput> = {};
   if (typed !== preset.name) input.name = typed;
   if (JSON.stringify(rules) !== JSON.stringify(initial)) input.rules = rules;
+  if (JSON.stringify(dnsRules) !== JSON.stringify(initialDns)) input.dnsRules = dnsRules;
   return Object.keys(input).length > 0 ? { kind: 'update', input } : null;
 }

@@ -94,6 +94,7 @@ export const routingPresetRecord = (over: Partial<RoutingPreset> = {}): RoutingP
   name: 'min-preset',
   builtIn: false,
   rules: [],
+  dnsRules: [],
   ...over,
 });
 

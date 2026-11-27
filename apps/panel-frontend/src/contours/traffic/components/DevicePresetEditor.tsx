@@ -2,6 +2,9 @@ import { AMBER, CYAN, DEFAULT_EDGE, DIM, DISPLAY, FAINT, HAIRLINE, MIST, MONO, R
 import { Action } from '@/contours/traffic/components/RoutePolicy/Action';
 import { Chip } from '@/contours/traffic/components/RoutePolicy/Chip';
 import { IconAction } from '@/contours/traffic/components/RoutePolicy/IconAction';
+import { DnsFormatsTable } from '@/contours/traffic/components/DevicePreset/DnsFormatsTable';
+import { DnsRulesEditor } from '@/contours/traffic/components/DevicePreset/DnsRulesEditor';
+import { PanelDnsRules } from '@/contours/traffic/components/DevicePreset/PanelDnsRules';
 import { InfoIcon } from '@/contours/traffic/components/DevicePreset/icons';
 import { NoEntryIcon, TrashIcon } from '@/contours/traffic/components/RoutePolicy/icons';
 import { RulesList } from '@/contours/traffic/components/DevicePreset/RulesList';
@@ -49,6 +52,11 @@ export function DevicePresetEditor({
     setName,
     nameError,
     unknownEntries,
+    dnsRows,
+    setDnsRows,
+    dnsRefused,
+    clearDnsRefused,
+    dnsBlocked,
     rules,
     dragging,
     setDragging,
@@ -123,7 +131,7 @@ export function DevicePresetEditor({
           )
         )}
         {!locked && (
-          <Action disabled={!dirty || saveMutation.isPending} onClick={() => saveMutation.mutate()}>
+          <Action disabled={!dirty || dnsBlocked || saveMutation.isPending} onClick={() => saveMutation.mutate()}>
             {t('common.save')}
           </Action>
         )}
@@ -205,6 +213,24 @@ export function DevicePresetEditor({
           </Text>
         </Box>
       )}
+
+      {/* Stage 19: names -> DNS server. A built-in preset shows the rules of
+          the panel instead of an editor; the table of formats is the same for
+          both and does not depend on what is typed. */}
+      {locked ? (
+        <PanelDnsRules />
+      ) : (
+        <Box style={{ paddingTop: 12, borderTop: `1px solid ${HAIRLINE}` }}>
+          <Box style={{ paddingInline: 24, paddingBottom: 6 }}>
+            <Text style={{ fontFamily: MONO, fontSize: 10, fontWeight: 500, letterSpacing: '0.12em', textTransform: 'uppercase', color: MIST }}>
+              {t('routes.dnsRulesTitle')}
+            </Text>
+            <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: FAINT }}>{t('routes.dnsRulesHint')}</Text>
+          </Box>
+          <DnsRulesEditor rows={dnsRows} onChange={setDnsRows} refused={dnsRefused} onTouch={clearDnsRefused} />
+        </Box>
+      )}
+      <DnsFormatsTable />
 
       <Box
         style={{

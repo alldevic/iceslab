@@ -23,6 +23,10 @@ export function presetRefusalWords(r: RoutingPresetRefusal, t: Translate): strin
       return t('routes.presetEntryUnknown', { entries: r.entries.join(', ') });
     case 'ROUTING_PRESET_GEO_TAG_UNKNOWN':
       return t('routes.presetGeoTagUnknown', { entries: r.entries.join(', ') });
+    case 'ROUTING_PRESET_DNS_MATCH_INVALID':
+      return t('routes.presetDnsMatchInvalid', { entries: r.entries.join(', ') });
+    case 'ROUTING_PRESET_DNS_SERVER_INVALID':
+      return t('routes.presetDnsServerInvalid', { entries: r.entries.join(', ') });
     case 'ROUTING_PRESET_BUILT_IN':
       return t('routes.presetBuiltInRefused');
     case 'NOT_FOUND':

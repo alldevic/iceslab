@@ -161,3 +161,45 @@ describe('routes page, own rules', () => {
     expect(body.subscriptionCustomDomainLists).toBeNull();
   });
 });
+
+describe('routes page, panel-wide DNS rules (stage 19)', () => {
+  const DNS = [{ match: ['geosite:category-ru'], server: 'tcp://77.88.8.8', note: 'ru' }];
+
+  it('a rule added is sent as the only key changed, and the schema takes it', async () => {
+    const { api, view } = mount(<OwnRules />, '/', {});
+    fireEvent.click(await screen.findByRole('button', { name: view.i18n.t('routes.dnsRuleAdd') }, FIRST));
+    fireEvent.change(screen.getByLabelText(view.i18n.t('routes.dnsRuleNames')), { target: { value: 'geosite:category-ru example.ru' } });
+    fireEvent.change(screen.getByLabelText(view.i18n.t('routes.dnsRuleServer')), { target: { value: 'tcp://77.88.8.8' } });
+    fireEvent.click(await screen.findByRole('button', { name: view.i18n.t('common.save') }));
+    const body = await saved(api);
+    accepted(UpdateSettingsSchema, body);
+    expect(body.subscriptionDnsRules).toEqual([{ match: ['geosite:category-ru', 'example.ru'], server: 'tcp://77.88.8.8', note: '' }]);
+  });
+
+  it('a wrong server is marked before anything is sent and the save waits', async () => {
+    const { api, view } = mount(<OwnRules />, '/', {});
+    fireEvent.click(await screen.findByRole('button', { name: view.i18n.t('routes.dnsRuleAdd') }, FIRST));
+    fireEvent.change(screen.getByLabelText(view.i18n.t('routes.dnsRuleNames')), { target: { value: 'example.ru' } });
+    fireEvent.change(screen.getByLabelText(view.i18n.t('routes.dnsRuleServer')), { target: { value: 'dns.example' } });
+    expect(await screen.findByText(view.i18n.t('routes.dnsRuleBadServer', { entry: 'dns.example' }))).toBeTruthy();
+    const save = (await screen.findByRole('button', { name: view.i18n.t('common.save') })) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    expect(api.calls.filter((c) => c.method === 'PUT')).toEqual([]);
+  });
+
+  it('stored rules are shown, and the last one deleted clears the setting with null', async () => {
+    const { api, view } = mount(<OwnRules />, '/', { subscriptionDnsRules: DNS });
+    const names = (await screen.findByLabelText(view.i18n.t('routes.dnsRuleNames'), {}, FIRST)) as HTMLInputElement;
+    await waitFor(() => expect(names.value).toBe('geosite:category-ru'), FIRST);
+    fireEvent.click(screen.getAllByTitle(view.i18n.t('common.delete'))[0]!);
+    fireEvent.click(await screen.findByRole('button', { name: view.i18n.t('common.save') }));
+    const body = await saved(api);
+    accepted(UpdateSettingsSchema, body);
+    expect(body.subscriptionDnsRules).toBeNull();
+  });
+
+  it('the table of formats stands under the rules', async () => {
+    const { view } = mount(<OwnRules />, '/', {});
+    expect(await screen.findByRole('table', { name: view.i18n.t('routes.dnsFormat.title') }, FIRST)).toBeTruthy();
+  });
+});

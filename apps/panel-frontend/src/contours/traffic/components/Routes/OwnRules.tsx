@@ -6,6 +6,12 @@ import { PencilIcon } from '@/contours/traffic/components/Routes/icons';
 import { SaveButton } from '@/contours/traffic/components/Routes/SaveButton';
 import { Verdict } from '@/contours/traffic/components/Routes/Verdict';
 import { apiErrorMessage } from '@/lib/net/client';
+import { DnsFormatsTable } from '@/contours/traffic/components/DevicePreset/DnsFormatsTable';
+import { DnsRulesEditor } from '@/contours/traffic/components/DevicePreset/DnsRulesEditor';
+import { OWN_RULES_ANCHOR } from '@/contours/traffic/components/DevicePreset/PanelDnsRules';
+import { checkDnsDrafts, dnsDrafts, dnsRefusedOf, dnsRulesOf, NO_DNS_REFUSED, type DnsRefused, type DnsRuleDraft } from '@/contours/traffic/lib/dnsRules';
+import { presetRefusalWords } from '@/contours/traffic/lib/presetRefusal';
+import { routingPresetRefusal } from '@/lib/domain/routePolicies';
 import { LoadFailedLine } from '@/ui/LoadFailed';
 import { loadFailure } from '@/lib/ui/loadView';
 import { getSettings, updateSettings } from '@/lib/domain/settings';
@@ -19,9 +25,10 @@ export function OwnRules() {
   const qc = useQueryClient();
   const settingsQuery = useQuery({ queryKey: ['settings', 'all'], queryFn: getSettings });
 
-  const [draft, setDraft] = useState<{ direct: string; proxy: string; block: string; rules: string } | null>(
+  const [draft, setDraft] = useState<{ direct: string; proxy: string; block: string; rules: string; dns: DnsRuleDraft[] } | null>(
     null,
   );
+  const [dnsRefused, setDnsRefused] = useState<DnsRefused>(NO_DNS_REFUSED);
   const [loaded, setLoaded] = useState(false);
   if (!loaded && settingsQuery.data) {
     setLoaded(true);
@@ -33,6 +40,7 @@ export function OwnRules() {
       rules: settingsQuery.data.subscriptionCustomRoutingRules
         ? JSON.stringify(settingsQuery.data.subscriptionCustomRoutingRules, null, 2)
         : '',
+      dns: dnsDrafts(settingsQuery.data.subscriptionDnsRules ?? []),
     });
   }
 
@@ -45,9 +53,13 @@ export function OwnRules() {
         rules: settingsQuery.data.subscriptionCustomRoutingRules
           ? JSON.stringify(settingsQuery.data.subscriptionCustomRoutingRules, null, 2)
           : '',
+        dns: dnsDrafts(settingsQuery.data.subscriptionDnsRules ?? []),
       }
     : null;
-  const dirty = Boolean(draft && saved && JSON.stringify(draft) !== JSON.stringify(saved));
+  // Compared as what would be sent, so a blank row added and left alone is not a change.
+  const sent = (d: { direct: string; proxy: string; block: string; rules: string; dns: DnsRuleDraft[] }) => JSON.stringify({ ...d, dns: dnsRulesOf(d.dns) });
+  const dirty = Boolean(draft && saved && sent(draft) !== sent(saved));
+  const dnsBlocked = draft ? checkDnsDrafts(draft.dns).blocked : false;
 
   const saveMutation = useMutation({
     mutationFn: () => {
@@ -61,6 +73,11 @@ export function OwnRules() {
         // byte-identical to "no lists defined".
         subscriptionCustomDomainLists: empty ? null : { direct, proxy, block },
         subscriptionCustomRoutingRules: rulesState.rules,
+        // Only when changed: a panel that never had DNS rules sends what it always sent.
+        // No rows clears the setting, like the lists above.
+        ...(saved && JSON.stringify(dnsRulesOf(draft.dns)) !== JSON.stringify(dnsRulesOf(saved.dns))
+          ? { subscriptionDnsRules: dnsRulesOf(draft.dns).length === 0 ? null : dnsRulesOf(draft.dns) }
+          : {}),
       });
     },
     onSuccess: async () => {
@@ -68,8 +85,16 @@ export function OwnRules() {
       setLoaded(false);
       notifications.show({ color: 'green', message: t('routes.ownSaved') });
     },
-    onError: (err) =>
-      notifications.show({ color: 'red', title: t('common.saveError'), message: apiErrorMessage(err) }),
+    onError: (err) => {
+      // A refused DNS rule is said in words and marked in its row.
+      const refusal = routingPresetRefusal(err);
+      setDnsRefused(dnsRefusedOf(refusal));
+      notifications.show({
+        color: 'red',
+        title: t('common.saveError'),
+        message: refusal ? presetRefusalWords(refusal, t) : apiErrorMessage(err),
+      });
+    },
   });
 
   // A-228: settings that did not arrive are said with a retry; the section
@@ -82,6 +107,7 @@ export function OwnRules() {
 
   return (
     <Stack
+      id={OWN_RULES_ANCHOR}
       gap={16}
       style={{ padding: 20, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}
     >
@@ -97,7 +123,7 @@ export function OwnRules() {
           {rulesState.error ? t(rulesState.error) : dirty ? t('routes.unsaved') : t('routes.saved')}
         </Verdict>
         <SaveButton
-          disabled={!dirty || rulesState.error !== null || saveMutation.isPending}
+          disabled={!dirty || rulesState.error !== null || dnsBlocked || saveMutation.isPending}
           onClick={() => saveMutation.mutate()}
         >
           {t('common.save')}
@@ -130,6 +156,15 @@ export function OwnRules() {
           onChange={(v) => patch({ block: v })}
         />
       </Box>
+
+      <Stack gap={6}>
+        <FieldLabel>{t('routes.panelDnsTitle')}</FieldLabel>
+        <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: FAINT }}>{t('routes.panelDnsHint')}</Text>
+        <Box style={{ marginInline: -20 }}>
+          <DnsRulesEditor rows={draft.dns} onChange={(dns) => patch({ dns })} refused={dnsRefused} onTouch={() => setDnsRefused(NO_DNS_REFUSED)} />
+          <DnsFormatsTable />
+        </Box>
+      </Stack>
 
       <Stack gap={6}>
         <Box style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

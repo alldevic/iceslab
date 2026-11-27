@@ -72,3 +72,23 @@ describe('presetRefusalWords', () => {
     expect(presetRefusalWords({ code: 'ROUTING_PRESET_BUILT_IN' }, t)).toBe('routes.presetBuiltInRefused');
   });
 });
+
+describe('the words of the DNS refusals (stage 19)', () => {
+  it('lists the refused entries', () => {
+    const entries = ['keyword:ads', 'foo bar'];
+    expect(presetRefusalWords({ code: 'ROUTING_PRESET_DNS_MATCH_INVALID', entries }, t)).toBe(
+      'routes.presetDnsMatchInvalid {"entries":"keyword:ads, foo bar"}',
+    );
+    expect(presetRefusalWords({ code: 'ROUTING_PRESET_DNS_SERVER_INVALID', entries: ['dns.example'] }, t)).toBe(
+      'routes.presetDnsServerInvalid {"entries":"dns.example"}',
+    );
+  });
+
+  it('are read under 400 only', () => {
+    expect(routingPresetRefusal(res(400, { error: 'ROUTING_PRESET_DNS_SERVER_INVALID', entries: ['x', 1] }))).toEqual({
+      code: 'ROUTING_PRESET_DNS_SERVER_INVALID',
+      entries: ['x'],
+    });
+    expect(routingPresetRefusal(res(409, { error: 'ROUTING_PRESET_DNS_SERVER_INVALID', entries: ['x'] }))).toBeNull();
+  });
+});

@@ -111,6 +111,7 @@ jobs:
               # users and squads, the SRR linear-regex check, the shared uuid and
               # header-url atoms. The test asserts this list is complete.
               - 'apps/panel-backend/src/modules/routing-presets/routing-presets.choice.ts'
+              - 'apps/panel-backend/src/modules/routing-presets/routing-presets.dns.ts'
               - 'apps/panel-backend/src/modules/srr/linear-regex.ts'
               - 'apps/panel-backend/src/modules/cascades/policy-entries.ts'
               - 'apps/panel-backend/src/modules/geo-sets/geo-names.ts'

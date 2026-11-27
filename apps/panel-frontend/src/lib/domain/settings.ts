@@ -1,4 +1,4 @@
-import type { DefaultSubscriptionFormat, RoutingPresetId } from '@iceslab/shared';
+import type { DefaultSubscriptionFormat, DnsRule, RoutingPresetId } from '@iceslab/shared';
 import { api } from '@/lib/net/client';
 
 export interface ApiToken {
@@ -64,6 +64,8 @@ export interface AdminSettings extends PublicSettings {
     proxy?: string[];
     block?: string[];
   } | null;
+  /** Stage 19: panel-wide "names -> DNS server" rules, added to every preset. */
+  subscriptionDnsRules?: DnsRule[] | null;
 
   // ───── Выдача ─────
 
@@ -167,6 +169,7 @@ export interface UpdateSettingsInput {
     proxy?: string[];
     block?: string[];
   } | null;
+  subscriptionDnsRules?: DnsRule[] | null;
   /** Subscription landing-page default language, mirrored from the panel's UI
    *  language (set by the LanguageSwitcher). The /sub page has its own RU/EN
    *  selector that overrides this per visitor. */

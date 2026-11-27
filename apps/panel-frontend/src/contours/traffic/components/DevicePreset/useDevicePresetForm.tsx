@@ -9,6 +9,7 @@ import {
   routingPresetRefusal,
   updateRoutingPreset,
 } from '@/lib/domain/routePolicies';
+import { checkDnsDrafts, dnsDrafts, dnsRefusedOf, dnsRulesOf, NO_DNS_REFUSED, type DnsRefused, type DnsRuleDraft } from '@/contours/traffic/lib/dnsRules';
 import { findShadows, seedRules, strip } from '@/contours/traffic/lib/devicePresetRules';
 import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
@@ -40,6 +41,10 @@ export function useDevicePresetForm(preset: RoutingPreset, onSaved?: (id?: strin
   // a taken name at the name field (A-229).
   const [unknownEntries, setUnknownEntries] = useState<string[]>([]);
   const [nameError, setNameError] = useState<string | null>(null);
+  // The DNS rules as typed, and what the last save was refused for in them.
+  const initialDns = useMemo(() => dnsDrafts(preset.dnsRules), [preset]);
+  const [dnsRows, setDnsRows] = useState<DnsRuleDraft[]>(initialDns);
+  const [dnsRefused, setDnsRefused] = useState<DnsRefused>(NO_DNS_REFUSED);
 
   if (loadedFor !== preset.id) {
     setLoadedFor(preset.id);
@@ -48,13 +53,18 @@ export function useDevicePresetForm(preset: RoutingPreset, onSaved?: (id?: strin
     setDragging(null);
     setUnknownEntries([]);
     setNameError(null);
+    setDnsRows(dnsDrafts(preset.dnsRules));
+    setDnsRefused(NO_DNS_REFUSED);
   }
 
   const locked = preset.builtIn;
-  const write = locked ? null : presetWrite(preset, name, strip(rules), strip(initial));
+  const write = locked ? null : presetWrite(preset, name, strip(rules), strip(initial), dnsRulesOf(dnsRows), dnsRulesOf(initialDns));
   // A preset that has never been saved is dirty by definition, even straight
   // out of an imported file where nothing has been typed yet.
   const dirty = write !== null;
+  // A wrong name or server is marked in its row before anything is sent, and
+  // the save waits for it.
+  const dnsBlocked = useMemo(() => checkDnsDrafts(dnsRows).blocked, [dnsRows]);
   const shadows = useMemo(() => findShadows(rules), [rules]);
 
   const saveMutation = useMutation({
@@ -69,6 +79,7 @@ export function useDevicePresetForm(preset: RoutingPreset, onSaved?: (id?: strin
     },
     onError: (err) => {
       const r = routingPresetRefusal(err);
+      setDnsRefused(dnsRefusedOf(r));
       if (r?.code === 'ROUTING_PRESET_ENTRY_UNKNOWN' || r?.code === 'ROUTING_PRESET_GEO_TAG_UNKNOWN') setUnknownEntries(r.entries);
       if (r?.code === 'NAME_TAKEN') {
         // At the field, and nowhere else: one refusal, one place.
@@ -157,6 +168,11 @@ export function useDevicePresetForm(preset: RoutingPreset, onSaved?: (id?: strin
     setName: rename,
     nameError,
     unknownEntries,
+    dnsRows,
+    setDnsRows,
+    dnsRefused,
+    clearDnsRefused: () => setDnsRefused(NO_DNS_REFUSED),
+    dnsBlocked,
     rules,
     setRules,
     loadedFor,

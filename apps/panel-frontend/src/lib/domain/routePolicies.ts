@@ -1,3 +1,4 @@
+import type { DnsRule } from '@iceslab/shared';
 import { api } from '@/lib/net/client';
 import { listFieldKnown } from '@/lib/domain/nodeFields';
 
@@ -170,11 +171,14 @@ export interface RoutingPreset {
   name: string;
   builtIn: boolean;
   rules: RouteRule[];
+  /** Stage 19: "names -> DNS server" rules; always empty for a built-in. */
+  dnsRules: DnsRule[];
 }
 
 export interface RoutingPresetInput {
   name: string;
   rules: Omit<RouteRule, 'id'>[];
+  dnsRules: DnsRule[];
 }
 
 export async function listRoutingPresets(): Promise<{ presets: RoutingPreset[] }> {
@@ -205,13 +209,22 @@ export async function deleteRoutingPreset(id: string): Promise<void> {
  * entries and holders that are not strings or named rows are skipped.
  *
  *   400 ROUTING_PRESET_ENTRY_UNKNOWN / ROUTING_PRESET_GEO_TAG_UNKNOWN {entries}
+ *   400 ROUTING_PRESET_DNS_MATCH_INVALID / ROUTING_PRESET_DNS_SERVER_INVALID {entries}
+ *       (stage 19; PUT /api/settings gives the same four codes for subscriptionDnsRules)
  *   403 ROUTING_PRESET_BUILT_IN
  *   404 NOT_FOUND (the preset went away)
  *   409 NAME_TAKEN {field: 'name'}
  *   409 ROUTING_PRESET_IN_USE {users, squads, userCount, squadCount}
  */
 export type RoutingPresetRefusal =
-  | { code: 'ROUTING_PRESET_ENTRY_UNKNOWN' | 'ROUTING_PRESET_GEO_TAG_UNKNOWN'; entries: string[] }
+  | {
+      code:
+        | 'ROUTING_PRESET_ENTRY_UNKNOWN'
+        | 'ROUTING_PRESET_GEO_TAG_UNKNOWN'
+        | 'ROUTING_PRESET_DNS_MATCH_INVALID'
+        | 'ROUTING_PRESET_DNS_SERVER_INVALID';
+      entries: string[];
+    }
   | { code: 'ROUTING_PRESET_BUILT_IN' | 'NOT_FOUND' | 'NAME_TAKEN' }
   | {
       code: 'ROUTING_PRESET_IN_USE';
@@ -224,6 +237,8 @@ export type RoutingPresetRefusal =
 const PRESET_STATUS: Record<string, number> = {
   ROUTING_PRESET_ENTRY_UNKNOWN: 400,
   ROUTING_PRESET_GEO_TAG_UNKNOWN: 400,
+  ROUTING_PRESET_DNS_MATCH_INVALID: 400,
+  ROUTING_PRESET_DNS_SERVER_INVALID: 400,
   ROUTING_PRESET_BUILT_IN: 403,
   NOT_FOUND: 404,
   NAME_TAKEN: 409,
@@ -247,7 +262,12 @@ export function routingPresetRefusal(err: unknown): RoutingPresetRefusal | null 
           return typeof n === 'string' ? [n] : [];
         })
       : [];
-  if (code === 'ROUTING_PRESET_ENTRY_UNKNOWN' || code === 'ROUTING_PRESET_GEO_TAG_UNKNOWN') {
+  if (
+    code === 'ROUTING_PRESET_ENTRY_UNKNOWN' ||
+    code === 'ROUTING_PRESET_GEO_TAG_UNKNOWN' ||
+    code === 'ROUTING_PRESET_DNS_MATCH_INVALID' ||
+    code === 'ROUTING_PRESET_DNS_SERVER_INVALID'
+  ) {
     return { code, entries: strings(d.entries) };
   }
   if (code === 'ROUTING_PRESET_IN_USE') {
