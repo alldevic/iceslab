@@ -9,7 +9,7 @@ import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../routing-presets/r
 import { buildXrayJson, buildXrayJsonArray } from './formats/xrayjson.js';
 import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson } from './formats/singbox.js';
-import { effectiveDnsRules, singboxDnsRules, xrayDnsPinRules, xrayDnsRules } from './subscription.device-rules.js';
+import { effectiveDnsRules, mihomoNameserverPolicy, mihomoPolicyName, mihomoPolicyServer, singboxDnsRules, xrayDnsPinRules, xrayDnsRules } from './subscription.device-rules.js';
 
 /**
  * A-229 part 4: device routing presets rendered from one structure.
@@ -455,5 +455,57 @@ describe.skipIf(!SINGBOX_BIN)('sing-box check accepts DNS rules of every kind (m
       expect(JSON.parse(config).dns.rules.length).toBeGreaterThan(0);
       expect(run(SINGBOX_BIN, (f) => ['check', '-c', f], config)).toBe('');
     }
+  });
+});
+
+describe('mihomo nameserver-policy (stage 19.5)', () => {
+  const r = (server: string, ...match: string[]) => ({ match, server, note: '' });
+
+  it('names: geosite stays, domain and a bare name are the name and its subdomains, full is exact', () => {
+    expect(mihomoPolicyName('geosite:category-ads-all')).toBe('geosite:category-ads-all');
+    expect(mihomoPolicyName('domain:corp.example')).toBe('+.corp.example');
+    expect(mihomoPolicyName('corp.example')).toBe('+.corp.example');
+    expect(mihomoPolicyName('full:host.corp.example')).toBe('host.corp.example');
+  });
+
+  it('names a policy key cannot carry are null', () => {
+    for (const m of ['keyword:ads', 'regexp:^a', 'geosite:', 'full:', 'domain:', '']) expect(mihomoPolicyName(m), m).toBeNull();
+  });
+
+  it('servers: IP bare, tcp, tls, https; a default port is left out, another stays', () => {
+    expect(mihomoPolicyServer('10.0.0.1', null)).toBe('10.0.0.1');
+    expect(mihomoPolicyServer('tcp://10.0.0.1', null)).toBe('tcp://10.0.0.1');
+    expect(mihomoPolicyServer('tcp://10.0.0.1:5353', null)).toBe('tcp://10.0.0.1:5353');
+    expect(mihomoPolicyServer('tls://dns.example:853', null)).toBe('tls://dns.example');
+    expect(mihomoPolicyServer('tls://dns.example:8853', null)).toBe('tls://dns.example:8853');
+    expect(mihomoPolicyServer('https://dns.example', null)).toBe('https://dns.example/dns-query');
+    expect(mihomoPolicyServer('https://10.0.0.1:8443/q', null)).toBe('https://10.0.0.1:8443/q');
+  });
+
+  it('an IPv6 server is bracketed', () => {
+    expect(mihomoPolicyServer('2001:db8::1', 'Auto')).toBe('[2001:db8::1]#Auto');
+    expect(mihomoPolicyServer('tcp://[2001:db8::1]:5353', 'Auto')).toBe('tcp://[2001:db8::1]:5353#Auto');
+  });
+
+  it('a group of ASCII letters, digits, - and _ is the suffix; a space or an emoji or a non-ASCII name leaves it off', () => {
+    expect(mihomoPolicyServer('10.0.0.1', 'Auto')).toBe('10.0.0.1#Auto');
+    expect(mihomoPolicyServer('10.0.0.1', 'g_1-b')).toBe('10.0.0.1#g_1-b');
+    for (const g of ['my group', '🚀 Proxy', 'Прокси', 'a#b', '']) expect(mihomoPolicyServer('10.0.0.1', g), g).toBe('10.0.0.1');
+  });
+
+  it('a string that is no server is null', () => {
+    expect(mihomoPolicyServer('udp://10.0.0.1', 'Auto')).toBeNull();
+    expect(mihomoPolicyServer('dns.example', 'Auto')).toBeNull();
+  });
+
+  it('entries in rule order, a name met again keeps the first server, no group no entries', () => {
+    const rules = [r('tcp://10.0.0.1', 'domain:a.example', 'full:b.example'), r('10.0.0.2', 'a.example', 'geosite:x')];
+    expect(mihomoNameserverPolicy(rules, 'Auto')).toEqual([
+      ['+.a.example', 'tcp://10.0.0.1#Auto'],
+      ['b.example', 'tcp://10.0.0.1#Auto'],
+      ['geosite:x', '10.0.0.2#Auto'],
+    ]);
+    expect(mihomoNameserverPolicy(rules, null)).toEqual([]);
+    expect(mihomoNameserverPolicy([], 'Auto')).toEqual([]);
   });
 });

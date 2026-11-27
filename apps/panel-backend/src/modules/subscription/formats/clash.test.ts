@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
+import type { DnsRule } from '@iceslab/shared';
 import { readFrame } from '../subscription.frames.js';
 import { buildClashYaml } from './clash.js';
 import type { SubscriptionEndpoint } from '../subscription.formats.js';
@@ -657,6 +659,104 @@ describe('buildClashYaml', () => {
       expect(out).toContain('https://own.example/geosite.dat');
       expect(out).not.toContain('panel.example.com');
     });
+  });
+});
+
+// Stage 19.5: the DNS rules in nameserver-policy, through the target group.
+describe('buildClashYaml DNS rules (stage 19.5)', () => {
+  const rule = (server: string, ...match: string[]): DnsRule => ({ match, server, note: '' });
+  const RULES = [rule('tcp://10.0.0.1', 'domain:corp.example', 'full:one.example', 'geosite:category-ads-all'), rule('10.0.0.2', 'bare.example')];
+  type Dns = { dns: { 'nameserver-policy'?: Record<string, string>; nameserver: string[]; 'enhanced-mode': string } };
+  const policy = (yaml: string) => (parseYaml(yaml) as Dns).dns['nameserver-policy'];
+  const PRESETS = ['proxy-all', 'ru-split', 'cn-split'] as const;
+
+  it.each(PRESETS)('%s: one entry per name, server by kind, the target group as suffix', (preset) => {
+    const out = buildClashYaml([xrayEp], { routingPreset: preset, dnsRules: RULES });
+    expect(policy(out)).toMatchObject({
+      '+.corp.example': 'tcp://10.0.0.1#Auto',
+      'one.example': 'tcp://10.0.0.1#Auto',
+      'geosite:category-ads-all': 'tcp://10.0.0.1#Auto',
+      '+.bare.example': '10.0.0.2#Auto',
+    });
+  });
+
+  it('an own preset gets the section, which it had none of', () => {
+    const own = [{ match: ['geosite:google'], action: 'direct', note: '' }] as const;
+    expect(policy(buildClashYaml([xrayEp], { ownPresetRules: own }))).toBeUndefined();
+    expect(policy(buildClashYaml([xrayEp], { ownPresetRules: own, dnsRules: RULES }))).toMatchObject({ '+.corp.example': 'tcp://10.0.0.1#Auto' });
+  });
+
+  it('proxy-all and own: the block is the old lines plus the section, nothing moved', () => {
+    const plain = buildClashYaml([xrayEp], { routingPreset: 'proxy-all' });
+    const out = buildClashYaml([xrayEp], { routingPreset: 'proxy-all', dnsRules: [rule('10.0.0.2', 'full:a.example')] });
+    expect(out).toBe(plain.replace('    - https://1.0.0.1/dns-query\n', '    - https://1.0.0.1/dns-query\n  nameserver-policy:\n    "a.example": "10.0.0.2#Auto"\n'));
+  });
+
+  it('ru-split: the operator entries go with the built-in ones; the same name replaces the built-in', () => {
+    const out = buildClashYaml([xrayEp], {
+      routingPreset: 'ru-split',
+      dnsRules: [rule('tcp://10.0.0.1', 'geosite:category-ru', 'domain:corp.example')],
+    });
+    const pol = policy(out)!;
+    expect(pol).toEqual({
+      'geosite:category-ru': 'tcp://10.0.0.1#Auto',
+      '+.corp.example': 'tcp://10.0.0.1#Auto',
+      'geosite:category-gov-ru': '77.88.8.8',
+    });
+    expect(out.match(/geosite:category-ru"/g)).toHaveLength(1);
+    // Theirs first, the built-in left after.
+    expect(Object.keys(pol)).toEqual(['geosite:category-ru', '+.corp.example', 'geosite:category-gov-ru']);
+  });
+
+  it('cn-split: an entry for another name leaves the built-in one', () => {
+    expect(policy(buildClashYaml([xrayEp], { routingPreset: 'cn-split', dnsRules: [rule('10.0.0.2', 'full:a.example')] }))).toEqual({
+      'a.example': '10.0.0.2#Auto',
+      'geosite:cn': '223.5.5.5',
+    });
+  });
+
+  it('the first rule wins for a name met twice', () => {
+    const pol = policy(buildClashYaml([xrayEp], { dnsRules: [rule('10.0.0.1', 'domain:x.example'), rule('10.0.0.2', 'x.example')] }));
+    expect(pol).toEqual({ '+.x.example': '10.0.0.1#Auto' });
+  });
+
+  it('a frame with its own dns is handed out without the entries', () => {
+    const frame = readFrame('mihomo', ['iceslab:', '  routing: preset', 'dns:', '  enable: true', '  nameserver:', '    - 9.9.9.9', 'proxies: []', 'proxy-groups:', '  - name: G', '    type: select', 'rules:', '  - MATCH,DIRECT', ''].join('\n'));
+    for (const preset of PRESETS) {
+      const out = buildClashYaml([xrayEp], { frame, routingPreset: preset, dnsRules: RULES });
+      expect(out).toBe(buildClashYaml([xrayEp], { frame, routingPreset: preset }));
+      expect(out).not.toContain('nameserver-policy');
+    }
+  });
+
+  it('a frame with no group that holds a node gets no entries', () => {
+    const frame = readFrame('mihomo', ['iceslab:', '  routing: preset', 'proxies: []', 'proxy-groups:', '  - name: Empty', '    type: select', '    iceslab:', '      include-proxies: false', 'rules:', '  - MATCH,DIRECT', ''].join('\n'));
+    for (const preset of PRESETS) {
+      expect(buildClashYaml([xrayEp], { frame, routingPreset: preset, dnsRules: RULES })).toBe(buildClashYaml([xrayEp], { frame, routingPreset: preset }));
+    }
+    expect(buildClashYaml([], { dnsRules: RULES })).toBe(buildClashYaml([]));
+  });
+
+  it('the suffix names the first group with a node, and is left off a name that is not plain ASCII', () => {
+    const framed = (name: string) =>
+      readFrame('mihomo', ['iceslab:', '  routing: preset', 'proxies: []', 'proxy-groups:', `  - name: ${JSON.stringify(name)}`, '    type: select', 'rules:', '  - MATCH,DIRECT', ''].join('\n'));
+    const one = [rule('tcp://10.0.0.1', 'full:a.example')];
+    expect(policy(buildClashYaml([xrayEp], { frame: framed('my_group-2'), dnsRules: one }))).toEqual({ 'a.example': 'tcp://10.0.0.1#my_group-2' });
+    for (const name of ['Моя группа', '🚀 Proxy', 'with space']) {
+      expect(policy(buildClashYaml([xrayEp], { frame: framed(name), dnsRules: one }))).toEqual({ 'a.example': 'tcp://10.0.0.1' });
+    }
+  });
+
+  it('no rules: the output is what it was', () => {
+    for (const preset of PRESETS) {
+      expect(buildClashYaml([xrayEp], { routingPreset: preset, dnsRules: [] })).toBe(buildClashYaml([xrayEp], { routingPreset: preset }));
+    }
+  });
+
+  it('the output with rules is YAML and keeps fake-ip', () => {
+    const doc = parseYaml(buildClashYaml([xrayEp, hysteriaEp], { routingPreset: 'ru-split', dnsRules: RULES })) as Dns;
+    expect(doc.dns['enhanced-mode']).toBe('fake-ip');
+    expect(doc.dns.nameserver).toEqual(['https://1.1.1.1/dns-query', 'https://1.0.0.1/dns-query']);
   });
 });
 

@@ -392,3 +392,68 @@ export function xrayDnsPinRules(pins: XrayDnsRules['pins'], target: Exclude<Xray
     ...(pins.hosts.length ? [{ type: 'field', domain: pins.hosts.map((h) => `full:${h}`), ...target }] : []),
   ];
 }
+
+/**
+ * Stage 19.5: a DNS rule's name as mihomo's `nameserver-policy` key. geosite:TAG
+ * stays; `domain:NAME` and a bare name are the name and its subdomains (`+.NAME`);
+ * `full:NAME` is the exact name. null for what a policy key cannot carry
+ * (the API refuses those, isDnsMatchName).
+ */
+export function mihomoPolicyName(m: string): string | null {
+  if (m.startsWith('geosite:')) return m.length > 'geosite:'.length ? m : null;
+  if (m.startsWith('full:')) return m.length > 'full:'.length ? m.slice('full:'.length) : null;
+  const name = m.startsWith('domain:') ? m.slice('domain:'.length) : m;
+  if (name === '' || /^[a-z]+:/.test(name)) return null;
+  return `+.${name}`;
+}
+
+/** The group suffix is written only for names of ASCII letters, digits, `-`
+ *  and `_` (spec default for 19.5: how mihomo takes a space or an emoji after
+ *  `#` is not measured, m19-01, MANUAL-CHECKS 19.1). */
+const PLAIN_GROUP = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * A DNS rule's server as mihomo spells it: an IP bare, `tcp://`, `tls://`,
+ * `https://` (the default port left out), then `#GROUP` when the group name is
+ * plain, so the query goes out through that group. An IPv6 is bracketed. null
+ * when `server` is not one of the four kinds.
+ */
+export function mihomoPolicyServer(server: string, group: string | null): string | null {
+  const s = parseDnsServer(server);
+  if (!s) return null;
+  const host = s.host.includes(':') ? `[${s.host}]` : s.host;
+  const port = (def: number) => (s.port === def ? '' : `:${s.port}`);
+  const base =
+    s.kind === 'udp'
+      ? host
+      : s.kind === 'tcp'
+        ? `tcp://${host}${port(53)}`
+        : s.kind === 'tls'
+          ? `tls://${host}${port(853)}`
+          : `https://${host}${port(443)}${s.path}`;
+  return group !== null && PLAIN_GROUP.test(group) ? `${base}#${group}` : base;
+}
+
+/**
+ * Stage 19.5: the rules as `nameserver-policy` entries, [key, value] in rule
+ * order. A name met twice keeps its first server (the first rule wins, as in
+ * effectiveDnsRules). No group means no entries: without a group the node
+ * names do not stand in the file, and a rule that cannot name the way out is
+ * not written.
+ */
+export function mihomoNameserverPolicy(
+  rules: readonly DnsRule[],
+  group: string | null,
+): [string, string][] {
+  if (group === null) return [];
+  const out = new Map<string, string>();
+  for (const r of rules) {
+    const value = mihomoPolicyServer(r.server, group);
+    if (value === null) continue;
+    for (const m of r.match) {
+      const key = mihomoPolicyName(m);
+      if (key !== null && !out.has(key)) out.set(key, value);
+    }
+  }
+  return [...out];
+}

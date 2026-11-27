@@ -86,6 +86,24 @@ describe('the legacy Clash dialect', () => {
   });
 });
 
+describe('the DNS rules (stage 19.5)', () => {
+  const dnsRules = [{ match: ['domain:corp.example', 'geosite:category-ads-all'], server: 'tcp://10.0.0.1', note: '' }];
+
+  it('mihomo writes them, Stash and legacy Clash hand out what they did without', () => {
+    for (const preset of ['proxy-all', 'ru-split', 'cn-split'] as const) {
+      for (const dialect of ['stash', 'clash-legacy'] as const) {
+        const e = endpointsForFormat(dialect, eps);
+        expect(buildClashYaml(e, { dialect, routingPreset: preset, dnsRules }), `${dialect}/${preset}`).toBe(
+          buildClashYaml(e, { dialect, routingPreset: preset }),
+        );
+        expect(buildClashYaml(e, { dialect, routingPreset: preset, dnsRules })).not.toContain('corp.example');
+      }
+      const m = buildClashYaml(eps, { dialect: 'mihomo', routingPreset: preset, dnsRules });
+      expect(m).toContain('"+.corp.example": "tcp://10.0.0.1#Auto"');
+    }
+  });
+});
+
 describe('mihomo and its alias', () => {
   it('clash is mihomo byte for byte', () => {
     expect(buildClashYaml(eps, { dialect: 'mihomo' })).toBe(buildClashYaml(eps));

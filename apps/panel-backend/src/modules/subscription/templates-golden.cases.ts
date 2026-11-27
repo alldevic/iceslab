@@ -112,6 +112,11 @@ const SINGBOX_DNS_RULES: DnsRule[] = [
 ];
 
 const CDL = { direct: ['domain:direct.example', 'plain.example'], proxy: ['proxied.example'], block: ['ads.example'] };
+// Stage 19.5: the DNS rules the mihomo cases carry; Stash and legacy Clash get none of it.
+const MIHOMO_DNS_RULES: DnsRule[] = [
+  { match: ['domain:corp.example', 'full:host.corp.example', 'geosite:category-ru'], server: 'tcp://10.0.0.1', note: '' },
+  { match: ['geosite:category-ads-all'], server: 'https://dns.example/dns-query', note: '' },
+];
 const CUSTOM_RULES = [{ type: 'field', domain: ['geosite:netflix'], outboundTag: 'direct' }];
 
 /** Every case: a name and the output of today's builder for it. */
@@ -122,6 +127,7 @@ export function goldenCases(): Record<string, () => string> {
       const k = (fmt: string, extra = '') => `${fmt}/${set}/${p.key}${extra}`;
       out[k('clash')] = () => buildClashYaml(eps, { ...p.opts });
       out[k('clash', '/cdl')] = () => buildClashYaml(eps, { ...p.opts, customDomainLists: CDL });
+      out[k('clash', '/dns')] = () => buildClashYaml(eps, { ...p.opts, dnsRules: MIHOMO_DNS_RULES });
       out[k('singbox')] = () => buildSingboxJson(eps, { ...p.opts });
       out[k('singbox', '/url-test')] = () => buildSingboxJson(eps, { ...p.opts, bundle: 'url-test' });
       out[k('singbox', '/dns')] = () => buildSingboxJson(eps, { ...p.opts, dnsRules: SINGBOX_DNS_RULES });

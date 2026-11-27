@@ -2,7 +2,7 @@ import { transportServed, type DnsRule, type RoutingPresetId } from '@iceslab/sh
 import { emitsVisionFlow, isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 import { makeTagger } from '../endpoint-identity.js';
 import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
-import { clashCanUsePanelGeo, clashDeviceRuleLines, clashDomainRuleBody, clashNeedsGeo } from '../subscription.device-rules.js';
+import { clashCanUsePanelGeo, clashDeviceRuleLines, clashDomainRuleBody, clashNeedsGeo, mihomoNameserverPolicy } from '../subscription.device-rules.js';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { asArray, asObject, defaultFrame, openFrame, type Frame } from '../subscription.frames.js';
 import type { SelfHostedGeo } from '../../geo-sets/geo-self-host.js';
@@ -66,8 +66,9 @@ export interface ClashBuildOpts {
   routingPreset?: RoutingPresetId;
   /** A-229: an own preset's rules, in place of the built-in preset's. */
   ownPresetRules?: readonly DeviceRouteRule[];
-  /** Stage 19.2: the DNS rules in force (the preset's own, then the panel-wide);
-   *  delivered, not read yet: the formats start writing them in 19.4-19.6. */
+  /** Stage 19.2: the DNS rules in force (the preset's own, then the panel-wide).
+   *  Stage 19.5: the mihomo dialect writes them into `nameserver-policy`; Stash
+   *  and legacy Clash do not (the format table of the preset screen says so). */
   dnsRules?: readonly DnsRule[];
   /** A-236: the operator template to fill; absent = the mihomo Default. */
   frame?: Frame;
@@ -545,6 +546,7 @@ export function buildClashYaml(
     proxyNames,
     deviceRules,
     dnsLines,
+    dnsRules: dialect === 'mihomo' ? buildOpts.dnsRules : undefined,
     customDomainLists: buildOpts.customDomainLists,
     geo: buildOpts.geo,
   });
@@ -587,6 +589,8 @@ export function renderClashFrame(
     proxyNames: string[];
     deviceRules: readonly DeviceRouteRule[];
     dnsLines: readonly string[];
+    /** Stage 19.5: written into the DNS block's `nameserver-policy`, through the target group. */
+    dnsRules?: readonly DnsRule[];
     customDomainLists?: { direct: string[]; proxy: string[]; block: string[] };
     geo?: SelfHostedGeo | null;
   },
@@ -634,7 +638,9 @@ export function renderClashFrame(
       if (clashNeedsGeo(p.deviceRules) && cfg['geox-url'] === undefined) {
         lines.push(...(clashCanUsePanelGeo(p.deviceRules, p.geo) ? panelGeoLines(p.geo.baseUrl) : SPLIT_GEO_LINES));
       }
-      if (cfg.dns === undefined) lines.push(...p.dnsLines);
+      if (cfg.dns === undefined) {
+        lines.push(...withPolicy(p.dnsLines, mihomoNameserverPolicy(p.dnsRules ?? [], target ?? null)));
+      }
     } else if (key === 'proxies') {
       lines.push('proxies:');
       const own = asArray(cfg.proxies);
@@ -690,6 +696,31 @@ export function renderClashFrame(
     }
   }
   return lines.join('\n') + '\n';
+}
+
+/**
+ * Stage 19.5: the operator's `nameserver-policy` entries into a DNS block. They
+ * go first, so for a name both could match theirs is met first, and an entry of
+ * the block with the same name is dropped. A block with no `nameserver-policy`
+ * gets one after its last key. No entries: the block as it is.
+ */
+function withPolicy(block: readonly string[], entries: readonly [string, string][]): readonly string[] {
+  if (entries.length === 0) return block;
+  const own = entries.map(([k, v]) => `    ${JSON.stringify(k)}: ${JSON.stringify(v)}`);
+  const at = block.indexOf('  nameserver-policy:');
+  if (at < 0) {
+    // The blocks end with an empty line that separates them from what follows.
+    const end = block.length > 0 && block[block.length - 1] === '' ? block.length - 1 : block.length;
+    return [...block.slice(0, end), '  nameserver-policy:', ...own, ...block.slice(end)];
+  }
+  let end = at + 1;
+  while (end < block.length && block[end]!.startsWith('    ')) end++;
+  const names = new Set(entries.map(([k]) => k.toLowerCase()));
+  const kept = block.slice(at + 1, end).filter((l) => {
+    const m = /^ {4}"(.*)":/.exec(l);
+    return !(m && names.has(m[1]!.toLowerCase()));
+  });
+  return [...block.slice(0, at + 1), ...own, ...kept, ...block.slice(end)];
 }
 
 /** A rule whose target is a dropped group goes DIRECT. The target is the last
