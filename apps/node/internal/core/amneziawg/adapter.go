@@ -89,6 +89,8 @@ type Config struct {
 
 	// ip6 is the probe's cached answer, shared with the 3.1 instance.
 	ip6 *ipv6Probe
+	// tp6 is the same for the TPROXY probe of milestone 18.12.
+	tp6 *ipv6Probe
 }
 
 // Adapter implements core.CoreAdapter for AmneziaWG.
@@ -189,6 +191,9 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 	if cfg.ip6 == nil {
 		cfg.ip6 = &ipv6Probe{}
 	}
+	if cfg.tp6 == nil {
+		cfg.tp6 = &ipv6Probe{}
+	}
 	a := newOne(cfg, logger)
 	if !plain && cfg.Inbound.Interface != V3Interface {
 		v3 := cfg
@@ -202,6 +207,9 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 func newOne(cfg Config, logger *slog.Logger) *Adapter {
 	if cfg.ip6 == nil {
 		cfg.ip6 = &ipv6Probe{}
+	}
+	if cfg.tp6 == nil {
+		cfg.tp6 = &ipv6Probe{}
 	}
 	a := &Adapter{
 		cfg:       cfg,
@@ -1335,23 +1343,25 @@ func (a *Adapter) ApplyCascade(raw json.RawMessage) error {
 		var wire struct {
 			Port    int    `json:"port"`
 			Mark    uint32 `json:"mark"`
+			IPv6    bool   `json:"ipv6"`
 			TProxy3 *struct {
 				Port int    `json:"port"`
 				Mark uint32 `json:"mark"`
+				IPv6 bool   `json:"ipv6"`
 			} `json:"tproxy3"`
 		}
 		if err := json.Unmarshal(raw, &wire); err != nil {
 			return fmt.Errorf("amneziawg ApplyCascade: %w", err)
 		}
 		if wire.Port != 0 || wire.Mark != 0 {
-			t := ChainTProxy{Port: wire.Port, Mark: wire.Mark}
+			t := ChainTProxy{Port: wire.Port, Mark: wire.Mark, IPv6: wire.IPv6 && a.tproxy6Allowed()}
 			if err := t.validate(); err != nil {
 				return fmt.Errorf("amneziawg ApplyCascade: %w", err)
 			}
 			next1 = &t
 		}
 		if wire.TProxy3 != nil {
-			t := ChainTProxy{Port: wire.TProxy3.Port, Mark: wire.TProxy3.Mark}
+			t := ChainTProxy{Port: wire.TProxy3.Port, Mark: wire.TProxy3.Mark, IPv6: wire.TProxy3.IPv6 && a.tproxy6Allowed()}
 			if err := t.validate(); err != nil {
 				return fmt.Errorf("amneziawg ApplyCascade, 3.1 interface: %w", err)
 			}
@@ -1420,7 +1430,13 @@ func (a *Adapter) applyCascadeOne(next *ChainTProxy) error {
 	// run a PostDown whose first lines name rules that never came up, and
 	// awg-quick stops at the first failing hook, leaving the FORWARD and NAT
 	// rules behind to be doubled by the up.
-	if a.cfg.AwgQuickBin != "" && interfaceExists(inbound.Interface) {
+	//
+	// The exception is an interface whose own IPv6 lines change with the
+	// hand-off (milestone 18.12: a chain takes the default ip6tables rules and,
+	// without IPv6 in its hand-off, the IPv6 address away). Those are not in the
+	// hooks the swap runs, so a swap would leave the kernel holding what the
+	// file no longer says; that one goes through the bounce.
+	if a.cfg.AwgQuickBin != "" && interfaceExists(inbound.Interface) && !ipv6ShapeChanges(a.cfg.Inbound, prev, next) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := a.swapChainLive(ctx, inbound.Interface, prev, next); err != nil {
@@ -1442,6 +1458,18 @@ func (a *Adapter) applyCascadeOne(next *ChainTProxy) error {
 	a.logger.Info("amneziawg ApplyCascade: hand-off to the chain changed, bringing the interface up with it",
 		"interface", inbound.Interface, "chain", next != nil)
 	return a.restartInterfaceFrom(context.Background(), inbound, peers, prev)
+}
+
+// ipv6ShapeChanges: whether handing the interface from `prev` to `next` changes
+// the IPv6 it is rendered with, the address or the default rules (withDefaults).
+func ipv6ShapeChanges(inbound InboundConfig, prev, next *ChainTProxy) bool {
+	shape := func(ch *ChainTProxy) string {
+		in := inbound
+		in.Chain = ch
+		d := in.withDefaults()
+		return d.Address6 + "|" + strings.Join(d.PostUp, "\n") + "|" + strings.Join(d.PostDown, "\n")
+	}
+	return shape(prev) != shape(next)
 }
 
 // mustRender renders a snapshot ApplyCascade has already rendered once under

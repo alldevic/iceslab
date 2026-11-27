@@ -237,11 +237,12 @@ describe('the chain block against the agent that will decode it', () => {
     expect(jsonKeysOf('ChainUserCore')).toEqual(['engine', 'fragments', 'socks', 'tproxy', 'tproxy3', 'protocol']);
   });
 
-  it('carries the two tproxy keys on both sides', () => {
+  it('carries the tproxy keys on both sides', () => {
     // A port and ONE number for mark and table. A `table` key appearing here
     // is a second number to keep apart from the first, which is the decision
-    // of 23.09 undone.
-    expect(jsonKeysOf('ChainUserCoreTProxy')).toEqual(['port', 'mark']);
+    // of 23.09 undone. `ipv6` (18.12) is the optional flag to mirror the steering
+    // for IPv6; an agent that does not know it reads the other two as before.
+    expect(jsonKeysOf('ChainUserCoreTProxy')).toEqual(['port', 'mark', 'ipv6']);
   });
 
   it('carries the three hand-off keys on both sides', () => {
@@ -410,5 +411,10 @@ describe('the tunnel IPv6 fields against the agent', () => {
   // 18.11: the flag of a real prefix, and the fact that says the agent reads it.
   it('has the real-prefix fact on the core row', () => {
     expect(jsonKeysOf('CoreStatus')).toContain('awgNoNat6');
+  });
+
+  // 18.12: the fact that says the agent can steer a chain entry's IPv6.
+  it('has the TPROXY-for-IPv6 fact on the core row', () => {
+    expect(jsonKeysOf('CoreStatus')).toContain('awgTproxy6');
   });
 });

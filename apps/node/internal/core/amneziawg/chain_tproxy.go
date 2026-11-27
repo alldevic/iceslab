@@ -18,6 +18,11 @@ type ChainTProxy struct {
 	// panel mints it from the interface's listen port, so two awg interfaces
 	// on one node never share an ip rule.
 	Mark uint32
+	// IPv6 (milestone 18.12): the interface also carries IPv6 inside the
+	// tunnel, so the mirror of every line below goes through ip6tables and
+	// `ip -6`, steered to the chain's listener on ::1. False draws nothing of
+	// it, and the lines are the ones of before.
+	IPv6 bool
 }
 
 func (t ChainTProxy) validate() error {
@@ -45,7 +50,8 @@ func (t ChainTProxy) validate() error {
 // PostUp on its own and compares, which would prove nothing if this function
 // did the inverting.
 //
-// IPv4 only, as the AWG subnet is. Every line has to pass validatePostHook
+// IPv4 first, and with IPv6 set the same lines again for IPv6, each its own
+// mirror (milestone 18.12). Every line has to pass validatePostHook
 // (awg-quick evals them as root), so there are no pipes, no `||`, no `-C`
 // guards: idempotence comes from PostDown being the exact mirror, and from
 // sweepChainTProxy before a bring-up, not from checks inside the lines.
@@ -81,6 +87,29 @@ func chainTProxyHooks(t ChainTProxy) (up, down []string, err error) {
 		fmt.Sprintf("iptables -D INPUT -i %%i -m mark --mark %s -j ACCEPT", mark),
 		fmt.Sprintf("ip route del local 0.0.0.0/0 dev lo table %d", table),
 		fmt.Sprintf("ip rule del fwmark %s lookup %d", mark, table),
+	}
+	if t.IPv6 {
+		// The same shape through the IPv6 tools, in the same table and under the
+		// same mark: the mark is the interface's, not a family's, and one table
+		// number holds the local route of both families (`ip -6 rule` and
+		// `ip rule` are separate lists). Steered to ::1, which the chain's
+		// second tproxy inbound listens on.
+		up = append(up,
+			fmt.Sprintf("ip -6 rule add fwmark %s lookup %d", mark, table),
+			fmt.Sprintf("ip -6 route add local ::/0 dev lo table %d", table),
+			fmt.Sprintf("ip6tables -I INPUT 1 -i %%i -m mark --mark %s -j ACCEPT", mark),
+			"ip6tables -t mangle -A PREROUTING -i %i -m addrtype --dst-type LOCAL -j RETURN",
+			fmt.Sprintf("ip6tables -t mangle -A PREROUTING -i %%i -p tcp -j TPROXY --on-ip ::1 --on-port %d --tproxy-mark %s", t.Port, mark),
+			fmt.Sprintf("ip6tables -t mangle -A PREROUTING -i %%i -p udp -j TPROXY --on-ip ::1 --on-port %d --tproxy-mark %s", t.Port, mark),
+		)
+		down = append([]string{
+			fmt.Sprintf("ip6tables -t mangle -D PREROUTING -i %%i -p udp -j TPROXY --on-ip ::1 --on-port %d --tproxy-mark %s", t.Port, mark),
+			fmt.Sprintf("ip6tables -t mangle -D PREROUTING -i %%i -p tcp -j TPROXY --on-ip ::1 --on-port %d --tproxy-mark %s", t.Port, mark),
+			"ip6tables -t mangle -D PREROUTING -i %i -m addrtype --dst-type LOCAL -j RETURN",
+			fmt.Sprintf("ip6tables -D INPUT -i %%i -m mark --mark %s -j ACCEPT", mark),
+			fmt.Sprintf("ip -6 route del local ::/0 dev lo table %d", table),
+			fmt.Sprintf("ip -6 rule del fwmark %s lookup %d", mark, table),
+		}, down...)
 	}
 	for _, cmd := range append(append([]string{}, up...), down...) {
 		if err := validatePostHook(cmd); err != nil {

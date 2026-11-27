@@ -133,8 +133,13 @@ export interface ChainRenderInput {
    * steered a packet, nobody logged in), so the policy is gated on the
    * INBOUND: `ordinal` is the cascade's entry policy, 0 for the plain profile,
    * which draws no rules. Every such connection goes to the Auto line.
+   *
+   * 18.12: `ipv6` when an interface of the entry carries IPv6 in the tunnel, so the
+   * agent's TPROXY for IPv6 has a listener to steer to, `::1` on the same port
+   * under its own tag, and it is gated, routed and policed like the first one.
+   * Absent, the config is the one of before, byte for byte.
    */
-  tproxy?: { ordinal: number };
+  tproxy?: { ordinal: number; ipv6?: boolean };
   /**
    * E53: the node policy of an EXIT, as route rules (chainNodePolicyOf), and
    * the WARP egress its rules route into. The rule-sets they name travel in
@@ -215,6 +220,13 @@ function socksTag(tag: number): string {
 
 /** Inbound tag of the tproxy listener an AmneziaWG entry's packets land on. */
 export const TPROXY_IN_TAG = 'in-tproxy';
+/** 18.12: the same listener on `::1`, for the IPv6 of an interface that carries it. */
+export const TPROXY6_IN_TAG = 'in-tproxy6';
+
+/** The tproxy inbounds a rule gated on "the awg interface's traffic" names. */
+function tproxyTags(tproxy: { ipv6?: boolean }): string[] {
+  return tproxy.ipv6 ? [TPROXY_IN_TAG, TPROXY6_IN_TAG] : [TPROXY_IN_TAG];
+}
 
 /** One leg INSIDE a pooled direction. Only used when a direction has more than
  *  one, so a direction with a single way on keeps `out-d<tag>` on the leg
@@ -618,13 +630,13 @@ export const CHAIN_PROTECTION_RULES = 4;
  * After the protections (an operator's rule must not reopen port 25) and
  * before the ways out (a door placed first matches everything behind it).
  */
-function policyRules(policies: ChainPolicy[], tproxy?: { ordinal: number }): Json[] {
+function policyRules(policies: ChainPolicy[], tproxy?: { ordinal: number; ipv6?: boolean }): Json[] {
   const rules: Json[] = [];
   for (const p of policies) {
     // Who carries this policy: the socks user of its ordinal and, when the
     // entry takes users by TPROXY with this policy, that listener as a whole.
     const gates: Json[] = [{ auth_user: [chainSocksUser(p.ordinal)] }];
-    if (tproxy?.ordinal === p.ordinal) gates.push({ inbound: [TPROXY_IN_TAG] });
+    if (tproxy?.ordinal === p.ordinal) gates.push({ inbound: tproxyTags(tproxy) });
     for (const gate of gates) {
       if (!chainMatchIsEmpty(p.block)) {
         rules.push({ ...gate, ...p.block, action: 'reject', method: 'drop' });
@@ -694,6 +706,17 @@ export function renderChainConfig(input: ChainRenderInput): Json {
         listen: '127.0.0.1',
         listen_port: CHAIN_TPROXY_PORT,
       });
+      // 18.12: sing-box's tproxy inbound takes one `listen` address, so the IPv6
+      // one is a second inbound. The kernel steers a packet to the listener of its
+      // own family (the agent's ip6tables TPROXY names ::1), so the port is shared.
+      if (tproxy.ipv6) {
+        inbounds.push({
+          type: 'tproxy',
+          tag: TPROXY6_IN_TAG,
+          listen: '::1',
+          listen_port: CHAIN_TPROXY_PORT,
+        });
+      }
     }
   } else if (input.in) {
     // One listener per address, the same listener each time. The first keeps
@@ -821,7 +844,7 @@ export function renderChainConfig(input: ChainRenderInput): Json {
     // Every packet off the awg interface takes the Auto line: its user is a
     // key and cannot pick a way out, as a hysteria user cannot.
     if (tproxy && outbounds.some((o) => o.tag === outTag(AUTO_TAG))) {
-      rules.push({ inbound: [TPROXY_IN_TAG], action: 'route', outbound: outTag(AUTO_TAG) });
+      rules.push({ inbound: tproxyTags(tproxy), action: 'route', outbound: outTag(AUTO_TAG) });
     }
   } else if (
     input.role === 'transit' &&

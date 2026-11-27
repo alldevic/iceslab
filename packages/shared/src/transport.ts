@@ -1727,6 +1727,16 @@ export interface ChainUserCoreTProxy {
   port: number;
   /** Firewall mark and routing table of this interface, see above. */
   mark: number;
+  /**
+   * Milestone 18.12: the interface carries IPv6 inside the tunnel, so the agent
+   * mirrors the steering for IPv6 (ip6tables TPROXY to `::1` on the same port,
+   * `ip -6` rule and local route in the same table). Set only for such an
+   * interface, which is one the panel decided carries IPv6 (the agent says it can
+   * with `awgTproxy6`, and the cascade's exits have IPv6); absent is the IPv4
+   * steering of before, byte for byte. An agent that does not know the key
+   * ignores it.
+   */
+  ipv6?: boolean;
 }
 
 /**
@@ -2123,6 +2133,13 @@ export interface CoreStatus {
    * private subnet and NAT66.
    */
   awgNoNat6?: boolean;
+  /**
+   * Milestone 18.12: this agent can steer a client's IPv6 into a cascade chain
+   * (TPROXY for IPv6 and `ip -6` policy routing on the host, tried with a rule in
+   * a scratch chain). ⚠ Absent is "no": the panel keeps IPv6 off an AmneziaWG
+   * interface handed to a chain, as since 18.9.
+   */
+  awgTproxy6?: boolean;
   /** Whether this core is CONFIGURED, i.e. has an inbound and is expected to
    *  run. The installer registers an adapter for every protocol the operator
    *  might switch on later, and an unconfigured one sits idle by design.
@@ -2457,6 +2474,8 @@ export interface NodeCoreInfo {
   awgIpv6?: boolean;
   /** See CoreStatus.awgNoNat6. Inventory: it changes with the agent. */
   awgNoNat6?: boolean;
+  /** See CoreStatus.awgTproxy6. Inventory: it changes with the agent. */
+  awgTproxy6?: boolean;
   provisioned?: boolean;
   /** See CoreStatus.reason. Inventory: it changes with a push, not a tick. */
   reason?: string;

@@ -85,6 +85,7 @@ import {
 } from './chain.config.js';
 import { CHAIN_TPROXY_PORT, chainSocksPort, chainSocksUser, chainTProxyMark } from './chain.ports.js';
 import { chainSecretFor } from '../nodes/chain-secret.js';
+import { tunnelIpv6OfNode } from '../amneziawg/awg-ipv6.js';
 import { canRunChainAtSave, carriesCellAtSave, chainEngineOf } from './cell-carriage.js';
 import {
   matchStoredDirections,
@@ -2853,7 +2854,7 @@ export async function getChainForNode(nodeId: string): Promise<NodeChain | null>
   const secret = await chainSecretFor(nodeId);
   const base = chainInputFor(nodeId, topology, role, secret);
   if (!base) return null;
-  const input = role === 'exit' ? { ...base, ...(await exitPolicyFor(nodeId)) } : base;
+  let input = role === 'exit' ? { ...base, ...(await exitPolicyFor(nodeId)) } : base;
   // t07-wire: an AmneziaWG entry's hand-off is minted from its interface's
   // listen port, so it is read here, where the database is.
   // t07-6b: one per interface, the 1.x one and the 3.1 one.
@@ -2861,6 +2862,18 @@ export async function getChainForNode(nodeId: string): Promise<NodeChain | null>
   const awgPorts = awgEntry
     ? { one: await awgInterfacePort(nodeId, 1), three: await awgInterfacePort(nodeId, 3) }
     : undefined;
+  // 18.12: the interfaces that carry IPv6 in the tunnel are steered for it too,
+  // by the same answer the push and the client configs read, so the agent's
+  // rules, the chain's `::1` listener and the clients' addresses cannot disagree.
+  const awgIpv6 = awgEntry
+    ? await tunnelIpv6OfNode(nodeId).then((t) => ({
+        one: awgPorts?.one !== undefined && t.one,
+        three: awgPorts?.three !== undefined && t.three,
+      }))
+    : undefined;
+  if (awgIpv6 && (awgIpv6.one || awgIpv6.three) && input.tproxy) {
+    input = { ...input, tproxy: { ...input.tproxy, ipv6: true } };
+  }
 
   const config = renderChainConfig(input);
   // One listener per way out this node offers its user core. Only an entry has
@@ -2883,7 +2896,7 @@ export async function getChainForNode(nodeId: string): Promise<NodeChain | null>
     config: config as Record<string, unknown>,
     socks,
     socksPassword: secret,
-    ...userCoreFor(nodeId, topology, role, secret, awgPorts),
+    ...userCoreFor(nodeId, topology, role, secret, awgPorts, awgIpv6),
     ...(tunnels.length > 0 ? { tunnels } : {}),
     ...(linkIngress.length > 0 ? { linkIngress } : {}),
   };
@@ -3016,9 +3029,9 @@ async function awgInterfacePort(nodeId: string, generation: 1 | 3): Promise<numb
  * handed over: the question is where the client's traffic may go, and the
  * answer errs toward "through the chain".
  *
- * ⚠ The tunnel's IPv6 stays off for such an interface until milestone 18.12:
- * the chain's TPROXY catches IPv4 only, so a client's IPv6 would leave the
- * entry node directly, around the cascade.
+ * ⚠ Whether such an interface carries IPv6 is decided in awg-ipv6.ts (18.12): only
+ * when the agent steers IPv6 into the chain and the exits have it, else a
+ * client's IPv6 would leave the entry node directly, around the cascade.
  */
 export async function awgInterfacesInChain(nodeId: string): Promise<{ one: boolean; three: boolean }> {
   const topology = await readTopologyForNode(nodeId);
@@ -3050,6 +3063,7 @@ function userCoreFor(
   role: ChainRole,
   secret: string,
   awgPorts?: { one?: number; three?: number },
+  awgIpv6?: { one: boolean; three: boolean },
 ): { userCore?: ChainUserCore } {
   if (role !== 'entry') return {};
   if (topology.entryProtocol === 'amneziawg') {
@@ -3057,10 +3071,13 @@ function userCoreFor(
     // listener; t07-6b: each interface, 1.x and 3.1, with its own mark. No
     // AWG binding on this entry, no interface to steer: then nothing is
     // handed over, and no xray drawing either (entersOnAnotherCore).
-    const handoff = (port: number | undefined) =>
-      port === undefined ? undefined : { port: CHAIN_TPROXY_PORT, mark: chainTProxyMark(port) };
-    const tproxy = handoff(awgPorts?.one);
-    const tproxy3 = handoff(awgPorts?.three);
+    // 18.12: `ipv6` only on an interface that carries IPv6 in the tunnel.
+    const handoff = (port: number | undefined, ipv6: boolean | undefined) =>
+      port === undefined
+        ? undefined
+        : { port: CHAIN_TPROXY_PORT, mark: chainTProxyMark(port), ...(ipv6 ? { ipv6: true } : {}) };
+    const tproxy = handoff(awgPorts?.one, awgIpv6?.one);
+    const tproxy3 = handoff(awgPorts?.three, awgIpv6?.three);
     if (!tproxy && !tproxy3) return {};
     return {
       userCore: {

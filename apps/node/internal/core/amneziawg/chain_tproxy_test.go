@@ -23,7 +23,13 @@ func invertHook(t *testing.T, cmd string) string {
 		return "ip rule del " + strings.TrimPrefix(cmd, "ip rule add ")
 	case strings.HasPrefix(cmd, "ip route add "):
 		return "ip route del " + strings.TrimPrefix(cmd, "ip route add ")
-	case strings.HasPrefix(cmd, "iptables ") && strings.Count(cmd, " -A ") == 1:
+	case strings.HasPrefix(cmd, "ip -6 rule add "):
+		return "ip -6 rule del " + strings.TrimPrefix(cmd, "ip -6 rule add ")
+	case strings.HasPrefix(cmd, "ip -6 route add "):
+		return "ip -6 route del " + strings.TrimPrefix(cmd, "ip -6 route add ")
+	case strings.HasPrefix(cmd, "ip6tables -I INPUT 1 "):
+		return "ip6tables -D INPUT " + strings.TrimPrefix(cmd, "ip6tables -I INPUT 1 ")
+	case (strings.HasPrefix(cmd, "iptables ") || strings.HasPrefix(cmd, "ip6tables ")) && strings.Count(cmd, " -A ") == 1:
 		return strings.Replace(cmd, " -A ", " -D ", 1)
 	case strings.HasPrefix(cmd, "iptables -I INPUT 1 "):
 		return "iptables -D INPUT " + strings.TrimPrefix(cmd, "iptables -I INPUT 1 ")
@@ -80,6 +86,12 @@ func (h host) apply(cmd string) error {
 	var key string
 	var add, dupOK bool
 	switch {
+	case strings.HasPrefix(cmd, "ip -6 rule add "), strings.HasPrefix(cmd, "ip -6 rule del "):
+		add, dupOK = strings.HasPrefix(cmd, "ip -6 rule add "), true
+		key = "rule6 " + cmd[len("ip -6 rule add "):]
+	case strings.HasPrefix(cmd, "ip -6 route add "), strings.HasPrefix(cmd, "ip -6 route del "):
+		add = strings.HasPrefix(cmd, "ip -6 route add ")
+		key = "route6 " + cmd[len("ip -6 route add "):]
 	case strings.HasPrefix(cmd, "ip rule add "), strings.HasPrefix(cmd, "ip rule del "):
 		add, dupOK = strings.HasPrefix(cmd, "ip rule add "), true
 		key = "rule " + cmd[len("ip rule add "):]
@@ -295,7 +307,7 @@ func TestEveryHookPassesTheShellWhitelist(t *testing.T) {
 		}
 		// Scoped to the interface by awg-quick's own placeholder, never by a
 		// name baked in here: a rule without -i would steer the whole host.
-		if strings.HasPrefix(c, "iptables ") && !strings.Contains(c, " -i %i ") {
+		if (strings.HasPrefix(c, "iptables ") || strings.HasPrefix(c, "ip6tables ")) && !strings.Contains(c, " -i %i ") {
 			t.Errorf("%q is not scoped to the awg interface", c)
 		}
 	}
@@ -314,5 +326,133 @@ func TestTheTProxyParametersThatWouldTakeTheHostDown(t *testing.T) {
 		if _, _, err := chainTProxyHooks(tp); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// The IPv6 half (milestone 18.12).
+
+var testTProxy6 = ChainTProxy{Port: 25000, Mark: 0x10000 + 51820, IPv6: true}
+
+func TestWithoutTheIPv6FlagTheHooksAreTheOnesOfBefore(t *testing.T) {
+	// Acceptance of 18.12: not a line more, not a line moved.
+	mark := fmt.Sprintf("0x%x", testTProxy.Mark)
+	wantUp := []string{
+		fmt.Sprintf("ip rule add fwmark %s lookup %d", mark, testTProxy.Mark),
+		fmt.Sprintf("ip route add local 0.0.0.0/0 dev lo table %d", testTProxy.Mark),
+		fmt.Sprintf("iptables -I INPUT 1 -i %%i -m mark --mark %s -j ACCEPT", mark),
+		"iptables -t mangle -A PREROUTING -i %i -m addrtype --dst-type LOCAL -j RETURN",
+		fmt.Sprintf("iptables -t mangle -A PREROUTING -i %%i -p tcp -j TPROXY --on-ip 127.0.0.1 --on-port 25000 --tproxy-mark %s", mark),
+		fmt.Sprintf("iptables -t mangle -A PREROUTING -i %%i -p udp -j TPROXY --on-ip 127.0.0.1 --on-port 25000 --tproxy-mark %s", mark),
+	}
+	up, down := hooks(t, testTProxy)
+	if !slices.Equal(up, wantUp) {
+		t.Errorf("PostUp:\n%s", strings.Join(up, "\n"))
+	}
+	if len(down) != 6 {
+		t.Errorf("PostDown has %d lines", len(down))
+	}
+	for _, l := range append(up, down...) {
+		if strings.Contains(l, "ip6tables") || strings.Contains(l, "-6 ") || strings.Contains(l, "::") {
+			t.Errorf("IPv6 in the hooks of an interface without it: %q", l)
+		}
+	}
+}
+
+func TestWithIPv6PostUpHasTheIPv6LinesAndPostDownIsTheirExactMirror(t *testing.T) {
+	up, down := hooks(t, testTProxy6)
+	v4up, _ := hooks(t, testTProxy)
+	if len(up) != 12 || !slices.Equal(up[:6], v4up) {
+		t.Fatalf("PostUp = the IPv4 lines then the IPv6 ones, got:\n%s", strings.Join(up, "\n"))
+	}
+	mark := fmt.Sprintf("0x%x", testTProxy6.Mark)
+	for _, want := range []string{
+		fmt.Sprintf("ip -6 rule add fwmark %s lookup %d", mark, testTProxy6.Mark),
+		fmt.Sprintf("ip -6 route add local ::/0 dev lo table %d", testTProxy6.Mark),
+		fmt.Sprintf("ip6tables -I INPUT 1 -i %%i -m mark --mark %s -j ACCEPT", mark),
+		"ip6tables -t mangle -A PREROUTING -i %i -m addrtype --dst-type LOCAL -j RETURN",
+		fmt.Sprintf("ip6tables -t mangle -A PREROUTING -i %%i -p tcp -j TPROXY --on-ip ::1 --on-port 25000 --tproxy-mark %s", mark),
+		fmt.Sprintf("ip6tables -t mangle -A PREROUTING -i %%i -p udp -j TPROXY --on-ip ::1 --on-port 25000 --tproxy-mark %s", mark),
+	} {
+		if !slices.Contains(up, want) {
+			t.Errorf("PostUp lacks %q", want)
+		}
+	}
+	// The IPv6 lines are in the same table as the IPv4 ones: one number.
+	if len(down) != len(up) {
+		t.Fatalf("PostUp has %d lines and PostDown %d", len(up), len(down))
+	}
+	for i := range up {
+		if want := invertHook(t, up[len(up)-1-i]); down[i] != want {
+			t.Errorf("PostDown[%d] = %q, want the inverse of PostUp[%d]: %q", i, down[i], len(up)-1-i, want)
+		}
+	}
+	// The INPUT accept still comes before the first steering line of its family.
+	first6 := slices.IndexFunc(up, func(l string) bool { return strings.HasPrefix(l, "ip6tables ") && strings.Contains(l, " -j TPROXY ") })
+	accept6 := slices.IndexFunc(up, func(l string) bool { return strings.HasPrefix(l, "ip6tables -I INPUT 1 ") })
+	if accept6 < 0 || accept6 > first6 {
+		t.Errorf("the IPv6 INPUT accept (%d) is not ahead of the first IPv6 TPROXY line (%d)", accept6, first6)
+	}
+}
+
+func TestEveryIPv6HookPassesTheShellWhitelistAndIsScopedToTheInterface(t *testing.T) {
+	up, down := hooks(t, testTProxy6)
+	for _, c := range append(up, down...) {
+		if err := validatePostHook(c); err != nil {
+			t.Errorf("%q: %v", c, err)
+		}
+		if strings.HasPrefix(c, "ip6tables ") && !strings.Contains(c, " -i %i ") {
+			t.Errorf("%q is not scoped to the awg interface", c)
+		}
+	}
+}
+
+func TestUpDownUpWithIPv6LeavesExactlyOneOfEverything(t *testing.T) {
+	up, down := hooks(t, testTProxy6)
+	once := host{}
+	if _, err := once.run("awg1", up); err != nil {
+		t.Fatal(err)
+	}
+	for k, n := range once {
+		if n != 1 {
+			t.Errorf("one PostUp left %d copies of %s", n, k)
+		}
+	}
+	h := host{}
+	for step, cmds := range [][]string{up, down} {
+		if _, err := h.run("awg1", cmds); err != nil {
+			t.Fatalf("step %d: %v", step, err)
+		}
+	}
+	if len(h) != 0 {
+		t.Fatalf("PostDown after PostUp left %v behind (after the interface stops no IPv6 rule or route stays)", h)
+	}
+}
+
+func TestTheSweepTakesTheIPv6TracesToo(t *testing.T) {
+	up, down := hooks(t, testTProxy6)
+	h := dirtyHost(t, "awg1", up)
+	if err := sweepChainTProxy("awg1", down, h.argv); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(h) != 0 {
+		t.Fatalf("the sweep left %v behind", h)
+	}
+}
+
+func TestTheIPv6FlagIsPartOfWhatIsSwappedInPlace(t *testing.T) {
+	// A hand-off that gains IPv6 adds exactly the IPv6 lines and removes none.
+	up4, _ := hooks(t, testTProxy)
+	up6, _ := hooks(t, testTProxy6)
+	added := without(up6, up4)
+	if len(added) != 6 {
+		t.Fatalf("added = %v", added)
+	}
+	for _, l := range added {
+		if !strings.Contains(l, "-6 ") && !strings.HasPrefix(l, "ip6tables ") {
+			t.Errorf("%q is not an IPv6 line", l)
+		}
+	}
+	if left := without(up4, up6); len(left) != 0 {
+		t.Errorf("gaining IPv6 would take %v away", left)
 	}
 }

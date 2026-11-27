@@ -9,10 +9,12 @@ import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { WG_TEST_PRIVATE_KEY, WG_TEST_PUBLIC_KEY } from '../../../tests/helpers/wg-keys.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { observedCores } from '../nodes/nodes.cron.js';
+import { invalidateSubscriptionSettingsCache } from '../settings/settings.service.js';
 import { applyInboundsForNode, fetchEnabledInbounds } from '../inbounds/inbounds.queue.js';
 import { syncAddUser } from '../users/users.queue.js';
-import { awgInterfacesInChain } from '../cascades/cascade.service.js';
-import { interfaceCarriesIpv6, NO_TUNNEL_IPV6, nodeAgentCarriesTunnelIpv6, tunnelIpv6OfNode } from './awg-ipv6.js';
+import { awgInterfacesInChain, getChainForNode } from '../cascades/cascade.service.js';
+import { TPROXY6_IN_TAG } from '../cascades/chain.config.js';
+import { interfaceCarriesIpv6, NO_TUNNEL_IPV6, nodeAgentCarriesTunnelIpv6, nodeAgentSteersIpv6, tunnelIpv6OfNode } from './awg-ipv6.js';
 import { ipv4OfIpv6, ipv6OfIpv4, ipv6OfIpv4InPrefix } from './amneziawg.subnet.js';
 import { nodeAgentServesRealPrefix, tunnelAddressing } from './awg-ipv6.js';
 
@@ -65,6 +67,25 @@ describe('interfaceCarriesIpv6: the table of conditions', () => {
     expect(nodeAgentCarriesTunnelIpv6({ cores: coresOf([awgRow()], ipv6Facts()), ipv6Mode: 'on' })).toBe(true);
   });
 
+  it('18.12: an interface in a chain carries it only when the chain can (the 4th argument), the other ones as before', () => {
+    const inChain = { one: true, three: false };
+    expect(interfaceCarriesIpv6(full, 'one', inChain, true)).toBe(true);
+    expect(interfaceCarriesIpv6(full, 'one', inChain, false)).toBe(false);
+    expect(interfaceCarriesIpv6(full, 'one', inChain)).toBe(false);
+    // The chain's answer lifts nothing the agent facts forbid.
+    const off = { cores: coresOf([awgRow({ awgIpv6: false })], ipv6Facts()), ipv6Mode: 'auto' as const };
+    expect(interfaceCarriesIpv6(off, 'one', inChain, true)).toBe(false);
+    expect(interfaceCarriesIpv6({ ...full, ipv6Mode: 'off' }, 'one', inChain, true)).toBe(false);
+  });
+
+  it('the awgTproxy6 fact: only a true on the amneziawg row says the agent steers IPv6', () => {
+    expect(nodeAgentSteersIpv6(coresOf([awgRow({ awgTproxy6: true })], ipv6Facts()))).toBe(true);
+    expect(nodeAgentSteersIpv6(coresOf([awgRow({ awgTproxy6: false })], ipv6Facts()))).toBe(false);
+    expect(nodeAgentSteersIpv6(coresOf([awgRow()], ipv6Facts()))).toBe(false);
+    expect(nodeAgentSteersIpv6(coresOf([{ name: 'xray', engine: 'xray', running: true, installed: true, awgTproxy6: true }], ipv6Facts()))).toBe(false);
+    expect(nodeAgentSteersIpv6(null)).toBe(false);
+  });
+
   it('an interface given to a cascade chain does not carry it, the other one does', () => {
     expect(interfaceCarriesIpv6(full, 'one', { one: true, three: false })).toBe(false);
     expect(interfaceCarriesIpv6(full, 'three', { one: true, three: false })).toBe(true);
@@ -98,8 +119,8 @@ afterAll(async () => {
 });
 
 const auth = () => ({ authorization: `Bearer ${token}` });
-async function post(url: string, payload: unknown) {
-  const res = await app.inject({ method: 'POST', url, headers: auth(), payload });
+async function post(url: string, payload: unknown, method: 'POST' | 'PUT' = 'POST') {
+  const res = await app.inject({ method, url, headers: auth(), payload });
   expect(res.statusCode, res.body).toBeLessThan(300);
   return JSON.parse(res.body);
 }
@@ -325,7 +346,7 @@ describe('the client configs of a node with the facts', () => {
   });
 });
 
-describe('an interface given to a cascade chain (until 18.12)', () => {
+describe('an interface given to a cascade chain, the agent that cannot steer IPv6 (the ban of 18.9)', () => {
   async function cascadeOnto(entry: string) {
     seq += 1;
     const exit = await makeNode('nl-exit');
@@ -389,6 +410,144 @@ describe('an interface given to a cascade chain (until 18.12)', () => {
 
   it('an unknown node is no IPv6', async () => {
     await expect(tunnelIpv6OfNode('00000000-0000-0000-0000-000000000000')).resolves.toEqual(NO_TUNNEL_IPV6);
+  });
+});
+
+/**
+ * 18.12: the ban of 18.9 lifted by a condition. An interface handed to a chain
+ * carries IPv6 when the agent steers it (awgTproxy6) AND an exit of the cascade
+ * leaves by IPv6 (nodeExitsViaIpv6, 18.7); the push, the agent's hand-off, the
+ * chain's `::1` listener and the client configs all read the one answer.
+ */
+describe('an interface given to a cascade chain, the agent that steers IPv6 (18.12)', () => {
+  const sing = { name: 'tuic', engine: 'singbox', running: true, installed: true } as CoreStatus;
+  const wgRow = { name: 'wireguard', engine: 'wireguard', running: true, installed: true } as CoreStatus;
+
+  async function chainedEntry(opts: { exitIpv6?: NodeIPv6 | null; exitMode?: 'auto' | 'on' | 'off'; steers?: boolean }) {
+    const { n, sq } = await tunnelNode();
+    await setCores(n, [awgRow({ awgTproxy6: opts.steers ?? true }), wgRow, sing], ipv6Facts());
+    const exit = await makeNode('nl-exit');
+    if (opts.exitIpv6 !== null) {
+      await setCores(exit, [{ name: 'xray', engine: 'xray', running: true, installed: true }], opts.exitIpv6 ?? ipv6Facts({ egress: true }), opts.exitMode);
+    } else if (opts.exitMode) {
+      await prisma.node.update({ where: { id: exit }, data: { ipv6Mode: opts.exitMode } });
+    }
+    seq += 1;
+    await post('/api/cascades', {
+      name: `ru-out-${seq}`,
+      enabled: true,
+      autoProfile: false,
+      positions: [{ position: 0, nodeIds: [n], entryProtocol: 'amneziawg', linkProtocol: 'vless' }],
+      directions: [{ countryCode: 'NL', nodeIds: [exit] }],
+    });
+    return { n, sq, exit };
+  }
+
+  it('exits with IPv6: the interfaces carry it, the push has subnet6, the hand-off and the chain say so', async () => {
+    const { n, sq } = await chainedEntry({});
+    expect(await awgInterfacesInChain(n)).toEqual({ one: true, three: true });
+    await expect(tunnelIpv6OfNode(n)).resolves.toEqual({ one: true, three: true, wg: true });
+
+    const inbounds = await fetchEnabledInbounds(n);
+    expect(cfgAt(inbounds, 51820).subnet6).toBe(S6_1);
+    expect(cfgAt(inbounds, 51830).subnet6).toBe(S6_3);
+
+    const chain = await getChainForNode(n);
+    expect(chain?.userCore).toMatchObject({
+      engine: 'amneziawg',
+      tproxy: { ipv6: true },
+      tproxy3: { ipv6: true },
+    });
+    const cfg = chain!.config as { inbounds: { tag: string; listen?: string }[] };
+    expect(cfg.inbounds.find((i) => i.tag === TPROXY6_IN_TAG)).toMatchObject({ type: 'tproxy', listen: '::1' });
+
+    const a = await user('v6_chain_ok', [sq.id]);
+    const { added } = capture();
+    await applyInboundsForNode(n);
+    const p = added.find((r) => r.userId === a)!.credentials.amneziawgPeers![0]!;
+    expect(p.allowedIp6).toBeTruthy();
+    expect(p.allowedIp3v6).toBeTruthy();
+    const t = (await prisma.user.findUniqueOrThrow({ where: { id: a }, select: { subscriptionToken: true } })).subscriptionToken;
+    const res = await app.inject({ method: 'GET', url: `/sub/${t}?format=wgconf`, remoteAddress: '10.79.2.2' });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.body).toMatch(/^Address = 10\.66\.66\.\d+\/32, fd12:/m);
+  });
+
+  it('only the interface that is in the chain and has a port is told to steer IPv6', async () => {
+    const n = await makeNode();
+    const three = await profile('amneziawg', awgCfg('10.67.67.0/24', S6_3), { awgProtocol: 3 });
+    await setCores(n, [awgRow({ awgTproxy6: true }), sing], ipv6Facts());
+    await host(three, n, 51830);
+    const exit = await makeNode('nl-exit');
+    await setCores(exit, [{ name: 'xray', engine: 'xray', running: true, installed: true }], ipv6Facts({ egress: true }));
+    await post('/api/cascades', {
+      name: 'ru-out-3',
+      enabled: true,
+      autoProfile: false,
+      positions: [{ position: 0, nodeIds: [n], entryProtocol: 'amneziawg', linkProtocol: 'vless' }],
+      directions: [{ countryCode: 'NL', nodeIds: [exit] }],
+    });
+    const chain = await getChainForNode(n);
+    expect(chain?.userCore).toEqual({
+      engine: 'amneziawg',
+      tproxy3: expect.objectContaining({ ipv6: true }),
+    });
+    expect(chain!.userCore).not.toHaveProperty('tproxy');
+  });
+
+  it('the agent cannot steer IPv6 (no awgTproxy6): the interfaces have none, hand-off and chain are the old ones', async () => {
+    const { n, sq } = await chainedEntry({ steers: false });
+    await expect(tunnelIpv6OfNode(n)).resolves.toEqual({ one: false, three: false, wg: true });
+    expect(cfgAt(await fetchEnabledInbounds(n), 51820).subnet6).toBeUndefined();
+    const chain = await getChainForNode(n);
+    expect(JSON.stringify(chain!.userCore)).not.toContain('ipv6');
+    expect(JSON.stringify(chain!.config)).not.toContain(TPROXY6_IN_TAG);
+    const a = await user('v6_chain_nosteer', [sq.id]);
+    const t = (await prisma.user.findUniqueOrThrow({ where: { id: a }, select: { subscriptionToken: true } })).subscriptionToken;
+    const res = await app.inject({ method: 'GET', url: `/sub/${t}?format=wgconf`, remoteAddress: '10.79.2.3' });
+    expect(res.body).toMatch(/^Address = 10\.66\.66\.\d+\/32$/m);
+  });
+
+  it.each([
+    ['an exit that reported no IPv6 block', { exitIpv6: null }],
+    ['an exit with no egress (auto)', { exitIpv6: ipv6Facts({ egress: false }) }],
+    ['an exit whose IPv6 mode is off', { exitIpv6: ipv6Facts({ egress: true }), exitMode: 'off' as const }],
+  ])('%s: the client gets no IPv6 address and the entry no way to let it out directly', async (_n, opts) => {
+    const { n, sq } = await chainedEntry(opts);
+    await expect(tunnelIpv6OfNode(n)).resolves.toEqual({ one: false, three: false, wg: true });
+    const chain = await getChainForNode(n);
+    expect(JSON.stringify(chain!.userCore)).not.toContain('ipv6');
+    const a = await user('v6_chain_noexit', [sq.id]);
+    const { added } = capture();
+    await applyInboundsForNode(n);
+    const p = added.find((r) => r.userId === a)!.credentials.amneziawgPeers![0]!;
+    expect(p.allowedIp6).toBeUndefined();
+    const t = (await prisma.user.findUniqueOrThrow({ where: { id: a }, select: { subscriptionToken: true } })).subscriptionToken;
+    // `::/0` is the operator's switch (wgDropIpv6, 18.7), as for any tunnel with no
+    // IPv6 address of its own: the default config keeps it, the switch takes it out.
+    const conf = () => app.inject({ method: 'GET', url: `/sub/${t}?format=wgconf`, remoteAddress: '10.79.2.4' });
+    const res = await conf();
+    expect(res.body).toMatch(/^Address = 10\.66\.66\.\d+\/32$/m);
+    expect(res.body).toMatch(/^AllowedIPs = 0\.0\.0\.0\/0, ::\/0$/m);
+    await post('/api/settings', { subscriptionWgDropIpv6: true }, 'PUT');
+    invalidateSubscriptionSettingsCache();
+    expect((await conf()).body).toMatch(/^AllowedIPs = 0\.0\.0\.0\/0$/m);
+  });
+
+  it('the exit mode "on" (an operator\'s word) counts as IPv6 at the exit', async () => {
+    const { n } = await chainedEntry({ exitIpv6: ipv6Facts({ egress: false }), exitMode: 'on' });
+    await expect(tunnelIpv6OfNode(n)).resolves.toMatchObject({ one: true, three: true });
+  });
+
+  it('a real prefix on the entry is split among the chained interfaces like any other (the exit connects from its own address)', async () => {
+    const { n } = await chainedEntry({});
+    await setCores(n, [awgRow({ awgTproxy6: true, awgNoNat6: true }), wgRow, sing], ipv6Facts());
+    await prisma.node.update({ where: { id: n }, data: { tunnelIpv6Prefix: '2001:db8:77::/48' } });
+    const t = await tunnelIpv6OfNode(n);
+    expect(t.real).toEqual({ one: '2001:db8:77:0::/64', three: '2001:db8:77:1::/64', wg: '2001:db8:77:2::/64' });
+    const inbounds = await fetchEnabledInbounds(n);
+    expect(cfgAt(inbounds, 51820)).toMatchObject({ subnet6: '2001:db8:77:0::/64', noNat6: true });
+    expect(cfgAt(inbounds, 51830)).toMatchObject({ subnet6: '2001:db8:77:1::/64', noNat6: true });
   });
 });
 

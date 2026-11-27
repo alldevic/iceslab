@@ -93,3 +93,71 @@ func (a *Adapter) AwgIpv6() bool {
 	}
 	return a.hostCanNAT6()
 }
+
+// probeChain is the scratch chain the TPROXY probe adds a rule to; nothing
+// else uses it, and it is removed again in the same breath.
+const probeChain = "ICESLAB-TP6-PROBE"
+
+// hostCanTProxy6 asks (or recalls) whether this host can steer IPv6 with TPROXY
+// (milestone 18.12): `xt_TPROXY` with its IPv6 half in the kernel, the mangle
+// table of ip6tables, and policy routing for IPv6 (`ip -6 rule`). TPROXY cannot
+// be asked without trying, so a rule is added to a chain of its own, which no
+// packet reaches, and dropped at once; a kernel that refuses it refuses it
+// there, and not in a PostUp line, where one failure would take the whole `up`
+// down with every IPv4 client. Cached like the NAT probe.
+func (a *Adapter) hostCanTProxy6() bool {
+	bin := a.cfg.Ip6tablesBin
+	if bin == "" {
+		bin = "ip6tables"
+	}
+	return a.cfg.tp6.hostNAT6(time.Now(), func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		run := func(name string, args ...string) error {
+			_, err := a.cfg.runCmd(ctx, name, args...)
+			return err
+		}
+		if err := run("ip", "-6", "rule", "show"); err != nil {
+			a.logger.Warn(a.Name()+": no IPv6 policy routing on this host, IPv6 through a chain stays off", "err", err)
+			return false
+		}
+		// A leftover of an interrupted probe would fail the -N below for good.
+		_ = run(bin, "-t", "mangle", "-F", probeChain)
+		_ = run(bin, "-t", "mangle", "-X", probeChain)
+		if err := run(bin, "-t", "mangle", "-N", probeChain); err != nil {
+			a.logger.Warn(a.Name()+": no IPv6 mangle table on this host, IPv6 through a chain stays off", "err", err)
+			return false
+		}
+		err := run(bin, "-t", "mangle", "-A", probeChain, "-p", "tcp", "-j", "TPROXY",
+			"--on-ip", "::1", "--on-port", "1", "--tproxy-mark", "0x1")
+		_ = run(bin, "-t", "mangle", "-F", probeChain)
+		_ = run(bin, "-t", "mangle", "-X", probeChain)
+		if err != nil {
+			a.logger.Warn(a.Name()+": no TPROXY for IPv6 on this host, IPv6 through a chain stays off", "err", err)
+		}
+		return err == nil
+	})
+}
+
+// tproxy6Allowed: a hand-off may carry IPv6 only where the host can do it AND
+// the agent brings up IPv6 in the tunnel at all. A push that asks anyway (a
+// stale fact) is served without it, and the interface then has no IPv6 address
+// (withDefaults), so nothing of the client's IPv6 leaves around the chain.
+func (a *Adapter) tproxy6Allowed() bool {
+	if a.plain() || !a.hostCanNAT6() {
+		return false
+	}
+	return a.hostCanTProxy6()
+}
+
+var _ interface{ AwgTproxy6() bool } = (*Adapter)(nil)
+
+// AwgTproxy6 is the `awgTproxy6` fact (milestone 18.12): a client's IPv6 on a
+// cascade entry can be steered into the chain, so the panel may lift the ban of
+// 18.9 for the node. Only the AmneziaWG module reports it.
+func (a *Adapter) AwgTproxy6() bool {
+	if a.plain() {
+		return false
+	}
+	return a.tproxy6Allowed()
+}

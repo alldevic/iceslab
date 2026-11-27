@@ -521,6 +521,8 @@ export function observedCores(
       ...(typeof c.awgIpv6 === 'boolean' ? { awgIpv6: c.awgIpv6 } : {}),
       // 18.11: whether it also reads the noNat6 flag (a real prefix, no NAT66).
       ...(typeof c.awgNoNat6 === 'boolean' ? { awgNoNat6: c.awgNoNat6 } : {}),
+      // 18.12: whether it can steer the IPv6 of a cascade entry into the chain.
+      ...(typeof c.awgTproxy6 === 'boolean' ? { awgTproxy6: c.awgTproxy6 } : {}),
       ...(c.provisioned !== undefined ? { provisioned: c.provisioned } : {}),
       ...(c.reason ? { reason: c.reason } : {}),
       ...(c.installed !== undefined ? { installed: c.installed } : {}),

@@ -1,6 +1,7 @@
 import { readIpv6Mode, type Ipv6Mode, type NodeCores } from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
-import { awgInterfacesInChain } from '../cascades/cascade.service.js';
+import { awgInterfacesInChain, getExitNodeIdsByEntryNode } from '../cascades/cascade.service.js';
+import { nodeExitsViaIpv6 } from '../nodes/node-core-gate.js';
 import { interfaceSubnet64 } from './tunnel-prefix.js';
 
 /**
@@ -14,9 +15,12 @@ import { interfaceSubnet64 } from './tunnel-prefix.js';
  *     18.10 makes agents report it; none does before, so nothing changes yet);
  *   - the host has a global IPv6 address (`ipv6.global`);
  *   - the node's IPv6 mode is not `off`;
- *   - the interface is not handed to a cascade chain. TEMPORARY, milestone
- *     18.12 lifts it: the chain's TPROXY takes IPv4 only, so a client's IPv6
- *     would leave this node directly, around the cascade.
+ *   - the interface is not handed to a cascade chain, OR the chain can carry
+ *     it (milestone 18.12): the agent steers IPv6 into the chain too
+ *     (`awgTproxy6`) and the cascade's exits have IPv6 (nodeExitsViaIpv6, the
+ *     function of 18.7). Without either, a client's IPv6 would leave this node
+ *     directly, around the cascade, or lead nowhere, so the interface has none,
+ *     and the client has IPv4 alone, as the IPv4 side of the cascade is.
  *
  * Plain WireGuard is never a cascade entry (CHAIN_ENTRY_PROTOCOLS), so its
  * interface is only held to the first three.
@@ -69,6 +73,13 @@ export function tunnelAddressing(
   return real ? { subnet6: real, noNat: true } : { subnet6: profileSubnet6, noNat: false };
 }
 
+/** Whether the agent can steer a client's IPv6 into a chain (the `awgTproxy6` fact, 18.12). */
+export function nodeAgentSteersIpv6(cores: NodeCores | null | undefined): boolean {
+  return (cores?.cores ?? []).some(
+    (c) => c.name === 'amneziawg' && (c.engine === undefined || c.engine === 'amneziawg') && c.awgTproxy6 === true,
+  );
+}
+
 export function nodeAgentCarriesTunnelIpv6({ cores, ipv6Mode }: TunnelIpv6Facts): boolean {
   if (ipv6Mode === 'off' || cores?.ipv6?.global !== true) return false;
   return cores.cores.some(
@@ -76,14 +87,20 @@ export function nodeAgentCarriesTunnelIpv6({ cores, ipv6Mode }: TunnelIpv6Facts)
   );
 }
 
-/** Whether `iface` of a node carries IPv6 in the tunnel; `inChain` is what awgInterfacesInChain says. */
+/**
+ * Whether `iface` of a node carries IPv6 in the tunnel; `inChain` is what
+ * awgInterfacesInChain says, `chainCarries` (18.12) that the chain it hands to
+ * can carry IPv6: the agent steers it and the exits have it. An interface in a
+ * chain that cannot, has none.
+ */
 export function interfaceCarriesIpv6(
   facts: TunnelIpv6Facts,
   iface: TunnelInterface,
   inChain: { one: boolean; three: boolean },
+  chainCarries = false,
 ): boolean {
   if (!nodeAgentCarriesTunnelIpv6(facts)) return false;
-  return iface === 'wg' ? true : !inChain[iface];
+  return iface === 'wg' ? true : !inChain[iface] || chainCarries;
 }
 
 /**
@@ -129,6 +146,20 @@ async function realSubnets(
   return out;
 }
 
+/**
+ * 18.12: whether the chain an entry hands its interface to can carry the
+ * clients' IPv6: the node's agent steers it, and at least one exit of its
+ * cascades leaves by IPv6 (the rule of 18.7, "at least one exit", read fresh
+ * from the exits' rows). An exit that is a named outbound has no node: without.
+ */
+async function chainCarriesIpv6(entryId: string, cores: NodeCores | null | undefined): Promise<boolean> {
+  if (!nodeAgentSteersIpv6(cores)) return false;
+  const exits = [...((await getExitNodeIdsByEntryNode([entryId])).get(entryId) ?? [])];
+  if (exits.length === 0) return false;
+  const rows = await prisma.node.findMany({ where: { id: { in: exits } }, select: { cores: true, ipv6Mode: true } });
+  return rows.some((x) => nodeExitsViaIpv6(x.cores as NodeCores | null, readIpv6Mode(x.ipv6Mode)));
+}
+
 export async function tunnelIpv6OfNodes(nodeIds: string[]): Promise<Map<string, TunnelIpv6>> {
   const out = new Map<string, TunnelIpv6>();
   if (nodeIds.length === 0) return out;
@@ -143,10 +174,11 @@ export async function tunnelIpv6OfNodes(nodeIds: string[]): Promise<Map<string, 
       continue;
     }
     const inChain = await awgInterfacesInChain(n.id);
+    const chainCarries = (inChain.one || inChain.three) && (await chainCarriesIpv6(n.id, facts.cores));
     const carries = {
-      one: interfaceCarriesIpv6(facts, 'one', inChain),
-      three: interfaceCarriesIpv6(facts, 'three', inChain),
-      wg: interfaceCarriesIpv6(facts, 'wg', inChain),
+      one: interfaceCarriesIpv6(facts, 'one', inChain, chainCarries),
+      three: interfaceCarriesIpv6(facts, 'three', inChain, chainCarries),
+      wg: interfaceCarriesIpv6(facts, 'wg', inChain, chainCarries),
     };
     const real =
       n.tunnelIpv6Prefix && nodeAgentServesRealPrefix(facts.cores)

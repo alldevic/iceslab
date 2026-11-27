@@ -469,3 +469,9 @@ type AwgIpv6Reporter interface {
 type AwgNoNat6Reporter interface {
 	AwgNoNat6() bool
 }
+
+// AwgTproxy6Reporter is the OPTIONAL fact that this agent can steer a cascade
+// entry's IPv6 into the chain by TPROXY (milestone 18.12).
+type AwgTproxy6Reporter interface {
+	AwgTproxy6() bool
+}

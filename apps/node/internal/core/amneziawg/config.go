@@ -178,6 +178,13 @@ func (c *InboundConfig) withDefaults() InboundConfig {
 	// zero, not "use the default". Caught live cycle #6 2026-05-12:
 	// admin set Jc=0 in UI to debug, server kept rendering Jc=4 because
 	// of these defaults, handshake silently failed.
+	// An interface handed to a chain (milestone 18.12) carries IPv6 only when the
+	// hand-off steers it (Chain.IPv6): the address of a client IPv6 nothing
+	// catches would leave this node around the cascade. The panel does not send
+	// one then; this is what keeps a stale push from putting it back.
+	if out.Chain != nil && !out.Chain.IPv6 {
+		out.Address6, out.NoNAT6 = "", false
+	}
 	if len(out.PostUp) == 0 {
 		// Two things are needed for a client to actually reach the internet:
 		//
@@ -217,7 +224,17 @@ func (c *InboundConfig) withDefaults() InboundConfig {
 		// IPv6 (milestone 18.10): the same three rules through ip6tables, NAT66
 		// from the peers' private prefix to the node's own address. Only where
 		// the interface has an IPv6 address at all.
-		if peers6 := peerNetwork6(out.Address6); peers6 != "" {
+		if peers6 := peerNetwork6(out.Address6); peers6 != "" && out.Chain != nil {
+			// Handed to a chain (milestone 18.12): the client's IPv6 is steered
+			// into the chain, so there is no direct way out to open: no FORWARD
+			// accept and no MASQUERADE, nothing of the NAT66 rules. A real prefix
+			// is reachable from outside, though, so a new connection towards the
+			// peers is still dropped (and replies of the steered ones never come
+			// by FORWARD); that one rule stays.
+			if out.NoNAT6 {
+				out.PostUp = append(out.PostUp, "ip6tables -I FORWARD 1 -o %i -j DROP")
+			}
+		} else if peers6 != "" {
 			if out.NoNAT6 {
 				// A real prefix (milestone 18.11): the peers are reachable from the
 				// internet, so the base's unconditional `-o %i ACCEPT` would let
@@ -246,7 +263,11 @@ func (c *InboundConfig) withDefaults() InboundConfig {
 		if peers := peerNetwork(out.Address); peers != "" {
 			out.PostDown = append(out.PostDown, "iptables -t nat -D POSTROUTING -s "+peers+" ! -o %i -j MASQUERADE")
 		}
-		if peers6 := peerNetwork6(out.Address6); peers6 != "" {
+		if peers6 := peerNetwork6(out.Address6); peers6 != "" && out.Chain != nil {
+			if out.NoNAT6 {
+				out.PostDown = append(out.PostDown, "ip6tables -D FORWARD -o %i -j DROP")
+			}
+		} else if peers6 != "" {
 			if out.NoNAT6 {
 				out.PostDown = append(out.PostDown,
 					"ip6tables -D FORWARD -i %i -j ACCEPT",

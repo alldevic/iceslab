@@ -34,6 +34,8 @@ type awgHost struct {
 	// went through, fails instead of applying. Then it is cleared.
 	failOnce  string
 	failAfter int
+	// noTproxy6: the kernel refuses a TPROXY rule for IPv6 (the probe of 18.12).
+	noTproxy6 bool
 }
 
 func (h *awgHost) hooks(key string) []string {
@@ -98,7 +100,18 @@ func (h *awgHost) run(_ context.Context, name string, args ...string) ([]byte, e
 		return []byte(b.String()), nil
 	case name == "ip" && len(args) >= 2 && args[1] == "show":
 		return nil, nil
-	case name == "iptables" || name == "ip":
+	// 18.12: the probes. `ip -6 rule show`, the NAT table and the scratch chain
+	// of the TPROXY probe change nothing on the model host.
+	case name == "ip" && len(args) >= 3 && args[0] == "-6" && args[2] == "show":
+		return nil, nil
+	case name == "ip6tables" && strings.Contains(line, "-t nat -S"):
+		return nil, nil
+	case name == "ip6tables" && strings.Contains(line, probeChain):
+		if h.noTproxy6 && strings.Contains(line, " -j TPROXY ") {
+			return []byte("Couldn't load target `TPROXY'"), errors.New("exit 2")
+		}
+		return nil, nil
+	case name == "iptables" || name == "ip" || name == "ip6tables":
 		isAdd := strings.Contains(line, " add ") || strings.Contains(line, " -A ")
 		if h.failOnce != "" && isAdd && strings.Contains(line, h.failOnce) {
 			if h.failAfter == 0 {
@@ -469,4 +482,212 @@ func wireFor(t *testing.T, in InboundConfig) json.RawMessage {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// The IPv6 half (milestone 18.12).
+
+func handoffJSON6(t *testing.T, tp ChainTProxy) json.RawMessage {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{"port": tp.Port, "mark": tp.Mark, "ipv6": tp.IPv6})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// oneUp: what one up of an interface leaves, the defaults of its inbound and
+// then the hand-off's lines; the generalisation of stateOfOneUp for an inbound.
+func oneUp(t *testing.T, in InboundConfig, tp *ChainTProxy) host {
+	t.Helper()
+	in.Interface = "awg0"
+	in.Chain = tp
+	lines := in.withDefaults().PostUp
+	if tp != nil {
+		up, _ := hooks(t, *tp)
+		lines = append(append([]string{}, lines...), up...)
+	}
+	h := host{}
+	if err := runModel(h, "awg0", lines); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+func inboundV6() InboundConfig {
+	in := validInbound()
+	in.Address6 = "fd00:1::1/64"
+	return in
+}
+
+func TestAnInterfaceInAChainTakesNoIPv6ForwardAndNoMasquerade(t *testing.T) {
+	// Acceptance of 18.12: the three rules of 18.10 are for the direct way out,
+	// and this interface has none.
+	in := inboundV6()
+	in.Chain = &testTProxy6
+	cfg := in.withDefaults()
+	for _, l := range append(append([]string{}, cfg.PostUp...), cfg.PostDown...) {
+		if strings.HasPrefix(l, "ip6tables ") {
+			t.Errorf("an interface handed to a chain carries %q", l)
+		}
+	}
+	// The IPv4 rules are what they were.
+	pin := validInbound()
+	plain := pin.withDefaults()
+	if strings.Join(cfg.PostUp, "\n") != strings.Join(plain.PostUp, "\n") {
+		t.Errorf("the IPv4 defaults changed in a chain:\n%v\nwant\n%v", cfg.PostUp, plain.PostUp)
+	}
+	blob, err := renderConfig(in, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(blob, "Address = 10.66.66.1/24, fd00:1::1/64") {
+		t.Errorf("the IPv6 address of a steered interface is missing:\n%s", blob)
+	}
+
+	// A real prefix (18.11): the one drop stays, a new connection towards a
+	// client is not let in by a host whose FORWARD policy accepts.
+	in.NoNAT6 = true
+	cfg = in.withDefaults()
+	var ip6 []string
+	for _, l := range cfg.PostUp {
+		if strings.HasPrefix(l, "ip6tables ") {
+			ip6 = append(ip6, l)
+		}
+	}
+	if strings.Join(ip6, "|") != "ip6tables -I FORWARD 1 -o %i -j DROP" {
+		t.Errorf("real prefix in a chain: %v", ip6)
+	}
+	if !slicesContains(cfg.PostDown, "ip6tables -D FORWARD -o %i -j DROP") {
+		t.Errorf("PostDown does not take the drop away: %v", cfg.PostDown)
+	}
+}
+
+func slicesContains(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAChainWithoutIPv6TakesTheIPv6AddressAway(t *testing.T) {
+	// A push that still carries subnet6 for an interface the chain does not
+	// steer for IPv6 (a stale panel): the client's IPv6 would leave around the
+	// cascade, so the interface is rendered with none.
+	in := inboundV6()
+	in.NoNAT6 = true
+	in.Chain = &testTProxy
+	blob, err := renderConfig(in, []Peer{{PublicKey: testWGPubKeyA, AllowedIP: "10.66.66.2/32", AllowedIP6: "fd00:1::a42:4202/128"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(blob, "fd00:1") || strings.Contains(blob, "ip6tables") {
+		t.Errorf("IPv6 in the config of a chain interface without it:\n%s", blob)
+	}
+	// And with no chain at all it is the config of 18.10.
+	in.Chain = nil
+	in.NoNAT6 = false
+	blob, _ = renderConfig(in, nil)
+	if !strings.Contains(blob, "fd00:1::1/64") || !strings.Contains(blob, "ip6tables -t nat -A POSTROUTING") {
+		t.Errorf("an interface with no chain lost its IPv6:\n%s", blob)
+	}
+}
+
+func TestAHandOffWithIPv6DrawsTheIPv6LinesWhenTheHostCanSteerThem(t *testing.T) {
+	a, h := newHandoffAdapter(t)
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	n := len(h.calls)
+	if err := a.ApplyCascade(handoffJSON6(t, testTProxy6)); err != nil {
+		t.Fatalf("ApplyCascade: %v", err)
+	}
+	if b := h.bounced(n); len(b) != 0 {
+		t.Errorf("an IPv4-only interface was bounced for the hand-off: %v", b)
+	}
+	if !maps.Equal(h.state, oneUp(t, validInbound(), &testTProxy6)) {
+		t.Errorf("host holds %v", h.state)
+	}
+	// Withdrawn: every line, IPv6 included, is gone.
+	if err := a.ApplyCascade(nil); err != nil {
+		t.Fatal(err)
+	}
+	if !maps.Equal(h.state, oneUp(t, validInbound(), nil)) {
+		t.Errorf("after withdrawal the host holds %v", h.state)
+	}
+}
+
+func TestAHostThatCannotTProxyIPv6IsHandedTheIPv4LinesOnly(t *testing.T) {
+	a, h := newHandoffAdapter(t)
+	h.noTproxy6 = true
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if a.AwgTproxy6() {
+		t.Error("the fact is true on a kernel that refuses TPROXY for IPv6")
+	}
+	if err := a.ApplyCascade(handoffJSON6(t, testTProxy6)); err != nil {
+		t.Fatalf("ApplyCascade: %v", err)
+	}
+	if !maps.Equal(h.state, oneUp(t, validInbound(), &testTProxy)) {
+		t.Errorf("the host holds %v, want the IPv4 hand-off alone", h.state)
+	}
+	// The probe left no chain behind.
+	for _, c := range h.calls {
+		if strings.Contains(c, "-N "+probeChain) {
+			return
+		}
+	}
+	t.Error("the probe never tried")
+}
+
+func TestTheFactSaysTheHostCanSteerIPv6(t *testing.T) {
+	a, _ := newHandoffAdapter(t)
+	if !a.AwgTproxy6() {
+		t.Error("awgTproxy6 false on a host that takes the probe")
+	}
+	if a.v3 != nil && !a.v3.AwgTproxy6() {
+		t.Error("the 3.1 instance shares the answer")
+	}
+}
+
+func TestHandingAnIPv6InterfaceToAChainBouncesItAndWithdrawingBouncesBack(t *testing.T) {
+	// The default ip6tables rules of an interface are not in the hand-off's
+	// hooks, so a live swap would leave the kernel holding what the file no
+	// longer says; this is the one case that goes through the bounce.
+	a, h := newHandoffAdapter(t)
+	a.cfg.Inbound = inboundV6()
+	a.cfg.Inbound.Interface = "awg0"
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !maps.Equal(h.state, oneUp(t, inboundV6(), nil)) {
+		t.Fatalf("after Start: %v", h.state)
+	}
+	n := len(h.calls)
+	if err := a.ApplyCascade(handoffJSON6(t, testTProxy6)); err != nil {
+		t.Fatalf("ApplyCascade: %v", err)
+	}
+	if len(h.bounced(n)) != 2 {
+		t.Errorf("expected down and up, got %v", h.bounced(n))
+	}
+	if want := oneUp(t, inboundV6(), &testTProxy6); !maps.Equal(h.state, want) {
+		t.Errorf("in the chain the host holds %v, want %v", h.state, want)
+	}
+	for k := range h.state {
+		if strings.Contains(k, "ip6tables -t nat") || strings.Contains(k, "FORWARD") && strings.Contains(k, "ip6tables") {
+			t.Errorf("a direct IPv6 way out is still in the kernel: %s", k)
+		}
+	}
+	n = len(h.calls)
+	if err := a.ApplyCascade(nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.bounced(n)) != 2 {
+		t.Errorf("withdrawing: expected down and up, got %v", h.bounced(n))
+	}
+	if !maps.Equal(h.state, oneUp(t, inboundV6(), nil)) {
+		t.Errorf("after withdrawal: %v", h.state)
+	}
 }

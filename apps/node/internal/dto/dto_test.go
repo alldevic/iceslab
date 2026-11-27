@@ -92,3 +92,40 @@ func TestSingboxUserCorePayload(t *testing.T) {
 		}
 	}
 }
+
+// Milestone 18.12: the IPv6 flag of the TPROXY hand-off. Absent it, the payload
+// is the bytes of before; an agent that does not know the key reads the rest.
+func TestAmneziawgHandoffCarriesTheIPv6FlagOnlyWhenSet(t *testing.T) {
+	uc := ChainUserCore{Engine: EngineAmneziawg, TProxy: &ChainUserCoreTProxy{Port: 25000, Mark: 66000}}
+	plain, err := uc.Payload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(plain) != `{"port":25000,"mark":66000}` {
+		t.Errorf("payload without the flag changed: %s", plain)
+	}
+	uc6 := ChainUserCore{
+		Engine:  EngineAmneziawg,
+		TProxy:  &ChainUserCoreTProxy{Port: 25000, Mark: 66000, IPv6: true},
+		TProxy3: &ChainUserCoreTProxy{Port: 25000, Mark: 66001, IPv6: true},
+	}
+	with, err := uc6.Payload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(with) != `{"port":25000,"mark":66000,"ipv6":true,"tproxy3":{"port":25000,"mark":66001,"ipv6":true}}` {
+		t.Errorf("payload with the flag: %s", with)
+	}
+	// An agent of 18.11 reads the same bytes into the shape it had.
+	var old struct {
+		Port    int    `json:"port"`
+		Mark    uint32 `json:"mark"`
+		TProxy3 *struct {
+			Port int    `json:"port"`
+			Mark uint32 `json:"mark"`
+		} `json:"tproxy3"`
+	}
+	if err := json.Unmarshal(with, &old); err != nil || old.Port != 25000 || old.Mark != 66000 || old.TProxy3 == nil || old.TProxy3.Mark != 66001 {
+		t.Errorf("an agent that does not know the flag read %+v, %v", old, err)
+	}
+}

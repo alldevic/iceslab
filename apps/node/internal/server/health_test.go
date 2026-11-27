@@ -565,3 +565,29 @@ func TestHysteriaReportsWhatItExecutesOfTheResolver(t *testing.T) {
 		}
 	}
 }
+
+// tproxy6Core also answers the 18.12 fact.
+type tproxy6Core struct {
+	ipv6Core
+	tp6 func() bool
+}
+
+func (c *tproxy6Core) AwgTproxy6() bool { return c.tp6() }
+
+// Milestone 18.12: awgTproxy6 travels on the amneziawg row when the host can steer
+// IPv6, and says nothing otherwise (absent is no, the ban of 18.9 stays).
+func TestAwgTproxy6TravelsOnlyWhenTheHostCanSteerIPv6(t *testing.T) {
+	core := func(tp bool) *tproxy6Core {
+		return &tproxy6Core{ipv6Core{fakeCore{name: "amneziawg", running: true}, func() bool { return true }}, func() bool { return tp }}
+	}
+	if yes := healthBody(t, core(true)); !strings.Contains(yes, `"awgTproxy6":true`) {
+		t.Errorf("the fact is missing: %s", yes)
+	}
+	if no := healthBody(t, core(false)); strings.Contains(no, `"awgTproxy6"`) {
+		t.Errorf("a host that cannot steer sent the fact: %s", no)
+	}
+	old := healthBody(t, &noNat6Core{ipv6Core{fakeCore{name: "amneziawg", running: true}, func() bool { return true }}})
+	if strings.Contains(old, `"awgTproxy6"`) {
+		t.Errorf("an agent of 18.11 sent the fact: %s", old)
+	}
+}

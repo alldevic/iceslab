@@ -483,6 +483,7 @@ type ChainUserCore struct {
 type AwgHandoff struct {
 	Port    int                  `json:"port,omitempty"`
 	Mark    uint32               `json:"mark,omitempty"`
+	IPv6    bool                 `json:"ipv6,omitempty"`
 	TProxy3 *ChainUserCoreTProxy `json:"tproxy3,omitempty"`
 }
 
@@ -493,6 +494,10 @@ type AwgHandoff struct {
 type ChainUserCoreTProxy struct {
 	Port int    `json:"port"`
 	Mark uint32 `json:"mark"`
+	// IPv6 (milestone 18.12): the interface carries IPv6 in the tunnel, so the
+	// agent mirrors the steering for IPv6 (to ::1 on the same port). Absent for
+	// an interface that does not; an agent that does not know the key ignores it.
+	IPv6 bool `json:"ipv6,omitempty"`
 }
 
 // ChainUserCoreSocks mirrors ChainUserCoreSocks in shared/transport.ts: where a
@@ -562,7 +567,7 @@ func (u *ChainUserCore) Payload() (json.RawMessage, error) {
 		}
 		h := AwgHandoff{TProxy3: u.TProxy3}
 		if u.TProxy != nil {
-			h.Port, h.Mark = u.TProxy.Port, u.TProxy.Mark
+			h.Port, h.Mark, h.IPv6 = u.TProxy.Port, u.TProxy.Mark, u.TProxy.IPv6
 		}
 		return json.Marshal(h)
 	case EngineSingbox:
@@ -848,6 +853,11 @@ type CoreStatus struct {
 	// 18.11), so a prefix routed to the node gets no NAT66. Absent for an agent of
 	// 18.10, which the panel keeps on NAT66 for such a node.
 	AwgNoNat6 bool `json:"awgNoNat6,omitempty"`
+	// AwgTproxy6: this agent can steer the IPv6 of a cascade entry's clients into
+	// the chain (milestone 18.12: xt_TPROXY for IPv6 on the host, tried with a rule
+	// in a scratch chain). Absent for an agent of 18.11 and for a host without it:
+	// the panel then keeps IPv6 off an interface handed to a chain.
+	AwgTproxy6 bool `json:"awgTproxy6,omitempty"`
 	// Provisioned tells "this core has a config and should be running" apart
 	// from "nobody has configured this core yet". The installer registers an
 	// adapter for every protocol the operator might switch on later, so an
