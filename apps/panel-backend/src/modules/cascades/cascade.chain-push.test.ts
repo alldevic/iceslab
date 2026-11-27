@@ -8,6 +8,7 @@ import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { getCascadeFragmentsForNode, getChainForNode } from './cascade.service.js';
 import { chainSocksPort } from './chain.ports.js';
 import { readChainSecret } from '../nodes/chain-secret.js';
+import { requestFingerprint } from '../inbounds/render-drift.js';
 
 /**
  * К6: what one push carries once the chain is its own process.
@@ -191,5 +192,71 @@ describe('the chain block in a push', () => {
     // time the cascade is switched back on would leave the node's core and its
     // chain process holding two different passwords for one handover.
     expect(await readChainSecret(entry)).not.toBeNull();
+  });
+});
+
+describe('the IPv6 facts of a hop (18.8)', () => {
+  const facts = (o: Record<string, unknown>) => ({
+    cores: [],
+    observedAt: '2026-11-27T00:00:00Z',
+    ipv6: { stack: true, global: true, addresses: ['2001:db8::7'], ...o },
+  });
+  type ChainCfg = {
+    inbounds: { tag: string; listen: string }[];
+    outbounds: { tag: string; domain_resolver?: unknown }[];
+  };
+
+  it('a poll that brings IPv6 to a hop changes what the drift check compares, and what is drawn', async () => {
+    const entry = await makeNode('ru-entry');
+    const nl = await makeNode('nl-exit');
+    const se = await makeNode('se-exit');
+    await makeCascade(entry, [nl, se]);
+
+    // No fact: the exit is drawn as always.
+    const before = await getChainForNode(nl);
+    const plain = before!.config as unknown as ChainCfg;
+    expect(plain.inbounds.find((i) => i.tag === 'link-in')!.listen).toBe('0.0.0.0');
+    expect(plain.outbounds.find((o) => o.tag === 'direct')).toEqual({ type: 'direct', tag: 'direct' });
+    const sha = (c: unknown) => requestFingerprint({ chain: c } as never);
+
+    // The poll writes the report (coresWorthWriting says yes: `ipv6` moved).
+    await prisma.node.update({ where: { id: nl }, data: { cores: facts({ egress: true }) } });
+    const after = await getChainForNode(nl);
+    const drawn = after!.config as unknown as ChainCfg;
+    expect(drawn.inbounds.find((i) => i.tag === 'link-in')!.listen).toBe('::');
+    expect(drawn.outbounds.find((o) => o.tag === 'direct')!.domain_resolver).toEqual({
+      server: 'leg-dns',
+      strategy: 'prefer_ipv6',
+    });
+    expect(sha(after)).not.toBe(sha(before));
+    expect(JSON.stringify(await getCascadeFragmentsForNode(nl))).toContain('"listen":"::"');
+  });
+
+  it('the exit follows the node\'s mode, the listener follows the stack alone', async () => {
+    const entry = await makeNode('ru-entry');
+    const nl = await makeNode('nl-exit');
+    const se = await makeNode('se-exit');
+    await makeCascade(entry, [nl, se]);
+
+    await prisma.node.update({ where: { id: nl }, data: { cores: facts({ egress: true }), ipv6Mode: 'off' } });
+    const off = (await getChainForNode(nl))!.config as unknown as ChainCfg;
+    expect(off.inbounds.find((i) => i.tag === 'link-in')!.listen).toBe('::');
+    expect(off.outbounds.find((o) => o.tag === 'direct')).toEqual({ type: 'direct', tag: 'direct' });
+
+    await prisma.node.update({ where: { id: nl }, data: { cores: facts({ egress: false }), ipv6Mode: 'on' } });
+    const on = (await getChainForNode(nl))!.config as unknown as ChainCfg;
+    expect(on.outbounds.find((o) => o.tag === 'direct')).toHaveProperty('domain_resolver');
+  });
+
+  it("the next hop's firewall names the previous hop's IPv6 addresses", async () => {
+    const entry = await makeNode('ru-entry');
+    const nl = await makeNode('nl-exit');
+    const se = await makeNode('se-exit');
+    await makeCascade(entry, [nl, se]);
+    const host = (await prisma.node.findUniqueOrThrow({ where: { id: entry } })).address;
+
+    await prisma.node.update({ where: { id: entry }, data: { cores: facts({ addresses: ['2001:db8::9'] }) } });
+    const chain = await getChainForNode(nl);
+    expect(chain!.linkIngress![0]!.allowFrom).toEqual([host.split(':')[0], '2001:db8::9'].sort());
   });
 });

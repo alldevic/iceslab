@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { linkListenOf, linkSourcesOf, type NodeIpv6Fact } from './link-ipv6.js';
 import { generateRealityKeyPair } from '../../lib/auth/credentials.js';
 import {
   DEFAULT_LINK_CONGESTION,
@@ -928,6 +929,8 @@ export interface CascadeConfigHopInput {
   position: number;
   /** Public host the PREVIOUS hop dials to reach this node's link inbound. */
   nodeHost: string;
+  /** 18.8: this node's IPv6 facts; absent = none. */
+  ipv6?: NodeIpv6Fact;
 }
 
 export interface HopConfig {
@@ -968,11 +971,11 @@ const QUIC_BLOCK_RULE: Record<string, unknown> = {
   outboundTag: 'blocked',
 };
 
-function vlessLinkInbound(cred: VlessLinkCred): Record<string, unknown> {
+function vlessLinkInbound(cred: VlessLinkCred, listen: string): Record<string, unknown> {
   return {
     tag: LINK_IN_TAG,
     port: cred.port,
-    listen: '0.0.0.0',
+    listen,
     protocol: 'vless',
     settings: {
       // VISION on the receiving side too: the flow is negotiated per user, so
@@ -1077,11 +1080,11 @@ function vlessLinkOutbound(host: string, cred: VlessLinkCred): Record<string, un
 // SS2022 link cell (C3b). Single shared PSK point-to-point, so no per-user
 // `clients` array (unlike the multi-user SS inbound the standalone adapter
 // renders). No streamSettings: SS carries its own transport over plain TCP/UDP.
-function ssLinkInbound(cred: Ss2022LinkCred): Record<string, unknown> {
+function ssLinkInbound(cred: Ss2022LinkCred, listen: string): Record<string, unknown> {
   return {
     tag: LINK_IN_TAG,
     port: cred.port,
-    listen: '0.0.0.0',
+    listen,
     protocol: 'shadowsocks',
     settings: { method: cred.method, password: cred.psk, network: 'tcp,udp' },
   };
@@ -1119,12 +1122,13 @@ function refuseQuicCell(cred: LinkCred): never {
   );
 }
 
-function linkInbound(cred: LinkCred): Record<string, unknown> {
+function linkInbound(cred: LinkCred, ipv6?: NodeIpv6Fact): Record<string, unknown> {
+  const listen = linkListenOf(ipv6);
   switch (cred.protocol) {
     case 'shadowsocks':
-      return ssLinkInbound(cred);
+      return ssLinkInbound(cred, listen);
     case 'vless':
-      return vlessLinkInbound(cred);
+      return vlessLinkInbound(cred, listen);
     default:
       return refuseQuicCell(cred);
   }
@@ -1185,6 +1189,12 @@ export interface TopologyInput {
   links: TopologyLinkRow[];
   /** Public host per node id, for both dialling and firewall allow-lists. */
   hosts: Map<string, string>;
+  /**
+   * 18.8: the IPv6 facts of the nodes, by id. A node absent here has none
+   * (never polled, an older agent), and its listeners, allow-lists and exit
+   * are drawn as before. Never read for a node's address: `hosts` is that.
+   */
+  nodeIpv6?: Map<string, NodeIpv6Fact>;
   policies?: CascadePolicy[];
   /** Emit the AUTO profile: one extra rule at the entry that hands the exit
    *  choice to a latency balancer spanning every direction. Off unless the
@@ -1510,9 +1520,9 @@ export function buildTopologyFragmentsForNode(
             `firewall cannot be told who may dial the link port`,
         );
       }
-      allowFrom.push(host);
+      allowFrom.push(...linkSourcesOf(host, input.nodeIpv6?.get(l.fromNodeId)));
     }
-    inbounds.push(multiClientLinkInbound(incoming));
+    inbounds.push(multiClientLinkInbound(incoming, linkListenOf(input.nodeIpv6?.get(nodeId))));
   }
 
   // ── Outbound side: one outbound per leg, grouped by direction.
@@ -1815,13 +1825,13 @@ export function buildTopologyFragmentsForNode(
  * xray, which matters here: pre-v4 the SS cell was strictly point-to-point (one
  * PSK per inbound), and that shape cannot carry several directions on one port.
  */
-function multiClientLinkInbound(links: TopologyLinkRow[]): Record<string, unknown> {
+function multiClientLinkInbound(links: TopologyLinkRow[], listen: string): Record<string, unknown> {
   const first = links[0]!.cred;
   if (first.protocol === 'shadowsocks') {
     return {
       tag: LINK_IN_TAG,
       port: first.port,
-      listen: '0.0.0.0',
+      listen,
       protocol: 'shadowsocks',
       settings: {
         clients: links
@@ -1861,7 +1871,7 @@ function multiClientLinkInbound(links: TopologyLinkRow[]): Record<string, unknow
   return {
     tag: LINK_IN_TAG,
     port: first.port,
-    listen: '0.0.0.0',
+    listen,
     protocol: 'vless',
     settings: {
       clients: vless.map((l) => ({
@@ -1900,7 +1910,7 @@ export function buildCascadeConfigs(
     const linkIn = i > 0 ? linkCreds[i - 1] : null;
     const linkOut = i < n - 1 ? linkCreds[i] : null;
 
-    const inbounds = linkIn ? [linkInbound(linkIn)] : [];
+    const inbounds = linkIn ? [linkInbound(linkIn, hop.ipv6)] : [];
     const outbounds: Record<string, unknown>[] = [];
     if (linkOut) outbounds.push(linkOutbound(sorted[i + 1]!.nodeHost, linkOut, hop.nodeHost));
     outbounds.push(freedomOutbound);
@@ -1936,7 +1946,7 @@ export function buildCascadeConfigs(
     // The link-in (when present) is dialed by the PREVIOUS hop, so the agent
     // firewalls this hop's link port to that hop's host.
     const linkIngressPort = linkIn ? linkIn.port : undefined;
-    const linkAllowFrom = linkIn ? [sorted[i - 1]!.nodeHost] : undefined;
+    const linkAllowFrom = linkIn ? linkSourcesOf(sorted[i - 1]!.nodeHost, sorted[i - 1]!.ipv6) : undefined;
 
     return {
       nodeId: hop.nodeId,
@@ -2174,11 +2184,11 @@ export function buildBalancerCascadeConfigs(
       nodeId: ex.nodeId,
       position: ex.position,
       role: 'exit',
-      inbounds: [linkInbound(cred)],
+      inbounds: [linkInbound(cred, ex.ipv6)],
       outbounds: [freedomOutbound],
       routingRules: [{ type: 'field', inboundTag: [LINK_IN_TAG], outboundTag: DIRECT_TAG }],
       linkIngressPort: cred.port,
-      linkAllowFrom: [entry.nodeHost],
+      linkAllowFrom: linkSourcesOf(entry.nodeHost, entry.ipv6),
     });
   });
 

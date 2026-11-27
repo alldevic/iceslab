@@ -189,3 +189,22 @@ func TestALinkPortWithNoSourceIsNotOpened(t *testing.T) {
 		t.Fatalf("opened %v", got)
 	}
 }
+
+// 18.8: a leg dialled over IPv6 arrives from an IPv6 address the panel did not
+// record as the hop's address. The panel names both families in one rule, and
+// each source gets its own ufw rule, IPv4 and IPv6 alike.
+func TestARuleNamingBothFamiliesOpensEachSource(t *testing.T) {
+	fw := recordChainFirewall(t)
+	s, _ := chainServer(t)
+	pushOver(t, s, chainPush(`{"port":24001,"transports":["tcp"],"allowFrom":["10.0.0.1","2001:db8::1","2001:db8::2"]}`))
+	want := "+24001/tcp<-10.0.0.1 +24001/tcp<-2001:db8::1 +24001/tcp<-2001:db8::2"
+	if got := joinOps(fw.take()); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	// The hop lost its IPv6 address: its rules are closed, the IPv4 one is ensured again.
+	pushOver(t, s, chainPush(`{"port":24001,"transports":["tcp"],"allowFrom":["10.0.0.1"]}`))
+	want = "+24001/tcp<-10.0.0.1 -24001/tcp<-2001:db8::1 -24001/tcp<-2001:db8::2"
+	if got := joinOps(fw.take()); got != want {
+		t.Fatalf("after the loss %q, want %q", got, want)
+	}
+}

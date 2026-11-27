@@ -97,6 +97,12 @@ export interface ChainLegIn {
    * this end, so the leg's port is not open to the internet at all.
    */
   listen?: string[];
+  /**
+   * 18.8: the node's agent reports the `::` stack, so the default listener
+   * binds `::` (both families) rather than `0.0.0.0`. Without it, and without
+   * `listen`, the render is what it always was.
+   */
+  dualStack?: boolean;
 }
 
 export interface ChainRenderInput {
@@ -141,6 +147,12 @@ export interface ChainRenderInput {
    * dialled over that address's family (dial-family.ts). Absent: no pin.
    */
   selfHost?: string;
+  /**
+   * 18.8: this node leaves by IPv6 (nodeExitsViaIpv6), so `direct` resolves
+   * names preferring IPv6, as the agent's own sing-box does (singbox
+   * directOutbound). Absent: `direct` as before.
+   */
+  egressIpv6?: boolean;
 }
 
 /** The exit's Cloudflare WARP egress, from the node's registered account. */
@@ -688,7 +700,8 @@ export function renderChainConfig(input: ChainRenderInput): Json {
     // `link-in` so a node without tunnels renders byte for byte as before; the
     // routing rules below match by link USER, which works on any of them.
     const base = linkInbound(input.in);
-    const addrs = input.in.listen && input.in.listen.length > 0 ? input.in.listen : ['0.0.0.0'];
+    const addrs =
+      input.in.listen && input.in.listen.length > 0 ? input.in.listen : [input.in.dualStack ? '::' : '0.0.0.0'];
     addrs.forEach((listen, i) => {
       inbounds.push(i === 0 && listen === '0.0.0.0' ? base : { ...base, tag: i === 0 ? 'link-in' : `link-in-${i}`, listen });
     });
@@ -713,6 +726,7 @@ export function renderChainConfig(input: ChainRenderInput): Json {
   }
   /** One leg out, one branch per CELL. Same switch as the inbound side, for the
    *  same reason: a new cell must not fall through into vless. */
+  const egressIpv6 = input.egressIpv6 === true;
   let legDns = false;
   const renderLeg = (tag: string, leg: ChainLegOut): Json => {
     const rendered = renderLegCell(tag, leg);
@@ -789,7 +803,11 @@ export function renderChainConfig(input: ChainRenderInput): Json {
   // everywhere else. No `block` and no `dns` outbound anywhere: those are the
   // legacy way of expressing what the actions above now say, and having both
   // is how a config comes to refuse traffic in two places with two answers.
-  outbounds.push({ type: 'direct', tag: 'direct' });
+  outbounds.push(
+    egressIpv6
+      ? { type: 'direct', tag: 'direct', domain_resolver: { server: LEG_DNS_TAG, strategy: 'prefer_ipv6' } }
+      : { type: 'direct', tag: 'direct' },
+  );
 
   if (input.role === 'entry') {
     for (const tag of input.directionTags ?? []) {
@@ -847,7 +865,7 @@ export function renderChainConfig(input: ChainRenderInput): Json {
     log: { level: 'warn' },
     // The resolver a pinned leg names (dial-family.ts): the system's, as an
     // unpinned leg uses, with only the family narrowed.
-    ...(legDns ? { dns: { servers: [{ type: 'local', tag: LEG_DNS_TAG }] } } : {}),
+    ...(legDns || egressIpv6 ? { dns: { servers: [{ type: 'local', tag: LEG_DNS_TAG }] } } : {}),
     inbounds,
     outbounds,
     ...(exitPolicy?.warp ? { endpoints: [warpEndpoint(exitPolicy.warp)] } : {}),

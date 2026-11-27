@@ -42,6 +42,7 @@ import {
   validateCascadeHops,
   validateCascadeTopology,
 } from './cascade.validation.js';
+import { linkSourcesOf, nodeIpv6FactOf, type NodeIpv6Fact } from './link-ipv6.js';
 import {
   autoRouteTag,
   buildCascadeConfigs,
@@ -2914,9 +2915,12 @@ export function chainLinkIngressOf(nodeId: string, t: TopologyInput): ChainLinkI
     if (l.toNodeId !== nodeId || l.underlay === 'awg') continue;
     const from = t.hosts.get(l.fromNodeId);
     if (!from) continue;
+    // The address as the panel has it, and the IPv6 addresses the host reports:
+    // the kernel picks the source of a leg dialled over IPv6, and that is not
+    // an IPv4 address or a name the rule was written for.
     const e = byPort.get(l.cred.port) ?? { transports: new Set<Transport>(), allowFrom: new Set<string>() };
     for (const x of LINK_CELL_TRANSPORTS[l.cred.protocol]) e.transports.add(x);
-    e.allowFrom.add(from);
+    for (const x of linkSourcesOf(from, t.nodeIpv6?.get(l.fromNodeId))) e.allowFrom.add(x);
     byPort.set(l.cred.port, e);
   }
   return [...byPort.entries()]
@@ -3158,6 +3162,8 @@ function chainInputFor(
   const inLeg = incoming[0]
     ? {
         ...(listen ? { listen } : {}),
+        // `::` takes IPv4 as well: only on a node whose agent says it has the stack.
+        ...(t.nodeIpv6?.get(nodeId)?.stack ? { dualStack: true } : {}),
         cred: incoming[0].cred,
         clients: incoming.map((l) => ({
           tag: l.directionTag,
@@ -3173,6 +3179,8 @@ function chainInputFor(
   const foreign = foreignOf(nodeId, t);
   // This node's address as the next hops' firewalls name it (A-111).
   const selfHost = t.hosts.get(nodeId);
+  // 18.8: the node's own `direct` resolves by IPv6 when the node leaves by it.
+  const egressIpv6 = t.nodeIpv6?.get(nodeId)?.exits === true;
   if (role === 'entry') {
     // The tags the user core may ask for, Auto first when the cascade offers
     // it. Auto has no leg of its own: the chain renders it as a group over the
@@ -3211,6 +3219,7 @@ function chainInputFor(
       role,
       socksPassword,
       ...(selfHost ? { selfHost } : {}),
+      ...(egressIpv6 ? { egressIpv6 } : {}),
       directionTags,
       out,
       ...(foreign.length > 0 ? { foreign } : {}),
@@ -3222,11 +3231,12 @@ function chainInputFor(
   }
   if (!inLeg) return null;
   return role === 'exit'
-    ? { role, socksPassword, in: inLeg }
+    ? { role, socksPassword, in: inLeg, ...(egressIpv6 ? { egressIpv6 } : {}) }
     : {
         role,
         socksPassword,
         ...(selfHost ? { selfHost } : {}),
+        ...(egressIpv6 ? { egressIpv6 } : {}),
         in: inLeg,
         out,
         ...(foreign.length > 0 ? { foreign } : {}),
@@ -3352,7 +3362,7 @@ async function buildCascadeFragmentsForNode(
     include: {
       hops: {
         orderBy: { position: 'asc' },
-        include: { node: { select: { id: true, address: true } } },
+        include: { node: { select: { id: true, address: true, cores: true, ipv6Mode: true } } },
       },
     },
   });
@@ -3370,6 +3380,7 @@ async function buildCascadeFragmentsForNode(
     // Public host the previous hop dials. node.address is host[:agentPort];
     // the link binds its own port (cred.port), so strip any agent port.
     nodeHost: linkHostOf(h.node.address),
+    ipv6: nodeIpv6FactOf(h.node.cores as NodeCores | null, h.node.ipv6Mode),
   }));
 
   // A4 ad-split: emit EVERY defined policy's rules on the entry (policies are
@@ -3553,9 +3564,23 @@ async function readTopologyForNode(nodeId: string): Promise<TopologyInput | null
   // buildTopologyFragmentsForNode refuses out loud.
   const nodeRows = await prisma.node.findMany({
     where: { id: { in: [...nodeIds] }, deletedAt: null },
-    select: { id: true, address: true },
+    select: { id: true, address: true, cores: true, ipv6Mode: true },
   });
   const hosts = new Map(nodeRows.map((n) => [n.id, linkHostOf(n.address)]));
+  // 18.8: what each node says of IPv6, for the listeners, the firewall sources
+  // and the exit. A node without a fact reads as having none.
+  const nodeIpv6 = new Map<string, NodeIpv6Fact>();
+  for (const n of nodeRows) {
+    const f = nodeIpv6FactOf(n.cores as NodeCores | null, n.ipv6Mode);
+    if (f) nodeIpv6.set(n.id, f);
+  }
+  // The node being drawn may hold no link (an entry with only a named outbound):
+  // its own exit still counts.
+  if (!nodeRows.some((n) => n.id === nodeId)) {
+    const self = await prisma.node.findUnique({ where: { id: nodeId }, select: { cores: true, ipv6Mode: true } });
+    const f = self ? nodeIpv6FactOf(self.cores as NodeCores | null, self.ipv6Mode) : undefined;
+    if (f) nodeIpv6.set(nodeId, f);
+  }
 
   const rows: TopologyLinkRow[] = [];
   for (const l of links) {
@@ -3584,6 +3609,7 @@ async function readTopologyForNode(nodeId: string): Promise<TopologyInput | null
     })),
     links: rows,
     hosts,
+    ...(nodeIpv6.size > 0 ? { nodeIpv6 } : {}),
     // As stored, the operator's spelling. Each renderer translates for its own
     // engine: the xray fragments in cascade.config.ts (xrayGeoEntry), the chain
     // in chain-policy.ts.
