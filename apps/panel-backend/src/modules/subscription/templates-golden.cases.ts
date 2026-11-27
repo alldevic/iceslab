@@ -1,4 +1,4 @@
-import type { RoutingPresetId } from '@iceslab/shared';
+import type { DnsRule, RoutingPresetId } from '@iceslab/shared';
 import type { SubscriptionEndpoint } from './subscription.formats.js';
 import type { DeviceRouteRule } from '../routing-presets/routing-presets.builtins.js';
 import { buildClashYaml } from './formats/clash.js';
@@ -96,10 +96,19 @@ const PRESETS: { key: string; opts: { routingPreset?: RoutingPresetId; ownPreset
 ];
 
 // Stage 19.4: DNS rules of the kinds xray runs, and a DoT one it does not.
-const DNS_RULES = [
+const XRAY_DNS_RULES: DnsRule[] = [
   { match: ['corp.example', 'geosite:category-ads-all'], server: 'tcp://10.0.0.2', note: '' },
   { match: ['full:www.other.example'], server: 'https://dns.corp.example/dns-query', note: '' },
   { match: ['skipped.example'], server: 'tls://10.0.0.9', note: '' },
+];
+
+// Milestone 19.6: DNS rules of every server kind, two of them on one server.
+const SINGBOX_DNS_RULES: DnsRule[] = [
+  { match: ['domain:corp.example', 'full:host.corp.example'], server: 'tcp://10.0.0.1', note: '' },
+  { match: ['geosite:category-ru'], server: '10.0.0.2', note: '' },
+  { match: ['intra.example'], server: 'tcp://10.0.0.1', note: '' },
+  { match: ['dot.example'], server: 'tls://dns.example:8853', note: '' },
+  { match: ['doh.example'], server: 'https://dns.example/q', note: '' },
 ];
 
 const CDL = { direct: ['domain:direct.example', 'plain.example'], proxy: ['proxied.example'], block: ['ads.example'] };
@@ -115,6 +124,7 @@ export function goldenCases(): Record<string, () => string> {
       out[k('clash', '/cdl')] = () => buildClashYaml(eps, { ...p.opts, customDomainLists: CDL });
       out[k('singbox')] = () => buildSingboxJson(eps, { ...p.opts });
       out[k('singbox', '/url-test')] = () => buildSingboxJson(eps, { ...p.opts, bundle: 'url-test' });
+      out[k('singbox', '/dns')] = () => buildSingboxJson(eps, { ...p.opts, dnsRules: SINGBOX_DNS_RULES });
       out[k('xrayjson')] = () => buildXrayJson(eps, { ...p.opts });
       out[k('xrayjson', '/balancer')] = () => buildXrayJson(eps, { ...p.opts, bundle: 'balancer' });
       out[k('xrayjson', '/all-options')] = () =>
@@ -131,9 +141,9 @@ export function goldenCases(): Record<string, () => string> {
   for (const [set, eps] of Object.entries(SETS)) {
     for (const p of PRESETS) {
       const k = (fmt: string) => `${fmt}/${set}/${p.key}/dns-rules`;
-      out[k('xrayjson')] = () => buildXrayJson(eps, { ...p.opts, dnsRules: DNS_RULES });
-      out[k('xkeen')] = () => buildXrayJson(eps, { ...p.opts, forRouter: true, dnsRules: DNS_RULES });
-      out[k('xrayjson-array')] = () => buildXrayJsonArray(eps, { ...p.opts, dnsRules: DNS_RULES });
+      out[k('xrayjson')] = () => buildXrayJson(eps, { ...p.opts, dnsRules: XRAY_DNS_RULES });
+      out[k('xkeen')] = () => buildXrayJson(eps, { ...p.opts, forRouter: true, dnsRules: XRAY_DNS_RULES });
+      out[k('xrayjson-array')] = () => buildXrayJsonArray(eps, { ...p.opts, dnsRules: XRAY_DNS_RULES });
     }
   }
   return out;

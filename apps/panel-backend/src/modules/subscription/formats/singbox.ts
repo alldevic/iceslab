@@ -3,7 +3,7 @@ import { emitsVisionFlow, isPlainXray, type SubscriptionEndpoint } from '../subs
 import { makeTagger } from '../endpoint-identity.js';
 import { exitsHaveIpv6, singboxDnsStrategy } from '../subscription.address-family.js';
 import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
-import { singboxDeviceRoute } from '../subscription.device-rules.js';
+import { singboxDeviceRoute, singboxDnsRules } from '../subscription.device-rules.js';
 import type { SelfHostedGeo } from '../../geo-sets/geo-self-host.js';
 import type { SingboxExtRef } from '../../geo-sets/geo-ext-lists.js';
 import { asArray, asObject, defaultFrame, insertAfter, openFrame, type Frame } from '../subscription.frames.js';
@@ -32,8 +32,8 @@ import { asArray, asObject, defaultFrame, insertAfter, openFrame, type Frame } f
  *     without restart.
  *
  * A single minimal `tun` inbound (see buildSingboxJson); no `experimental`, the
- * client app fills that in. `dns` only under a built-in split preset (splitDns
- * in fillSingboxFrame).
+ * client app fills that in. `dns` only under a built-in split preset or with DNS
+ * rules in force (dnsBlock in fillSingboxFrame).
  */
 /**
  * Slice 29: when `bundle === 'url-test'`, the formatter wraps proxy tags in
@@ -50,8 +50,8 @@ export interface SingboxBuildOpts {
   routingPreset?: RoutingPresetId;
   /** A-229: an own preset's rules, in place of the built-in preset's. */
   ownPresetRules?: readonly DeviceRouteRule[];
-  /** Stage 19.2: the DNS rules in force (the preset's own, then the panel-wide);
-   *  delivered, not read yet: the formats start writing them in 19.4-19.6. */
+  /** Stage 19: the DNS rules in force (the preset's own, then the panel-wide);
+   *  sing-box 1.12+ runs them (19.6, see fillSingboxFrame). */
   dnsRules?: readonly DnsRule[];
   /** A-236: the operator template to fill; absent = the Default in the code. */
   frame?: Frame;
@@ -82,7 +82,8 @@ export interface SingboxBuildOpts {
  *
  * Split DNS is emitted only under a built-in split preset, in the one shape
  * sing-box 1.12+ accepts (see fillSingboxFrame); proxy-all and an own preset
- * have no regional half to resolve differently and get none.
+ * have no regional half to resolve differently and get a `dns` block only when
+ * DNS rules (stage 19) are in force.
  */
 // The route rules and rule-sets of a preset are rendered from its
 // DeviceRouteRule list (subscription.device-rules.ts, A-229): the built-ins' and an own
@@ -374,6 +375,7 @@ export function buildSingboxJson(
       strategy: singboxDnsStrategy(exitsHaveIpv6(endpoints)),
       geo: opts.geo,
       extRefs: opts.extRefs,
+      dnsRules: opts.dnsRules,
     }) + '\n'
   );
 }
@@ -381,31 +383,46 @@ export function buildSingboxJson(
 const REGIONAL_DNS_TAG = 'dns-regional';
 const REGIONAL_DNS_SERVER: Partial<Record<RoutingPresetId, string>> = { 'ru-split': '77.88.8.8', 'cn-split': '223.5.5.5' };
 
+const LOCAL_DNS_TAG = 'dns-local';
+
 /**
- * The split DNS block of a built-in split preset, null for anything else.
- * `routeRules` are the preset's rendered route rules: the rule sets of the
- * domains that go direct (`geosite-*`) are the regional half.
+ * The `dns` block and the server `route.default_domain_resolver` names, or null
+ * for none. A built-in split preset has the regional half (its `geosite-*` rule
+ * sets, the domains that go direct, resolved by the regional server); the
+ * operator's DNS rules (milestone 19.6, `operator`) stand in front of it in
+ * `dns.rules`, so a name both name goes to the operator's server wholly. With no
+ * regional half the block exists only for operator rules, and the default
+ * resolver for the proxy's own host name is the system one (`local`): there is
+ * no regional server to take that part. `routeRules` are the preset's rendered
+ * route rules.
  */
-function splitDns(
+function dnsBlock(
   preset: RoutingPresetId | null,
   routeRules: readonly Record<string, unknown>[],
   proxyTag: string,
   strategy: string | undefined,
-): Record<string, unknown> | null {
+  operator: { servers: Record<string, unknown>[]; rules: Record<string, unknown>[] },
+): { dns: Record<string, unknown>; resolver: string } | null {
   const server = preset ? REGIONAL_DNS_SERVER[preset] : undefined;
-  if (!server) return null;
-  const regionalSets = routeRules.flatMap((r) =>
-    r.outbound === 'direct' ? asArray(r.rule_set).filter((t): t is string => typeof t === 'string' && t.startsWith('geosite-')) : [],
-  );
-  if (regionalSets.length === 0) return null;
+  const regionalSets = server
+    ? routeRules.flatMap((r) =>
+        r.outbound === 'direct' ? asArray(r.rule_set).filter((t): t is string => typeof t === 'string' && t.startsWith('geosite-')) : [],
+      )
+    : [];
+  const regional = server !== undefined && regionalSets.length > 0;
+  if (!regional && operator.rules.length === 0) return null;
   return {
-    servers: [
-      { type: 'udp', tag: REGIONAL_DNS_TAG, server },
-      { type: 'https', tag: 'dns-proxy', server: '1.1.1.1', detour: proxyTag },
-    ],
-    rules: [{ rule_set: regionalSets, server: REGIONAL_DNS_TAG }],
-    final: 'dns-proxy',
-    ...(strategy ? { strategy } : {}),
+    dns: {
+      servers: [
+        regional ? { type: 'udp', tag: REGIONAL_DNS_TAG, server } : { type: 'local', tag: LOCAL_DNS_TAG },
+        { type: 'https', tag: 'dns-proxy', server: '1.1.1.1', detour: proxyTag },
+        ...operator.servers,
+      ],
+      rules: [...operator.rules, ...(regional ? [{ rule_set: regionalSets, server: REGIONAL_DNS_TAG }] : [])],
+      final: 'dns-proxy',
+      ...(strategy ? { strategy } : {}),
+    },
+    resolver: regional ? REGIONAL_DNS_TAG : LOCAL_DNS_TAG,
   };
 }
 
@@ -463,9 +480,10 @@ function urltestDefault(opts: SingboxBuildOpts): Frame {
  *     reference to one (route.final, a rule's outbound) becomes `direct`;
  *   - `iceslab.routing: preset` puts the preset's rules and rule-sets ahead of
  *     the frame's own; a `proxy` rule goes where route.final goes;
- *   - the same switch with a built-in split preset, a node and no `dns` of the
- *     frame's own adds the split DNS block (below) and
- *     `route.default_domain_resolver`.
+ *   - the same switch with a node and no `dns` of the frame's own adds the DNS
+ *     block (below) and `route.default_domain_resolver`: under a built-in split
+ *     preset always, otherwise (proxy-all, an own preset) only when DNS rules
+ *     are in force. The rules then also get the DNS hijack (below).
  *
  * Split DNS, in the one shape every release that can read this config accepts.
  * Measured by the fork with `sing-box check`: 1.11.15 rejects the subscription
@@ -479,6 +497,16 @@ function urltestDefault(opts: SingboxBuildOpts): Frame {
  * singboxDeviceRoute's own output. `default_domain_resolver` points at the
  * regional server: it resolves the proxy's own hostname, which must not depend
  * on the proxy. `check` proves the config loads, not that resolution behaves.
+ *
+ * DNS rules (milestone 19.6, stage 19): one typed server per distinct server
+ * string with `detour` on the proxy (a server through the tunnel needs it:
+ * m19-01), one `dns.rules` entry per rule, ahead of the regional one. `dns.rules`
+ * apply only to queries sing-box itself takes, so `route.rules` opens with a
+ * `hijack-dns` rule (and a `sniff` limited to `dns` ahead of it, which is what
+ * lets `protocol: dns` match) unless the frame has its own; without it an app's
+ * query goes raw through the proxy to the resolver it asked. The `geosite:` sets
+ * the rules name are declared in `route.rule_set` once, whoever else names them.
+ * With no rules the output is what it was.
  * JSON.stringify with two spaces, as this builder always wrote.
  */
 function fillSingboxFrame(
@@ -486,7 +514,13 @@ function fillSingboxFrame(
   proxyOutbounds: Record<string, unknown>[],
   proxyTags: string[],
   deviceRules: readonly DeviceRouteRule[],
-  dnsOpts: { preset: RoutingPresetId | null; strategy: string | undefined; geo?: SelfHostedGeo | null; extRefs?: readonly SingboxExtRef[] },
+  dnsOpts: {
+    preset: RoutingPresetId | null;
+    strategy: string | undefined;
+    geo?: SelfHostedGeo | null;
+    extRefs?: readonly SingboxExtRef[];
+    dnsRules?: readonly DnsRule[];
+  },
 ): string {
   const { cfg, routing } = openFrame(frame);
   const own = asArray(cfg.outbounds).map(asObject);
@@ -513,15 +547,28 @@ function fillSingboxFrame(
   const preset = routing ? singboxDeviceRoute(deviceRules, target, dnsOpts.geo) : { rules: [], ruleSets: [] };
   // The operator's `ext:` lists come before the preset's rules, block first, as the clash rules do.
   const ext = routing ? extRuleSets(dnsOpts.extRefs ?? [], target) : { rules: [], ruleSets: [] };
-  const rules = [...ext.rules, ...preset.rules, ...ownRules];
-  const dns =
-    routing && target && cfg.dns === undefined ? splitDns(dnsOpts.preset, preset.rules, target, dnsOpts.strategy) : null;
-  const ruleSets = [...ext.ruleSets, ...preset.ruleSets.filter((s) => !ext.ruleSets.some((e) => e.tag === s.tag)), ...asArray(route.rule_set)];
+  const operator =
+    routing && target && cfg.dns === undefined
+      ? singboxDnsRules(dnsOpts.dnsRules ?? [], target, dnsOpts.geo)
+      : { servers: [], rules: [], ruleSets: [] };
+  const block = routing && target && cfg.dns === undefined ? dnsBlock(dnsOpts.preset, preset.rules, target, dnsOpts.strategy, operator) : null;
+  const dns = block?.dns ?? null;
+  // The hijack goes first: nothing of the frame's may route a DNS query away before it.
+  const hijack =
+    operator.rules.length > 0 && !ownRules.some((r) => r.action === 'hijack-dns')
+      ? [
+          ...(ownRules.some((r) => r.action === 'sniff') ? [] : [{ action: 'sniff', sniffer: ['dns'] }]),
+          { protocol: 'dns', action: 'hijack-dns' },
+        ]
+      : [];
+  const rules = [...hijack, ...ext.rules, ...preset.rules, ...ownRules];
+  const declared = [...ext.ruleSets, ...preset.ruleSets.filter((s) => !ext.ruleSets.some((e) => e.tag === s.tag)), ...asArray(route.rule_set)];
+  const ruleSets = [...declared, ...operator.ruleSets.filter((s) => !declared.some((e) => asObject(e).tag === s.tag))];
   const rest = Object.fromEntries(Object.entries(route).filter(([k]) => k !== 'rules' && k !== 'rule_set'));
   if (cfg.route !== undefined || rules.length > 0) {
     cfg.route = {
       ...(rules.length > 0 ? { rules, ...(ruleSets.length > 0 ? { rule_set: ruleSets } : {}) } : {}),
-      ...(dns && rest.default_domain_resolver === undefined ? { default_domain_resolver: REGIONAL_DNS_TAG } : {}),
+      ...(dns && rest.default_domain_resolver === undefined ? { default_domain_resolver: block!.resolver } : {}),
       ...rest,
     };
   }

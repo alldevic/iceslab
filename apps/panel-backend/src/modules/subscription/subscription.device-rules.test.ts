@@ -9,7 +9,7 @@ import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../routing-presets/r
 import { buildXrayJson, buildXrayJsonArray } from './formats/xrayjson.js';
 import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson } from './formats/singbox.js';
-import { effectiveDnsRules, xrayDnsPinRules, xrayDnsRules } from './subscription.device-rules.js';
+import { effectiveDnsRules, singboxDnsRules, xrayDnsPinRules, xrayDnsRules } from './subscription.device-rules.js';
 
 /**
  * A-229 part 4: device routing presets rendered from one structure.
@@ -393,5 +393,67 @@ describe('xrayDnsRules (stage 19.4)', () => {
     ]);
     expect(xrayDnsPinRules({ ips: ['10.0.0.2'], hosts: [] }, { balancerTag: 'b' })).toEqual([{ type: 'field', ip: ['10.0.0.2'], balancerTag: 'b' }]);
     expect(xrayDnsPinRules({ ips: [], hosts: [] }, { outboundTag: 'p' })).toEqual([]);
+  });
+});
+
+describe('singboxDnsRules (milestone 19.6)', () => {
+  const r = (server: string, ...match: string[]) => ({ match, server, note: '' });
+
+  it('a server of each kind, its names by kind', () => {
+    const out = singboxDnsRules(
+      [r('10.0.0.1', 'geosite:category-ru', 'a.example'), r('tcp://10.0.0.2:5300', 'full:b.example'), r('tls://dns.example', 'domain:c.example'), r('https://dns.example/q', 'd.example')],
+      'Auto',
+    );
+    expect(out.servers.map((s) => [s.type, s.tag])).toEqual([
+      ['udp', 'dns-udp-10.0.0.1'],
+      ['tcp', 'dns-tcp-10.0.0.2:5300'],
+      ['tls', 'dns-tls-dns.example'],
+      ['https', 'dns-https-dns.example/q'],
+    ]);
+    expect(out.servers.every((s) => s.detour === 'Auto')).toBe(true);
+    expect(out.rules).toEqual([
+      { rule_set: ['geosite-category-ru'], server: 'dns-udp-10.0.0.1' },
+      { domain_suffix: ['a.example'], server: 'dns-udp-10.0.0.1' },
+      { domain: ['b.example'], server: 'dns-tcp-10.0.0.2:5300' },
+      { domain_suffix: ['c.example'], server: 'dns-tls-dns.example' },
+      { domain_suffix: ['d.example'], server: 'dns-https-dns.example/q' },
+    ]);
+    expect(out.ruleSets.map((s) => s.tag)).toEqual(['geosite-category-ru']);
+  });
+
+  it('one server for two rules, one rule-set for two names of it', () => {
+    const out = singboxDnsRules([r('tcp://10.0.0.1', 'geosite:google'), r('tcp://10.0.0.1', 'geosite:google', 'x.example')], 'Auto');
+    expect(out.servers).toHaveLength(1);
+    expect(out.ruleSets).toHaveLength(1);
+    expect(out.rules).toHaveLength(3);
+  });
+
+  it('no proxy, nothing; a server that does not parse, skipped', () => {
+    expect(singboxDnsRules([r('10.0.0.1', 'a.example')], null)).toEqual({ servers: [], rules: [], ruleSets: [] });
+    expect(singboxDnsRules([r('udp://10.0.0.1', 'a.example')], 'Auto').rules).toEqual([]);
+  });
+});
+
+describe.skipIf(!SINGBOX_BIN)('sing-box check accepts DNS rules of every kind (milestone 19.6)', () => {
+  const r = (server: string, ...match: string[]) => ({ match, server, note: '' });
+  const dnsRules = [
+    r('10.0.0.1', 'a.example', 'geosite:category-ru'),
+    r('tcp://10.0.0.2:5300', 'full:b.example'),
+    r('tls://dns.example', 'domain:c.example'),
+    r('tls://[2001:db8::1]:8853', 'c6.example'),
+    r('https://dns.example:8443/q', 'd.example'),
+    r('https://1.1.1.1', 'e.example'),
+  ];
+  it.each([
+    ['proxy-all', { routingPreset: 'proxy-all' as const }],
+    ['ru-split', { routingPreset: 'ru-split' as const }],
+    ['cn-split', { routingPreset: 'cn-split' as const }],
+    ['own', { ownPresetRules: EVERY_KIND }],
+  ])('%s, selector and url-test', (_n, opts) => {
+    for (const bundle of ['selector', 'url-test'] as const) {
+      const config = buildSingboxJson(LOADABLE, { ...opts, bundle, dnsRules });
+      expect(JSON.parse(config).dns.rules.length).toBeGreaterThan(0);
+      expect(run(SINGBOX_BIN, (f) => ['check', '-c', f], config)).toBe('');
+    }
   });
 });

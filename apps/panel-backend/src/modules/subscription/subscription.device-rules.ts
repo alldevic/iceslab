@@ -1,5 +1,5 @@
 import { isIP } from 'node:net';
-import { GEO_SRS_NAME, parseDnsServer, type DnsRule } from '@iceslab/shared';
+import { DNS_DEFAULT_DOH_PATH, DNS_DEFAULT_PORTS, GEO_SRS_NAME, parseDnsServer, type DnsRule } from '@iceslab/shared';
 import type { DeviceRouteRule } from '../routing-presets/routing-presets.builtins.js';
 import type { SelfHostedGeo } from '../geo-sets/geo-self-host.js';
 import { parseGeoRef } from '../geo-sets/geo-names.js';
@@ -262,6 +262,63 @@ export function singboxDeviceRoute(
 }
 
 // ---------------------------------------------------------------- DNS rules
+
+/**
+ * Milestone 19.6: DNS rules as sing-box 1.12+ writes them: one typed server per
+ * distinct `server` string (two rules with one server share it) and, per rule,
+ * the `dns.rules` entries that send its names there. `detour` puts a server on
+ * the proxy outbound (measured, m19-01: through the tunnel a server needs it);
+ * with `proxyOutbound` null there is no proxy and nothing is written. Names go
+ * as in singboxDeviceRoute: `geosite:` as the `.srs` rule-set (listed in
+ * `ruleSets`, to be declared in `route.rule_set`), `full:` as `domain`, a
+ * `domain:` or bare name as `domain_suffix`. Fields of different kinds in one
+ * sing-box rule are ANDed, so rule-sets and inline names are separate rules.
+ * A rule whose server does not parse is skipped.
+ */
+export function singboxDnsRules(
+  rules: readonly DnsRule[],
+  proxyOutbound: string | null,
+  selfHosted?: SelfHostedGeo | null,
+): { servers: Record<string, unknown>[]; rules: Record<string, unknown>[]; ruleSets: Record<string, unknown>[] } {
+  const servers = new Map<string, Record<string, unknown>>();
+  const sets = new Map<string, Record<string, unknown>>();
+  const out: Record<string, unknown>[] = [];
+  if (!proxyOutbound) return { servers: [], rules: out, ruleSets: [] };
+  for (const r of rules) {
+    const s = parseDnsServer(r.server);
+    if (!s) continue;
+    const tag =
+      `dns-${s.kind}-${s.host}` +
+      (s.port !== DNS_DEFAULT_PORTS[s.kind] ? `:${s.port}` : '') +
+      (s.kind === 'https' && s.path !== DNS_DEFAULT_DOH_PATH ? s.path : '');
+    if (!servers.has(tag)) {
+      servers.set(tag, {
+        type: s.kind,
+        tag,
+        server: s.host,
+        ...(s.port !== DNS_DEFAULT_PORTS[s.kind] ? { server_port: s.port } : {}),
+        ...(s.kind === 'https' && s.path !== DNS_DEFAULT_DOH_PATH ? { path: s.path } : {}),
+        detour: proxyOutbound,
+      });
+    }
+    const geo: string[] = [];
+    const inline = { domain: [] as string[], domain_suffix: [] as string[] };
+    for (const m of r.match) {
+      if (m.startsWith('geosite:')) {
+        const rs = singboxRuleSet(m, selfHosted);
+        sets.set(rs.tag as string, rs);
+        if (!geo.includes(rs.tag as string)) geo.push(rs.tag as string);
+      } else if (m.startsWith('full:')) inline.domain.push(m.slice(5));
+      else if (m.startsWith('domain:')) inline.domain_suffix.push(m.slice(7));
+      else if (kindOf(m) === 'domain' && !/^(keyword|regexp|ext[a-z-]*):/.test(m)) inline.domain_suffix.push(m);
+    }
+    if (geo.length) out.push({ rule_set: geo, server: tag });
+    const names = Object.fromEntries(Object.entries(inline).filter(([, v]) => v.length > 0));
+    if (Object.keys(names).length) out.push({ ...names, server: tag });
+  }
+  return { servers: [...servers.values()], rules: out, ruleSets: [...sets.values()] };
+}
+
 
 /**
  * Stage 19.2: the DNS rules in force for a subscription. An own preset's

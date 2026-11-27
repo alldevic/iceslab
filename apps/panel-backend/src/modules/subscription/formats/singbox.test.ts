@@ -107,7 +107,7 @@ interface SbConfig {
   outbounds: SbOutbound[];
   dns?: {
     servers: Record<string, unknown>[];
-    rules: { rule_set: string[]; server: string }[];
+    rules: { rule_set?: string[]; server: string }[];
     final: string;
     strategy?: string;
   };
@@ -476,7 +476,7 @@ describe('buildSingboxJson', () => {
   // ───── Split DNS (f12-20) ─────
 
   describe('split DNS', () => {
-    const rulesOf = (cfg: SbConfig) => cfg.dns!.rules.flatMap((r) => r.rule_set);
+    const rulesOf = (cfg: SbConfig) => cfg.dns!.rules.flatMap((r) => r.rule_set ?? []);
     const declared = (cfg: SbConfig) => cfg.route.rule_set!.map((r) => r.tag);
 
     it('ru-split: regional UDP direct, DoH through the proxy, default resolver is the regional one', () => {
@@ -558,6 +558,125 @@ describe('buildSingboxJson', () => {
     it('a frame without iceslab routing gets none', () => {
       const frame = readFrame('singbox', JSON.stringify({ outbounds: [{ type: 'selector', tag: 'Pick', outbounds: [] }], route: { final: 'Pick' } }));
       expect(Object.keys(parse(buildSingboxJson([xrayEp], { frame, routingPreset: 'ru-split' })))).not.toContain('dns');
+    });
+  });
+
+  // Milestone 19.6: the operator's DNS rules.
+  describe('DNS rules', () => {
+    const r = (server: string, ...match: string[]) => ({ match, server, note: '' });
+    const OWN = [{ match: ['example.io'], action: 'direct' as const, note: '' }];
+    const dnsOf = (opts: Parameters<typeof buildSingboxJson>[1]) => parse(buildSingboxJson([xrayEp], opts));
+    const hijacks = (cfg: SbConfig) => (cfg.route.rules ?? []).filter((x) => x.action === 'hijack-dns');
+
+    it('an own preset: no rules, no dns; a rule, a server per distinct value and a rule on the names', () => {
+      expect(Object.keys(dnsOf({ ownPresetRules: OWN, dnsRules: [] }))).not.toContain('dns');
+      const cfg = dnsOf({ ownPresetRules: OWN, dnsRules: [r('tcp://10.0.0.1', 'domain:corp.example', 'full:a.corp.example'), r('tcp://10.0.0.1', 'intra.example')] });
+      expect(cfg.dns!.servers).toEqual([
+        { type: 'local', tag: 'dns-local' },
+        { type: 'https', tag: 'dns-proxy', server: '1.1.1.1', detour: 'Auto' },
+        { type: 'tcp', tag: 'dns-tcp-10.0.0.1', server: '10.0.0.1', detour: 'Auto' },
+      ]);
+      expect(cfg.dns!.rules).toEqual([
+        { domain: ['a.corp.example'], domain_suffix: ['corp.example'], server: 'dns-tcp-10.0.0.1' },
+        { domain_suffix: ['intra.example'], server: 'dns-tcp-10.0.0.1' },
+      ]);
+      expect(cfg.dns!.final).toBe('dns-proxy');
+      expect(cfg.route.default_domain_resolver).toBe('dns-local');
+    });
+
+    it('proxy-all gets the block too, with a hijack ahead of everything', () => {
+      const cfg = dnsOf({ dnsRules: [r('10.0.0.2', 'corp.example')] });
+      expect(cfg.dns!.servers[2]).toEqual({ type: 'udp', tag: 'dns-udp-10.0.0.2', server: '10.0.0.2', detour: 'Auto' });
+      expect(cfg.route.rules).toEqual([{ action: 'sniff', sniffer: ['dns'] }, { protocol: 'dns', action: 'hijack-dns' }]);
+    });
+
+    it('proxy-all with no rules is what it was', () => {
+      expect(buildSingboxJson([xrayEp], { dnsRules: [] })).toBe(buildSingboxJson([xrayEp]));
+      for (const routingPreset of ['ru-split', 'cn-split'] as const)
+        expect(buildSingboxJson([xrayEp], { routingPreset, dnsRules: [] })).toBe(buildSingboxJson([xrayEp], { routingPreset }));
+    });
+
+    it('every kind of server, with its port and path when they are not the default', () => {
+      const cfg = dnsOf({
+        dnsRules: [
+          r('10.0.0.1', 'a.example'),
+          r('tcp://10.0.0.1:5300', 'b.example'),
+          r('tls://dns.example', 'c.example'),
+          r('tls://[2001:db8::1]:8853', 'd.example'),
+          r('https://dns.example', 'e.example'),
+          r('https://dns.example:8443/q', 'f.example'),
+        ],
+      });
+      expect(cfg.dns!.servers.slice(2)).toEqual([
+        { type: 'udp', tag: 'dns-udp-10.0.0.1', server: '10.0.0.1', detour: 'Auto' },
+        { type: 'tcp', tag: 'dns-tcp-10.0.0.1:5300', server: '10.0.0.1', server_port: 5300, detour: 'Auto' },
+        { type: 'tls', tag: 'dns-tls-dns.example', server: 'dns.example', detour: 'Auto' },
+        { type: 'tls', tag: 'dns-tls-2001:db8::1:8853', server: '2001:db8::1', server_port: 8853, detour: 'Auto' },
+        { type: 'https', tag: 'dns-https-dns.example', server: 'dns.example', detour: 'Auto' },
+        { type: 'https', tag: 'dns-https-dns.example:8443/q', server: 'dns.example', server_port: 8443, path: '/q', detour: 'Auto' },
+      ]);
+      expect(new Set(cfg.dns!.servers.map((s) => s.tag)).size).toBe(cfg.dns!.servers.length);
+    });
+
+    it('the servers detour through the url-test group the traffic rides', () => {
+      const cfg = parse(buildSingboxJson([xrayEp], { dnsRules: [r('tcp://10.0.0.1', 'a.example')], bundle: 'url-test' }));
+      expect(cfg.dns!.servers.every((s) => s.type === 'local' || s.detour === 'Auto-URLTest')).toBe(true);
+    });
+
+    it('ru-split: the operator rule stands before the regional one, the regional servers stay', () => {
+      const cfg = dnsOf({ routingPreset: 'ru-split', dnsRules: [r('tcp://10.0.0.1', 'geosite:category-ru', 'corp.example')] });
+      expect(cfg.dns!.servers.slice(0, 2)).toEqual([
+        { type: 'udp', tag: 'dns-regional', server: '77.88.8.8' },
+        { type: 'https', tag: 'dns-proxy', server: '1.1.1.1', detour: 'Auto' },
+      ]);
+      expect(cfg.dns!.rules).toEqual([
+        { rule_set: ['geosite-category-ru'], server: 'dns-tcp-10.0.0.1' },
+        { domain_suffix: ['corp.example'], server: 'dns-tcp-10.0.0.1' },
+        { rule_set: ['geosite-category-ru', 'geosite-category-gov-ru'], server: 'dns-regional' },
+      ]);
+      expect(cfg.route.default_domain_resolver).toBe('dns-regional');
+      expect(hijacks(cfg)).toHaveLength(1);
+    });
+
+    it('the rule-sets of a DNS rule are declared once, whoever else names them', () => {
+      const cfg = dnsOf({ routingPreset: 'ru-split', dnsRules: [r('10.0.0.1', 'geosite:category-ru'), r('10.0.0.2', 'geosite:category-ru', 'geosite:google')] });
+      const tags = cfg.route.rule_set!.map((x) => x.tag as string);
+      expect(new Set(tags).size).toBe(tags.length);
+      expect(tags).toContain('geosite-category-ru');
+      expect(tags).toContain('geosite-google');
+      for (const t of cfg.dns!.rules.flatMap((x) => x.rule_set ?? [])) expect(tags).toContain(t);
+    });
+
+    it('a hijack and a sniff of the frame are not doubled', () => {
+      const frame = readFrame('singbox', JSON.stringify({
+        iceslab: { routing: 'preset' },
+        outbounds: [{ type: 'selector', tag: 'Pick', outbounds: [] }],
+        route: { final: 'Pick', rules: [{ action: 'sniff' }, { protocol: 'dns', action: 'hijack-dns' }] },
+      }));
+      const cfg = parse(buildSingboxJson([xrayEp], { frame, dnsRules: [r('10.0.0.1', 'a.example')] }));
+      expect(cfg.route.rules).toEqual([{ action: 'sniff' }, { protocol: 'dns', action: 'hijack-dns' }]);
+      expect(cfg.dns!.servers[2]).toMatchObject({ detour: 'Pick' });
+    });
+
+    it('no rules written: a frame with its own dns, no node, no `iceslab.routing: preset`', () => {
+      const dnsRules = [r('10.0.0.1', 'a.example')];
+      const own = readFrame('singbox', JSON.stringify({
+        iceslab: { routing: 'preset' },
+        dns: { servers: [{ type: 'udp', tag: 'mine', server: '9.9.9.9' }] },
+        outbounds: [{ type: 'selector', tag: 'Pick', outbounds: [] }],
+        route: { final: 'Pick' },
+      }));
+      const withOwn = parse(buildSingboxJson([xrayEp], { frame: own, dnsRules }));
+      expect(withOwn.dns).toEqual({ servers: [{ type: 'udp', tag: 'mine', server: '9.9.9.9' }] });
+      expect(hijacks(withOwn)).toHaveLength(0);
+      expect(JSON.stringify(withOwn.route)).not.toContain('10.0.0.1');
+      const bare = parse(buildSingboxJson([], { dnsRules }));
+      expect(Object.keys(bare)).not.toContain('dns');
+      expect(bare.route.rules).toBeUndefined();
+      const plain = readFrame('singbox', JSON.stringify({ outbounds: [{ type: 'selector', tag: 'Pick', outbounds: [] }], route: { final: 'Pick' } }));
+      const noSwitch = parse(buildSingboxJson([xrayEp], { frame: plain, dnsRules }));
+      expect(Object.keys(noSwitch)).not.toContain('dns');
+      expect(noSwitch.route.rules).toBeUndefined();
     });
   });
 
