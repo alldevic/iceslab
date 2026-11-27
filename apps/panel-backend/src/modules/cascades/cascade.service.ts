@@ -1164,6 +1164,49 @@ function directionServes(d: { nodes: unknown[]; outbound?: unknown }): boolean {
   return d.nodes.length > 0 || !!d.outbound;
 }
 
+/**
+ * 18.7: the nodes a cascade's clients leave by, per entry node: the nodes of the
+ * directions (v4), or the last hop (the legacy hop shape). An exit that is a
+ * named outbound has no node and adds none: it counts as without IPv6. Enabled,
+ * not dead cascades only, as in the two lookups above; no ACL here, the
+ * question is what the cascade CAN leave by, not what one squad was granted.
+ */
+export async function getExitNodeIdsByEntryNode(entryNodeIds: string[]): Promise<Map<string, Set<string>>> {
+  const out = new Map<string, Set<string>>();
+  if (entryNodeIds.length === 0) return out;
+  const cascades = await prisma.cascade.findMany({
+    where: {
+      enabled: true,
+      id: { notIn: [...(await deadCascadeIds())] },
+      OR: [
+        { hops: { some: { nodeId: { in: entryNodeIds }, position: 0 } } },
+        { positions: { some: { position: 0, nodes: { some: { nodeId: { in: entryNodeIds } } } } } },
+      ],
+    },
+    select: {
+      hops: { orderBy: { position: 'asc' }, select: { nodeId: true } },
+      positions: { where: { position: 0 }, select: { nodes: { select: { nodeId: true } } } },
+      directions: { select: { nodes: { select: { node: { select: { id: true } } } } } },
+    },
+  });
+  for (const c of cascades) {
+    const exits =
+      c.directions.length > 0
+        ? c.directions.flatMap((d) => d.nodes.map((n) => n.node.id))
+        : c.hops.length > 0
+          ? [c.hops[c.hops.length - 1]!.nodeId]
+          : [];
+    const entries = [...(c.positions[0]?.nodes.map((n) => n.nodeId) ?? []), ...(c.hops[0] ? [c.hops[0].nodeId] : [])];
+    for (const entry of entries) {
+      if (!entryNodeIds.includes(entry)) continue;
+      const set = out.get(entry) ?? new Set<string>();
+      for (const x of exits) set.add(x);
+      out.set(entry, set);
+    }
+  }
+  return out;
+}
+
 export async function getRouteProfilesByEntryNode(
   nodeIds: string[],
   groupIds: string[] = [],

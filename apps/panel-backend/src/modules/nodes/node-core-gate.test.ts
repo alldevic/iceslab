@@ -7,7 +7,7 @@ import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { observedCores } from './nodes.cron.js';
-import { nodeHasIpv6 } from './node-core-gate.js';
+import { nodeExitsViaIpv6, nodeHasIpv6 } from './node-core-gate.js';
 import { WG_TEST_PRIVATE_KEY, WG_TEST_PUBLIC_KEY } from '../../../tests/helpers/wg-keys.js';
 
 /**
@@ -551,5 +551,45 @@ describe('nodeHasIpv6', () => {
 
   it('does not read egress yet: egress alone does not make IPv6', () => {
     expect(nodeHasIpv6(observedCores(xray, at, undefined, undefined, undefined, { stack: false, global: false, addresses: [], egress: true }))).toBe(false);
+  });
+});
+
+describe('nodeExitsViaIpv6', () => {
+  const at = new Date().toISOString();
+  const xray = [{ name: 'xray', engine: 'xray', running: true } as CoreStatus];
+  const facts = (global: boolean, egress?: boolean) =>
+    observedCores(xray, at, undefined, undefined, undefined, {
+      stack: true, global, addresses: global ? ['2001:db8::1'] : [], ...(egress === undefined ? {} : { egress }),
+    });
+
+  it('auto needs a global address and a working egress together', () => {
+    expect(nodeExitsViaIpv6(facts(true, true), 'auto')).toBe(true);
+    expect(nodeExitsViaIpv6(facts(true, false), 'auto')).toBe(false);
+    expect(nodeExitsViaIpv6(facts(false, true), 'auto')).toBe(false);
+    expect(nodeExitsViaIpv6(facts(false, false), 'auto')).toBe(false);
+  });
+
+  it('auto is the default mode', () => {
+    expect(nodeExitsViaIpv6(facts(true, true))).toBe(true);
+  });
+
+  it('off is no, whatever the host can do', () => {
+    expect(nodeExitsViaIpv6(facts(true, true), 'off')).toBe(false);
+  });
+
+  it('on is yes once the agent reports the block', () => {
+    expect(nodeExitsViaIpv6(facts(false, false), 'on')).toBe(true);
+  });
+
+  it('an agent older than the egress check (no egress) is no in auto', () => {
+    expect(nodeExitsViaIpv6(facts(true), 'auto')).toBe(false);
+  });
+
+  it('no fact at all (never polled, an old agent) is no under every mode', () => {
+    for (const mode of ['auto', 'on', 'off'] as const) {
+      expect(nodeExitsViaIpv6(observedCores(xray, at), mode)).toBe(false);
+      expect(nodeExitsViaIpv6(null, mode)).toBe(false);
+      expect(nodeExitsViaIpv6(undefined, mode)).toBe(false);
+    }
   });
 });

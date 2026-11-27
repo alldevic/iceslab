@@ -36,10 +36,15 @@ beforeEach(() => {
   calc.seen = [];
 });
 
-describe('until stage 18 the calculation says there is no IPv6', () => {
-  it('exitsHaveIpv6 answers no for any set of points', () => {
+describe('the calculation reads the flag on the points', () => {
+  it('no point, or no flag on any, is no IPv6', () => {
     expect(exitsHaveIpv6([])).toBe(false);
     expect(exitsHaveIpv6([ep])).toBe(false);
+    expect(exitsHaveIpv6([{ ...ep, exitHasIpv6: false }])).toBe(false);
+  });
+
+  it('at least one exit is enough, not all of them', () => {
+    expect(exitsHaveIpv6([ep, { ...ep, exitHasIpv6: true }])).toBe(true);
   });
 });
 

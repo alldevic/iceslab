@@ -1,5 +1,6 @@
 import { transportServed, type DnsRule, type RoutingPresetId } from '@iceslab/shared';
 import { emitsVisionFlow, isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
+import { clashDnsLines, exitsHaveIpv6 } from '../subscription.address-family.js';
 import { makeTagger } from '../endpoint-identity.js';
 import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
 import { clashCanUsePanelGeo, clashDeviceRuleLines, clashDomainRuleBody, clashNeedsGeo, mihomoNameserverPolicy } from '../subscription.device-rules.js';
@@ -238,13 +239,16 @@ export function buildClashYaml(
   const preset = buildOpts.routingPreset ?? 'proxy-all';
   const own = buildOpts.ownPresetRules;
   const deviceRules = own ?? BUILTIN_PRESET_RULES[preset];
-  const dnsLines = own
-    ? PROXY_ALL_DNS_LINES
-    : preset === 'ru-split'
-      ? RU_SPLIT_DNS_LINES
-      : preset === 'cn-split'
-        ? CN_SPLIT_DNS_LINES
-        : PROXY_ALL_DNS_LINES;
+  const dnsLines = clashDnsLines(
+    own
+      ? PROXY_ALL_DNS_LINES
+      : preset === 'ru-split'
+        ? RU_SPLIT_DNS_LINES
+        : preset === 'cn-split'
+          ? CN_SPLIT_DNS_LINES
+          : PROXY_ALL_DNS_LINES,
+    exitsHaveIpv6(endpoints),
+  );
   const proxies: string[] = [];
   const proxyNames: string[] = [];
   // A-236 step 4: the dialect. One builder, the fields the three cores spell

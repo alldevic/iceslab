@@ -107,6 +107,12 @@ describe('::/0 in AllowedIPs', () => {
     expect(wgClientAllowedIps({ dropIpv6: false })).toBeUndefined();
     expect(wgClientAllowedIps({ dropIpv6: true })).toEqual(['0.0.0.0/0']);
   });
+
+  it('a tunnel with an IPv6 address of its own keeps ::/0 whatever the switch says', () => {
+    expect(wgClientAllowedIps({ dropIpv6: true }, { allowedIp: '10.8.0.2/32' })).toEqual(['0.0.0.0/0']);
+    expect(wgClientAllowedIps({ dropIpv6: true }, { allowedIp: '10.8.0.2/32, fd00::2/128' })).toBeUndefined();
+    expect(wgClientAllowedIps({ dropIpv6: false }, { allowedIp: '10.8.0.2/32, fd00::2/128' })).toBeUndefined();
+  });
 });
 
 describe('the tunnel name', () => {

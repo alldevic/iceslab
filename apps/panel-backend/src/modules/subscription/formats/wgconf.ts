@@ -27,17 +27,22 @@ export interface WgClientOpts {
  * the switch gets the bytes it always got.
  *
  * THE one place that decides it, called by every builder of a wg config (AWG
- * and plain `.conf`, the vpn:// key, the page's codes). `tunnel` is here for
- * the day a tunnel carries an IPv6 address of its own (9.9/18.9): such a
- * tunnel must keep `::/0` whatever the switch says, and the rule belongs on
- * this line (18.7 reconciles it with the IPv6 policy). Today no tunnel has one.
+ * and plain `.conf`, the vpn:// key, the page's codes). Inputs: the panel's
+ * switch and whether the tunnel carries an IPv6 address of its own. Such a tunnel
+ * keeps `::/0` whatever the switch says (the switch acts only on tunnels without
+ * IPv6, decision of 18.7); a tunnel without one is as before. No tunnel carries
+ * an address of its own until 9.9/18.9, so today the second case is every one.
  */
 export function wgClientAllowedIps(
   opts: Pick<WgClientOpts, 'dropIpv6'> | undefined,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept for 18.7/18.9 (a tunnel with its own IPv6 keeps ::/0)
-  _tunnel?: WgconfEndpoint,
+  tunnel?: Pick<WgconfEndpoint, 'allowedIp'>,
 ): string[] | undefined {
-  return opts?.dropIpv6 ? ['0.0.0.0/0'] : undefined;
+  return opts?.dropIpv6 && !tunnelHasIpv6(tunnel) ? ['0.0.0.0/0'] : undefined;
+}
+
+/** The tunnel's `Address =` holds an IPv6 address (a v4 one is `10.8.0.2/32`). */
+export function tunnelHasIpv6(tunnel: Pick<WgconfEndpoint, 'allowedIp'> | undefined): boolean {
+  return tunnel?.allowedIp.includes(':') === true;
 }
 
 /** The `dns` the builders take: undefined for none, so no key is added. */

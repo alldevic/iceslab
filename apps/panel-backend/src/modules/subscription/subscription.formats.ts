@@ -211,6 +211,11 @@ interface SubscriptionEndpointBase {
    *  single plain config (the pre-A4 behaviour, non-balancer-entry endpoints).
    *  Only the xrayjson-array + plain formats consume this. */
   cascadeExits?: { label: string; tag: number; cascadeId?: string }[];
+  /** 18.7: the exit this point leads out by has working IPv6 (its node's
+   *  fact under the node's mode; for the entry of a cascade, the facts of its
+   *  exits). Set by the subscription service, absent = no. Read only by
+   *  exitsHaveIpv6. */
+  exitHasIpv6?: boolean;
   /** Set on one route of a cascade entry (expandCascadeEntry): the line's
    *  name exactly, where formats would otherwise build one from the node's. */
   routeLabel?: string;

@@ -7,6 +7,7 @@ import {
   judgeCoreVersion,
   type CoreComponent,
   type EngineName,
+  type Ipv6Mode,
   type NodeCoreInfo,
   type NodeCores,
 } from '@iceslab/shared';
@@ -130,6 +131,23 @@ export function agentCarriesAwg3(cores: NodeCores | null): boolean {
  */
 export function nodeHasIpv6(cores: NodeCores | null | undefined): boolean {
   return cores?.ipv6?.stack === true && cores.ipv6.global === true;
+}
+
+/**
+ * Whether the node's clients leave it by IPv6, the answer the panel gives the
+ * client configs (milestone 18.7): the same rule the agent applies to its own
+ * cores (IPv6ByMode / EffectiveIPv6). `on` and `off` are the operator's word;
+ * `auto` needs a global address AND an outbound IPv6 connection that worked
+ * (`egress`). Unknown is "no": no ipv6 block (never polled, an agent older than
+ * 18.2) is "no" under any mode, since such an agent applies none of it, and an
+ * agent older than the egress check sends none, which in `auto` is "no" too.
+ */
+export function nodeExitsViaIpv6(cores: NodeCores | null | undefined, mode: Ipv6Mode = 'auto'): boolean {
+  const facts = cores?.ipv6;
+  if (!facts) return false;
+  if (mode === 'on') return true;
+  if (mode === 'off') return false;
+  return facts.global === true && facts.egress === true;
 }
 
 function awgName(g: AwgProtocol): string {

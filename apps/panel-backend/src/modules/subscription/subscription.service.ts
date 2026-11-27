@@ -74,6 +74,7 @@ import { ensureAwg3Geometry, readAwg3Geometry } from '../nodes/awg3-geometry.js'
 import { getLogger } from '../../lib/infra/logger.js';
 import { endpointId, endpointKey, isLaterDevice } from './endpoint-identity.js';
 import { expandCascadeEntry } from './cascade-entries.js';
+import { markExitsIpv6 } from './subscription.exit-ipv6.js';
 import { resolveBindingConfig } from '../profiles/profiles.service.js';
 import { normalizeHost } from '../../lib/util/ip.js';
 
@@ -1710,6 +1711,18 @@ export async function generateSubscription(
   // Same idea one level down: whatever cascade lines remain must still be
   // distinguishable from each other, and from any non-cascade endpoint.
   disambiguateCascadeLabels(endpoints);
+
+  // 18.7: whether the exits of this document have IPv6. Before the expansion:
+  // an entry still carries its `cascadeExits` here, and the copies it expands
+  // into inherit the flag.
+  await markExitsIpv6(
+    endpoints,
+    (e) =>
+      (e.cascadeExits?.length ?? 0) > 0 ||
+      (e.protocol === 'hysteria' && hysteriaEntryLabels.has(e.nodeId)) ||
+      (e.protocol === 'amneziawg' && awgEntryLabels.has(e.nodeId)) ||
+      singboxEntryLabels.get(e.protocol)?.has(e.nodeId) === true,
+  );
 
   // A-262: the routes of a balancer-cascade entry, one endpoint each, HERE and
   // nowhere else: every format below (links, Clash, sing-box, the xray-json

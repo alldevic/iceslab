@@ -7,15 +7,26 @@ import type { SubscriptionEndpoint } from './subscription.formats.js';
  * a strategy of its own, so the two formats cannot disagree about the same
  * document.
  *
- * Until stage 18 nothing records an exit's IPv6, so the answer is always "no":
- * every path handed out is IPv4 end to end, and an AAAA answer would name a
- * route the tunnel cannot carry. TODO(m18.7): the real source replaces the body
- * of `exitsHaveIpv6` and nothing else; the signature (the document's points in,
- * a flag out) stays.
+ * An exit has IPv6 when `exitHasIpv6` is set on its point (the service sets it
+ * from the node's fact and mode, and for the entry of a cascade from the fact of
+ * its exits, see nodeExitsViaIpv6); a point that carries no flag has none. The
+ * rule is "at least one exit" (decision 4 of PLAN-ipv6 C), not "all": through an
+ * exit without IPv6 a site with an AAAA record may open late, accepted.
  */
 export function exitsHaveIpv6(points: readonly SubscriptionEndpoint[]): boolean {
-  void points;
-  return false;
+  return points.some((p) => p.exitHasIpv6 === true);
+}
+
+/**
+ * The `dns:` block of a clash-family config with `ipv6: true` after `enable:`
+ * when the exits have IPv6; without, the lines come back as they are, byte for
+ * byte. A block of the operator's own template is never passed through here.
+ */
+export function clashDnsLines(lines: readonly string[], hasIpv6: boolean): readonly string[] {
+  if (!hasIpv6) return lines;
+  const at = lines.indexOf('  enable: true');
+  if (at === -1) return lines;
+  return [...lines.slice(0, at + 1), '  ipv6: true', ...lines.slice(at + 1)];
 }
 
 /** xray `dns.queryStrategy`: IPv4 records only while no exit can carry IPv6. */
