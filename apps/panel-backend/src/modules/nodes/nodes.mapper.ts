@@ -3,12 +3,14 @@ import type {
   AwgProtocol,
   DnsCfg,
   EngineName,
+  Ipv6Mode,
   NodeCoreRestarts,
   NodeCores,
   NodeCoreVersions,
   NodeGeoFact,
   NodeGeoIntended,
 } from '@iceslab/shared';
+import { readIpv6Mode } from '@iceslab/shared';
 import { intendedEngines, reportedEngines } from './node-engines.js';
 import { readCoreVersions } from './node-core-versions.js';
 import { reportedAwgProtocol } from './node-core-gate.js';
@@ -139,6 +141,9 @@ export interface PublicNodeDto {
   /** Э3 F: the resolver this node's users get, null = the host's own. Shape is
    *  DnsCfg in packages/shared. */
   dns: DnsCfg | null;
+  /** 18.6: the operator's IPv6 setting, auto | on | off (IPV6_MODES in shared). A row
+   *  the column does not hold reads as auto. */
+  ipv6Mode: Ipv6Mode;
   /**
    * The cores this node reported, and for each one whether it carries out the
    * node-level policy and resolver.
@@ -293,6 +298,7 @@ export function mapNodeToPublic(node: Node): PublicNodeDto {
     intendedEngines: intended,
     policyId: node.policyId,
     dns: (node.dns as DnsCfg | null) ?? null,
+    ipv6Mode: readIpv6Mode(node.ipv6Mode),
     cores: (node.cores as NodeCores | null) ?? null,
     coreVersions: readCoreVersions(node.coreVersions),
     ...(engines !== undefined ? { engines } : {}),

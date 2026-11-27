@@ -1407,6 +1407,15 @@ export interface ApplyInboundsRequest {
    * anything is applied: 409 GEO_MISSING { files }. Mirror: dto.go NodeGeo.
    */
   geo?: NodeGeo;
+  /**
+   * The operator's word on this node's IPv6 egress (milestone 18.6): `on` or
+   * `off`, which override the agent's own check for the cores that pick an
+   * address family (xray, shadowsocks, sing-box, hysteria; mtproto stays on
+   * IPv4). ABSENT is `auto`: the panel never writes `auto`, so a node left on
+   * the default is sent the same bytes as before the field. Mirror: dto.go
+   * Ipv6Mode.
+   */
+  ipv6Mode?: 'on' | 'off';
 }
 
 /** docs/plan/geo-contract.md section 1. */
@@ -2268,6 +2277,15 @@ export interface HealthcheckResponse {
    * (wire-sync).
    */
   ipv6?: NodeIPv6;
+}
+
+/** A node's IPv6 setting: `auto` is the agent's check, `on` and `off` override it. */
+export const IPV6_MODES = ['auto', 'on', 'off'] as const;
+export type Ipv6Mode = (typeof IPV6_MODES)[number];
+
+/** A stored or received value as a mode; anything else reads as `auto`. */
+export function readIpv6Mode(v: unknown): Ipv6Mode {
+  return v === 'on' || v === 'off' ? v : 'auto';
 }
 
 /**

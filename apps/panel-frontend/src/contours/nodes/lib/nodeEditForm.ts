@@ -1,5 +1,6 @@
 import { canonicalIpv6Host, joinNodeAddress, parseNodeAddress } from '@iceslab/shared';
-import type { EngineName, NodeCoreVersions } from '@iceslab/shared';
+import { readIpv6Mode } from '@iceslab/shared';
+import type { EngineName, Ipv6Mode, NodeCoreVersions } from '@iceslab/shared';
 import type { Node, NodeLabel, NodeProtocol } from '@/lib/domain/nodes';
 import { DEFAULT_NODE_PORT } from '@/contours/nodes/lib/nodeProtocols';
 import { multiplierInput } from '@/contours/nodes/lib/nodeLimits';
@@ -29,6 +30,8 @@ export interface FormValues {
   engines: EngineName[];
   /** DNS ноды (nodeDnsForm.ts): уходит в PUT только разницей с сохранённым. */
   dns: DnsForm;
+  /** 18.6: auto | on | off; уходит в PUT только изменённым (ipv6ModePatch). */
+  ipv6Mode: Ipv6Mode;
   /** В работе: false = статус `disabled` (вне подписок и опроса). */
   inService: boolean;
 }
@@ -79,6 +82,15 @@ export function formProtocolOf(label: NodeLabel | undefined): NodeProtocol {
 export function domainPatch(stored: string | null | undefined, typed: string): { domain?: string | null } {
   const next = typed.trim() || null;
   return next === (stored ?? null) ? {} : { domain: next };
+}
+
+/**
+ * The IPv6 mode in the node's PUT (18.6). The server re-pushes the node when it
+ * changes, so it goes only when it differs from the stored one; a server older
+ * than the field stores nothing, and reads as `auto` here.
+ */
+export function ipv6ModePatch(stored: Ipv6Mode | undefined, typed: Ipv6Mode): { ipv6Mode?: Ipv6Mode } {
+  return typed === readIpv6Mode(stored) ? {} : { ipv6Mode: typed };
 }
 
 /** The server's shape for a domain: a bare FQDN, no scheme, no port, at most
@@ -133,6 +145,7 @@ export function defaults(node: Node | null, decimalComma = false): FormValues {
     coreVersions: { ...(node?.coreVersions ?? {}) },
     engines: [...(node?.intendedEngines ?? [])],
     dns: dnsDefaults(node?.dns),
+    ipv6Mode: readIpv6Mode(node?.ipv6Mode),
     inService: node?.status !== 'disabled',
   };
 }

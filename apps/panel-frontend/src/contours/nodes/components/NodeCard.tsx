@@ -18,6 +18,8 @@ import {
   IconDownload,
   IconEdit,
   IconKey,
+  IconWorld,
+  IconWorldOff,
   IconRefresh,
   IconRoute,
   IconServer2,
@@ -26,7 +28,7 @@ import {
 } from '@tabler/icons-react';
 import { useElementSize } from '@mantine/hooks';
 import { useTranslation } from 'react-i18next';
-import type { EngineName, NodeCoreInfo } from '@iceslab/shared';
+import type { EngineName, Ipv6Mode, NodeCoreInfo } from '@iceslab/shared';
 import type { CoreRestarts } from '@/lib/domain/nodes';
 import { cardEngines, ENGINE_SHORT, engineVersionLines, fitEngineNames } from '@/contours/nodes/lib/nodeCardEngines';
 import type { DashboardOverview } from '@/lib/domain/dashboard';
@@ -105,6 +107,8 @@ interface CardNode {
   certAlarm?: CertAlarm | null;
   /** Множитель потребления (A-143): значок, только когда он не 1. */
   multiplier?: number | string;
+  /** Режим IPv6 ноды (18.6): значок, только когда он не `auto`. */
+  ipv6Mode?: Ipv6Mode;
 }
 
 interface Props {
@@ -248,6 +252,7 @@ export function NodeCard({
           </Group>
           <Group gap={4} wrap="nowrap">
             <MultiplierBadge stored={node.multiplier} />
+            {(node.ipv6Mode === 'on' || node.ipv6Mode === 'off') && <Ipv6ModeBadge mode={node.ipv6Mode} />}
             {node.certAlarm && <CertAlarmBadge alarm={node.certAlarm} />}
             <Badge
               variant="light"
@@ -848,6 +853,26 @@ function CertAlarmBadge({ alarm }: { alarm: CertAlarm }) {
         }}
       >
         {t(`nodeCard.cert.${alarm}`)}
+      </Badge>
+    </Tooltip>
+  );
+}
+
+/** The IPv6 mode when the operator has set one (18.6): an icon only, the words
+ *  in the tooltip. Nothing at `auto`, which is what every node is by default. */
+function Ipv6ModeBadge({ mode }: { mode: 'on' | 'off' }) {
+  const { t } = useTranslation();
+  const tone = mode === 'on' ? MOSS : AMBER;
+  const tip = mode === 'on' ? t('nodeCard.ipv6Mode.onTip') : t('nodeCard.ipv6Mode.offTip');
+  return (
+    <Tooltip label={tip} withArrow multiline w={260}>
+      <Badge
+        variant="light"
+        size="sm"
+        aria-label={tip}
+        style={{ backgroundColor: `${tone}1A`, color: tone, border: `1px solid ${tone}33` }}
+      >
+        {mode === 'on' ? <IconWorld size={12} /> : <IconWorldOff size={12} />}
       </Badge>
     </Tooltip>
   );

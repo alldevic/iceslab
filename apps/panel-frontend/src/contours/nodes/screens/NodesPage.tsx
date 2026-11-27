@@ -987,6 +987,7 @@ export function NodesPage() {
                   // Сертификат mTLS: значок только там, где горит (A-221).
                   certAlarm: certAlarm(n, now),
                   multiplier: n.consumptionMultiplier,
+                  ipv6Mode: n.ipv6Mode,
                   // Причина статуса словами сервера, с /api/nodes.
                   statusMessage: n.lastStatusMessage,
                   protocol: n.protocol,

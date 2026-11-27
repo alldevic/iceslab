@@ -1,4 +1,4 @@
-import type { NodeCores, UserScopeGap } from '@iceslab/shared';
+import type { Ipv6Mode, NodeCores, UserScopeGap } from '@iceslab/shared';
 import { awgLabel } from '@/lib/domain/awg';
 import { protocolLabelCompact } from '@/lib/domain/protocols';
 
@@ -123,4 +123,22 @@ export type NodeIpv6EgressFact = 'works' | 'fails' | 'unknown';
 export function nodeIpv6EgressFact(cores: NodeCores | null | undefined): NodeIpv6EgressFact {
   const e = cores?.ipv6?.egress;
   return typeof e !== 'boolean' ? 'unknown' : e ? 'works' : 'fails';
+}
+
+/**
+ * What the IPv6 switch of the node form says beside the facts (18.6). `on` with
+ * no working egress is the operator's right and a warning, not a refusal: the
+ * cores then resolve to AAAA and the exit to those addresses breaks. An agent
+ * with no `ipv6` block does not take the mode at all (older than 18.2), so the
+ * switch changes nothing there (said for `on` and `off`; `auto` is what every
+ * agent does anyway). `auto` and `off` carry no other warning.
+ */
+export type NodeIpv6ModeNote = 'agentUnsupported' | 'onNotWorking' | null;
+
+export function nodeIpv6ModeNote(cores: NodeCores | null | undefined, mode: Ipv6Mode): NodeIpv6ModeNote {
+  if (mode === 'auto') return null;
+  const fact = nodeIpv6Fact(cores);
+  if (fact.state === 'unknown') return 'agentUnsupported';
+  if (mode !== 'on') return null;
+  return nodeIpv6EgressFact(cores) === 'fails' || fact.state === 'none' ? 'onNotWorking' : null;
 }

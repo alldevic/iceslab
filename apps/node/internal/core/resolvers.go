@@ -171,14 +171,82 @@ var sharedIPv6 = NewIPv6Prober(time.Minute)
 // SharedIPv6Prober is what main wires into /healthz.
 func SharedIPv6Prober() *IPv6Prober { return sharedIPv6 }
 
-// EffectiveIPv6 is the one answer to "does this node leave by IPv6": a global
-// address AND an outbound connection that worked. An address on an interface
-// with no route out (half-configured IPv6) is not enough. Every core asks this,
-// none the host directly.
-func EffectiveIPv6() bool {
-	f := sharedIPv6.Facts()
-	return f.Global && f.Egress
+// The node's IPv6 setting (milestone 18.6), the operator's word over the
+// check: "on" and "off" decide, anything else is "auto", the check's answer.
+const (
+	IPv6ModeAuto = "auto"
+	IPv6ModeOn   = "on"
+	IPv6ModeOff  = "off"
+)
+
+var (
+	ipv6ModeMu sync.RWMutex
+	ipv6Mode   = IPv6ModeAuto
+)
+
+// NormalizeIPv6Mode reads a wire value: only "on" and "off" mean something, an
+// absent field or one this agent does not know is "auto".
+func NormalizeIPv6Mode(m string) string {
+	if m == IPv6ModeOn || m == IPv6ModeOff {
+		return m
+	}
+	return IPv6ModeAuto
 }
+
+// SetIPv6Mode records the mode of the push the agent is applying, before any
+// core renders it. It is in the stored request too, so a restart restores it
+// ahead of the panel's first poll.
+func SetIPv6Mode(m string) {
+	ipv6ModeMu.Lock()
+	ipv6Mode = NormalizeIPv6Mode(m)
+	ipv6ModeMu.Unlock()
+}
+
+// IPv6ModeNow is the mode the cores render under.
+func IPv6ModeNow() string {
+	ipv6ModeMu.RLock()
+	defer ipv6ModeMu.RUnlock()
+	return ipv6Mode
+}
+
+// IPv6ByMode is the one rule: "on" is yes and "off" is no whatever the host
+// says; "auto" asks `auto`, which is a global address AND an outbound
+// connection that worked (EffectiveIPv6). An address on an interface with no
+// route out (half-configured IPv6) is not enough.
+func IPv6ByMode(mode string, auto func() bool) bool {
+	switch mode {
+	case IPv6ModeOn:
+		return true
+	case IPv6ModeOff:
+		return false
+	}
+	return auto()
+}
+
+// EffectiveIPv6 is the one answer to "does this node leave by IPv6". Every
+// core asks this, none the host directly. The facts stay what the check saw
+// (/healthz reports them raw); the mode is applied here, and on/off do not run
+// the check at all.
+func EffectiveIPv6() bool {
+	return IPv6ByMode(IPv6ModeNow(), func() bool {
+		f := sharedIPv6.Facts()
+		return f.Global && f.Egress
+	})
+}
+
+// IPv6Render is what a core keeps of the answer its config was drawn under, so
+// that a later push finding the answer changed (the mode flipped, or the check
+// came out otherwise) draws again even when the inbound did not change. The
+// holder guards it with its own lock.
+type IPv6Render struct {
+	known, v6 bool
+}
+
+// Note records the answer a render used.
+func (r *IPv6Render) Note(v6 bool) { r.known, r.v6 = true, v6 }
+
+// Stale: a config was drawn, and under the other answer than `now`.
+func (r *IPv6Render) Stale(now bool) bool { return r.known && r.v6 != now }
 
 // IPv6Prober answers /healthz from a cached probe: the bind is a syscall pair
 // that has no business running on every poll, and an address or a sysctl

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CORE_COMPONENTS, ENGINE_NAMES, canonicalNodeAddress } from '@iceslab/shared';
+import { CORE_COMPONENTS, ENGINE_NAMES, IPV6_MODES, canonicalNodeAddress } from '@iceslab/shared';
 
 const NameSchema = z
   .string()
@@ -171,6 +171,13 @@ export const ConsumptionMultiplierSchema = z
   .max(100)
   .refine((v) => Math.abs(v * 10 - Math.round(v * 10)) < 1e-9, 'the multiplier goes in steps of 0.1');
 
+/**
+ * 18.6: the operator's word on the node's IPv6 egress. `auto` leaves it to the
+ * agent's check, `on` and `off` override it (the cores that pick an address
+ * family; mtproto stays on IPv4 either way).
+ */
+const Ipv6ModeSchema = z.enum(IPV6_MODES);
+
 export const CreateNodeSchema = z.object({
   name: NameSchema,
   address: AddressSchema,
@@ -191,6 +198,8 @@ export const CreateNodeSchema = z.object({
   singboxEngine: z.boolean().optional(),
   // Э3 F: the resolver this node's users get. Absent = the host's own.
   dns: DnsSchema,
+  // 18.6: absent = auto.
+  ipv6Mode: Ipv6ModeSchema.optional(),
   // Which core versions to install; absent components get the pin.
   coreVersions: CoreVersionsCreateSchema.optional(),
 });
@@ -225,6 +234,8 @@ export const UpdateNodeSchema = z.object({
   // the config WITHOUT a dns section rather than leaving the last resolver
   // answering on a node the panel shows as having none.
   dns: DnsSchema,
+  // 18.6: absent = untouched. A change re-pushes the node's config.
+  ipv6Mode: Ipv6ModeSchema.optional(),
   // Absent = untouched; per component: version sets, null puts back on the
   // pin, left out is untouched; null for the whole map = every pin. No
   // .default(): an absent key must reach the service as absent.

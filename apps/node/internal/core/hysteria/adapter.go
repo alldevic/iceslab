@@ -161,6 +161,8 @@ type Adapter struct {
 	// "unchanged" and the apply spawns again. Cleared by a start that survives
 	// the window. Under mu.
 	lastStartFailed bool
+	// ipv6: the IPv6 answer the last config was drawn under (familyStaleLocked). Under mu.
+	ipv6 core.IPv6Render
 	// restarts: the core's restart tally (RestartReporter), fed by OnRestart.
 	restarts *core.RestartTally
 
@@ -774,7 +776,7 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 
 	// A core whose last start failed is down under this very config; "unchanged"
 	// would ack a push the node is not serving.
-	if inboundEqual(a.inbound, newInbound) && !a.coreDownLocked() {
+	if inboundEqual(a.inbound, newInbound) && !a.coreDownLocked() && !a.familyStaleLocked() {
 		a.logger.Info("hysteria ApplyInbound: config unchanged, skipping rewrite")
 		return nil
 	}
@@ -846,7 +848,7 @@ func (a *Adapter) ApplyCascade(raw json.RawMessage) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if handoffEqual(a.chain, handoff) && !a.coreDownLocked() {
+	if handoffEqual(a.chain, handoff) && !a.coreDownLocked() && !a.familyStaleLocked() {
 		return nil
 	}
 	// No inbound yet, or nothing to write to: remember it for the render that
@@ -868,6 +870,7 @@ func (a *Adapter) ApplyCascade(raw json.RawMessage) error {
 
 // rewriteLocked renders and writes the config. Caller holds mu.
 func (a *Adapter) rewriteLocked(inbound InboundConfig, handoff *ChainHandoff, who string) error {
+	a.ipv6.Note(nodeHasIPv6())
 	blob, err := renderConfig(a.cfg, inbound, handoff)
 	if err != nil {
 		return fmt.Errorf("hysteria %s: render: %w", who, err)
@@ -1017,4 +1020,12 @@ func (a *Adapter) RestartStats() core.RestartStats {
 // is a core that has nothing to serve, not a dead one.
 func (a *Adapter) coreDownLocked() bool {
 	return a.lastStartFailed || (a.proc != nil && !a.proc.Running())
+}
+
+// familyStaleLocked: the config was drawn under the other IPv6 answer than the
+// one today (the node's mode flipped, or the egress check came out otherwise),
+// so an identical push is not "unchanged" either: the address family the core
+// leaves by is in the config (18.6). Caller holds a.mu.
+func (a *Adapter) familyStaleLocked() bool {
+	return a.ipv6.Stale(nodeHasIPv6())
 }

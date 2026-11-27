@@ -331,6 +331,26 @@ export const nodes = {
       apiIpv4Only:
         'The agent API listens on IPv4 only (NODE_HOST=0.0.0.0, written by an older installer). To take the panel channel over IPv6 as well, remove NODE_HOST from /etc/iceslab-node/env and restart the agent. Nothing changes on its own.',
     },
+    // 18.6: the IPv6 switch of the node (auto / on / off) and the facts beside it.
+    ipv6Mode: {
+      label: 'IPv6 of the node',
+      auto: 'Auto',
+      on: 'On',
+      off: 'Off',
+      hint: 'Auto: the agent decides (a global address and a working outbound connection). On or Off overrides it for the cores that choose an address family: xray, shadowsocks, sing-box, hysteria. mtproto stays on IPv4 in every mode. Applied with the next push, which saving starts.',
+      facts: 'Now',
+      hasAddress: 'has a global address ({{count}})',
+      noAddress: 'no global address',
+      egress: {
+        works: 'the outbound connection works',
+        fails: 'the outbound connection fails',
+        unknown: 'the outbound connection is not reported',
+      },
+      note: {
+        onNotWorking: 'IPv6 egress may not work: the check does not pass, and with this setting the cores still go to IPv6 addresses.',
+        agentUnsupported: 'The agent does not support the mode: it reports no IPv6 block, so the setting changes nothing on this node.',
+      },
+    },
     coresRendersPolicy: 'applies the policy',
     coresNoDns: 'no node DNS',
     coresNoDnsHint: 'This core does not execute the node DNS: the setting does not reach its clients.',
@@ -660,6 +680,10 @@ export const nodes = {
       soonTip: 'The mTLS certificate ends in less than 30 days. Date and renewal on the node page.',
       oldAgent: 'agent',
       oldAgentTip: 'The agent on the node cannot change its mTLS certificate itself: update the agent before the end. Date on the node page.',
+    },
+    ipv6Mode: {
+      onTip: 'IPv6 is forced on for this node (setting). Details on the node page.',
+      offTip: 'IPv6 is forced off for this node (setting). Details on the node page.',
     },
     metricsPending: 'Metrics pending - first poll within 15s',
     loadLabel: 'Load',

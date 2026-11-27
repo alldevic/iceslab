@@ -158,6 +158,7 @@ export async function createNode(
       hardening: (input.hardening as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
       // Э3 F: the resolver this node's users get. Same jsonb-write pattern.
       dns: (input.dns as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+      ipv6Mode: input.ipv6Mode ?? 'auto',
       // Engine-choice: "singbox is in intendedEngines", kept as its own column.
       singboxEngine: engines.singboxEngine,
       // Which core versions to install; '{}' (every pin) when none were chosen.
@@ -544,6 +545,8 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
   if (input.dns !== undefined) {
     data.dns = (input.dns as Prisma.InputJsonValue | null) ?? Prisma.JsonNull;
   }
+  // 18.6: the IPv6 setting. A change goes to the agent (below).
+  if (input.ipv6Mode !== undefined) data.ipv6Mode = input.ipv6Mode;
   // Э3: attaching or detaching the node-level policy. Checked BEFORE the write,
   // so a policy this node cannot carry out (a WARP rule with no WARP here, a
   // cascade direction this node does not dial) is refused on the screen where
@@ -592,6 +595,10 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
     input.dns !== undefined &&
     JSON.stringify(input.dns ?? null) !== JSON.stringify(existing.dns ?? null);
 
+  //   ipv6Mode → the address family the node's cores leave by; the agent takes
+  //             it in the push request (ApplyInboundsRequest.ipv6Mode).
+  const ipv6ModeChanged = input.ipv6Mode !== undefined && input.ipv6Mode !== existing.ipv6Mode;
+
   // Attaching, swapping or detaching a policy changes what this node does with
   // traffic, so it has to reach the node. Detaching counts: the config must be
   // rewritten WITHOUT the rules, or the node keeps routing by a policy the
@@ -610,7 +617,7 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
     throw nodeClashOf(err, input) ?? err;
   }
 
-  if (domainChanged || addressChanged || dnsChanged) {
+  if (domainChanged || addressChanged || dnsChanged || ipv6ModeChanged) {
     eventBus.emit('node.updated', { nodeId: id, nodeName: updated.name });
   }
   if (policyChanged) {

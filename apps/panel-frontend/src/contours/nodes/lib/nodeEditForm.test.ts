@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import type { NodeCores } from '@iceslab/shared';
 import type { Node } from '@/lib/domain/nodes';
-import { addressFromForm, domainOk, defaults, domainPatch, egressOf, nodeHostOk, splitAddress, statusPut } from '@/contours/nodes/lib/nodeEditForm';
+import { nodeIpv6ModeNote } from '@/contours/nodes/lib/nodeAdapterFacts';
+import { addressFromForm, domainOk, defaults, domainPatch, egressOf, ipv6ModePatch, nodeHostOk, splitAddress, statusPut } from '@/contours/nodes/lib/nodeEditForm';
 
 describe('домен ноды в PUT (A-057)', () => {
   it('уходит только изменённый; пустое снимает домен null', () => {
@@ -83,5 +85,41 @@ describe('адрес ноды в форме: IPv6', () => {
     expect(form.host).toBe('2001:db8::1');
     expect(form.port).toBe(1337);
     expect(addressFromForm(form.host, Number(form.port))).toBe('[2001:db8::1]:1337');
+  });
+});
+
+describe('режим IPv6 ноды (18.6)', () => {
+  it('в форме читается из ноды; нет значения (сервер старше поля) или чужое значение — auto', () => {
+    expect(defaults({ ipv6Mode: 'off' } as Node).ipv6Mode).toBe('off');
+    expect(defaults({ ipv6Mode: 'on' } as Node).ipv6Mode).toBe('on');
+    expect(defaults({} as Node).ipv6Mode).toBe('auto');
+    expect(defaults({ ipv6Mode: 'x' } as unknown as Node).ipv6Mode).toBe('auto');
+    expect(defaults(null).ipv6Mode).toBe('auto');
+  });
+
+  it('в PUT уходит только изменённый', () => {
+    expect(ipv6ModePatch('auto', 'auto')).toEqual({});
+    expect(ipv6ModePatch(undefined, 'auto')).toEqual({});
+    expect(ipv6ModePatch('off', 'off')).toEqual({});
+    expect(ipv6ModePatch('auto', 'off')).toEqual({ ipv6Mode: 'off' });
+    expect(ipv6ModePatch(undefined, 'on')).toEqual({ ipv6Mode: 'on' });
+    expect(ipv6ModePatch('on', 'auto')).toEqual({ ipv6Mode: 'auto' });
+  });
+
+  const cores = (ipv6?: NodeCores['ipv6']): NodeCores => ({ observedAt: 't', cores: [], ...(ipv6 ? { ipv6 } : {}) });
+  const works = { stack: true, global: true, addresses: ['2001:db8::1'], egress: true };
+  const fails = { stack: true, global: true, addresses: ['2001:db8::1'], egress: false };
+  const none = { stack: false, global: false, addresses: [] as string[] };
+
+  it('пометки: on при неуспешной проверке — «может не работать»; агент без блока ipv6 — не поддерживает', () => {
+    expect(nodeIpv6ModeNote(cores(fails), 'on')).toBe('onNotWorking');
+    expect(nodeIpv6ModeNote(cores(none), 'on')).toBe('onNotWorking');
+    expect(nodeIpv6ModeNote(cores(works), 'on')).toBeNull();
+    expect(nodeIpv6ModeNote(cores(fails), 'off')).toBeNull();
+    expect(nodeIpv6ModeNote(cores(fails), 'auto')).toBeNull();
+    expect(nodeIpv6ModeNote(cores(), 'on')).toBe('agentUnsupported');
+    expect(nodeIpv6ModeNote(cores(), 'off')).toBe('agentUnsupported');
+    expect(nodeIpv6ModeNote(null, 'on')).toBe('agentUnsupported');
+    expect(nodeIpv6ModeNote(cores(), 'auto')).toBeNull();
   });
 });

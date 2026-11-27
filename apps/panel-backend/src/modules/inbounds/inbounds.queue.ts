@@ -7,6 +7,7 @@ import type {
   ProtocolName,
   XrayCascadeFragments,
 } from '@iceslab/shared';
+import { readIpv6Mode } from '@iceslab/shared';
 import { queueRedis, redis } from '../../lib/infra/redis.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
@@ -111,6 +112,8 @@ interface NodeRow {
   address: string;
   /** Э3 F: the resolver this node's users get; null = the host's own. */
   dns: unknown;
+  /** 18.6: auto | on | off; only `on` and `off` go to the agent. */
+  ipv6Mode: string;
   /** Null until a push landed on this node once: nothing of ours is on it. */
   lastInboundSyncAt: Date | null;
 }
@@ -118,7 +121,7 @@ interface NodeRow {
 async function fetchNode(nodeId: string): Promise<NodeRow | null> {
   return prisma.node.findFirst({
     where: { id: nodeId, deletedAt: null, status: { not: 'disabled' } },
-    select: { id: true, name: true, address: true, dns: true, lastInboundSyncAt: true },
+    select: { id: true, name: true, address: true, dns: true, ipv6Mode: true, lastInboundSyncAt: true },
   });
 }
 
@@ -535,12 +538,16 @@ async function buildApplyInboundsRequest(node: NodeRow): Promise<ApplyInboundsRe
   // push gives the node's xray. Under a chain an xray entry hands over (socks
   // outbounds), and a node whose users are not on xray draws no way out at all.
   const policy = await resolvePolicyForNode(node.id, cascadeXrayDrawingOf(chain, fragments));
+  // 18.6: `auto` is not written, so a node left on the default is sent the same
+  // bytes as before the field (and the drift fingerprint does not move).
+  const ipv6Mode = readIpv6Mode(node.ipv6Mode);
   return {
     inbounds,
     ...(policy ? { policy } : {}),
     ...(dns ? { dns } : {}),
     ...(cascade ? { cascade } : {}),
     ...(chain ? { chain } : {}),
+    ...(ipv6Mode !== 'auto' ? { ipv6Mode } : {}),
   };
 }
 

@@ -35,7 +35,7 @@ import { listSquads } from '@/lib/domain/squads';
 import { useOverview } from '@/lib/domain/dashboard';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { dnsPatch, dnsProblems } from '@/contours/nodes/lib/nodeDnsForm';
-import { addressFromForm, defaults, domainOk, domainPatch, egressOf, nodeEnginesPut, nodeHostOk, statusPut, type FormValues } from '@/contours/nodes/lib/nodeEditForm';
+import { addressFromForm, defaults, domainOk, domainPatch, egressOf, ipv6ModePatch, nodeEnginesPut, nodeHostOk, statusPut, type FormValues } from '@/contours/nodes/lib/nodeEditForm';
 import { loadFailure, loadView } from '@/lib/ui/loadView';
 import { nodeEnginesRefusal, type NodeEnginesRefusal } from '@/contours/nodes/lib/nodeCreateForm';
 import { AMBER, DIM, MOSS } from '@/contours/nodes/lib/colors';
@@ -219,6 +219,8 @@ export function useNodeEditForm() {
         policyId: form.values.policyId || null,
         // Only when changed; the server re-pushes the node, and the sync strip says when it landed.
         ...dnsPatch(node?.dns, form.values.dns),
+        // 18.6: only when changed; the server re-pushes the node, which takes the mode.
+        ...ipv6ModePatch(node?.ipv6Mode, form.values.ipv6Mode),
         // Поколения AWG нет: это факт модуля, не выбор (227054e).
         // Версии ядер: только изменённые компоненты, и только если сервер поле
         // знает (ключ пришёл в ответе про ноду).

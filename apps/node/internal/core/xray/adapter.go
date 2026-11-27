@@ -79,6 +79,8 @@ type Adapter struct {
 	// "unchanged": ApplyInbound starts the core again instead of acking a push
 	// whose process is down. Cleared by the next start that survives the window.
 	lastStartFailed bool
+	// ipv6: the IPv6 answer the last config was drawn under (familyStaleLocked). Under mu.
+	ipv6 core.IPv6Render
 
 	// versions remembers `xray version` until the binary on disk changes: the
 	// installer replaces xray under a running agent, and a once-per-process
@@ -202,7 +204,7 @@ func (a *Adapter) ApplyPolicy(raw json.RawMessage) error {
 	unchanged := policyEqual(a.policy, parsed.Rules)
 	// A core whose last start failed is down under this very policy; "unchanged"
 	// would ack a push the node is not serving.
-	if unchanged && !a.coreDownLocked() {
+	if unchanged && !a.coreDownLocked() && !a.familyStaleLocked() {
 		a.mu.Unlock()
 		return nil
 	}
@@ -258,7 +260,7 @@ func (a *Adapter) ApplyDns(raw json.RawMessage) error {
 
 	a.mu.Lock()
 	// Same as ApplyPolicy: a dead core after a failed start is not "unchanged".
-	if dnsEqual(a.dns, parsed) && !a.coreDownLocked() {
+	if dnsEqual(a.dns, parsed) && !a.coreDownLocked() && !a.familyStaleLocked() {
 		a.mu.Unlock()
 		return nil
 	}
@@ -321,7 +323,7 @@ func (a *Adapter) ApplyCascade(fragments json.RawMessage) error {
 		return a.revertRefusedCascade(a.regenerateAndRestart(context.Background()), nil, prev)
 	}
 	// Same as ApplyPolicy: a dead core after a failed start is not "unchanged".
-	if parsed == nil || (cascadeEqual(a.cascade, parsed) && !a.coreDownLocked()) {
+	if parsed == nil || (cascadeEqual(a.cascade, parsed) && !a.coreDownLocked() && !a.familyStaleLocked()) {
 		a.mu.Unlock()
 		return nil
 	}
@@ -362,6 +364,14 @@ func (a *Adapter) SetChainHolds(held bool) {
 // is a core that has nothing to serve, not a dead one.
 func (a *Adapter) coreDownLocked() bool {
 	return a.lastStartFailed || (a.proc != nil && !a.proc.Running())
+}
+
+// familyStaleLocked: the config was drawn under the other IPv6 answer than the
+// one today (the node's mode flipped, or the egress check came out otherwise),
+// so an identical push is not "unchanged" either: the address family the core
+// leaves by is in the config (18.6). Caller holds a.mu.
+func (a *Adapter) familyStaleLocked() bool {
+	return a.ipv6.Stale(nodeHasIPv6())
 }
 
 // NoteGeo implements core.GeoReceiver: remember what the files are now. No
@@ -1498,7 +1508,7 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	}
 	// A core whose last start failed is down under this very config; answering
 	// "unchanged" would ack a push the node is not serving.
-	if unchanged && !a.coreDownLocked() {
+	if unchanged && !a.coreDownLocked() && !a.familyStaleLocked() {
 		a.mu.Unlock()
 		a.logger.Info("xray ApplyInbound: config unchanged, skipping restart")
 		return nil
@@ -1677,6 +1687,7 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) (retErr error) {
 	policy := a.policy
 	dns := a.dns
 	geo := a.geo
+	a.ipv6.Note(nodeHasIPv6())
 	cfgPath := a.cfg.ConfigPath
 	binPath := a.cfg.BinaryPath
 	run := a.cfg.RunCmd

@@ -63,6 +63,8 @@ type Adapter struct {
 	// is not skipped as "unchanged": the core is down under this very config.
 	// Cleared by a start that survives the window. Under mu.
 	lastStartFailed bool
+	// ipv6: the IPv6 answer the last config was drawn under (familyStaleLocked). Under mu.
+	ipv6 core.IPv6Render
 	// restarts: the core's restart tally (RestartReporter), fed by OnRestart.
 	restarts *core.RestartTally
 
@@ -402,7 +404,7 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	}
 	if a.cfg.Inbound.Method == wire.Method &&
 		a.cfg.Inbound.ServerPSK == wire.ServerPSK &&
-		a.cfg.Inbound.ListenPort == effectivePort && !a.coreDownLocked() {
+		a.cfg.Inbound.ListenPort == effectivePort && !a.coreDownLocked() && !a.familyStaleLocked() {
 		a.mu.Unlock()
 		a.logger.Info("shadowsocks ApplyInbound: config unchanged, skipping restart")
 		return nil
@@ -511,6 +513,7 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 	inbound := a.cfg.Inbound
 	cfgPath := a.cfg.ConfigPath
 	binPath := a.cfg.BinaryPath
+	a.ipv6.Note(nodeHasIPv6())
 	a.mu.Unlock()
 
 	blob, err := renderConfig(inbound, clients)
@@ -631,4 +634,12 @@ func (a *Adapter) RestartStats() core.RestartStats {
 // is a core that has nothing to serve, not a dead one.
 func (a *Adapter) coreDownLocked() bool {
 	return a.lastStartFailed || (a.proc != nil && !a.proc.Running())
+}
+
+// familyStaleLocked: the config was drawn under the other IPv6 answer than the
+// one today (the node's mode flipped, or the egress check came out otherwise),
+// so an identical push is not "unchanged" either: the address family the core
+// leaves by is in the config (18.6). Caller holds a.mu.
+func (a *Adapter) familyStaleLocked() bool {
+	return a.ipv6.Stale(nodeHasIPv6())
 }

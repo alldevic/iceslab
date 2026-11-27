@@ -135,3 +135,59 @@ func TestEffectiveIPv6NeedsAnAddressAndAWorkingEgress(t *testing.T) {
 		}
 	}
 }
+
+// 18.6: the mode over the check. on and off decide without asking the host;
+// auto, and a value this agent does not know, is the check's answer.
+func TestEffectiveIPv6ByModeAddressAndCheck(t *testing.T) {
+	defer func(p *IPv6Prober) { sharedIPv6 = p }(sharedIPv6)
+	defer SetIPv6Mode(IPv6ModeAuto)
+	facts := map[string]IPv6Facts{
+		"works":      {Global: true, Egress: true},
+		"no route":   {Global: true},
+		"no address": {},
+	}
+	for _, c := range []struct {
+		mode, facts string
+		want        bool
+	}{
+		{"auto", "works", true}, {"auto", "no route", false}, {"auto", "no address", false},
+		{"on", "works", true}, {"on", "no route", true}, {"on", "no address", true},
+		{"off", "works", false}, {"off", "no route", false}, {"off", "no address", false},
+		{"", "works", true}, {"", "no route", false},
+		{"sideways", "works", true}, {"sideways", "no address", false},
+	} {
+		asked := 0
+		sharedIPv6 = &IPv6Prober{ttl: time.Minute, now: time.Now, probe: func() IPv6Facts { asked++; return facts[c.facts] }}
+		SetIPv6Mode(c.mode)
+		if got := EffectiveIPv6(); got != c.want {
+			t.Errorf("mode %q, %s: got %v, want %v", c.mode, c.facts, got, c.want)
+		}
+		if (c.mode == "on" || c.mode == "off") && asked != 0 {
+			t.Errorf("mode %q ran the host check %d times", c.mode, asked)
+		}
+	}
+}
+
+func TestIPv6ModeReadsOnAndOffOnly(t *testing.T) {
+	defer SetIPv6Mode(IPv6ModeAuto)
+	for in, want := range map[string]string{"on": "on", "off": "off", "auto": "auto", "": "auto", "ON": "auto", "x": "auto"} {
+		if got := NormalizeIPv6Mode(in); got != want {
+			t.Errorf("NormalizeIPv6Mode(%q) = %q, want %q", in, got, want)
+		}
+		SetIPv6Mode(in)
+		if got := IPv6ModeNow(); got != want {
+			t.Errorf("SetIPv6Mode(%q): mode now %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestIPv6RenderIsStaleOnlyAfterADrawUnderTheOtherAnswer(t *testing.T) {
+	var r IPv6Render
+	if r.Stale(true) || r.Stale(false) {
+		t.Error("nothing drawn yet is not stale")
+	}
+	r.Note(true)
+	if r.Stale(true) || !r.Stale(false) {
+		t.Error("drawn with IPv6: stale only against no IPv6")
+	}
+}

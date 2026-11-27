@@ -9,7 +9,7 @@ import ru from '@/i18n/locales/ru';
  */
 const ALLOWED = new Set([
   'mTLS', 'xray', 'bootstrap', 'degraded', 'not-applicable', 'RSS', 'OOM', 'GeoIP',
-  'IP', 'DNS', 'SSH', 'AWG', 'AmneziaWG', 'sing-box', 'hysteria', 'x', 'MiB', 'ms',
+  'IP', 'IPv6', 'DNS', 'SSH', 'AWG', 'AmneziaWG', 'sing-box', 'hysteria', 'x', 'MiB', 'ms',
 ]);
 
 function latinWords(node: unknown, out: Map<string, string>, path: string): void {

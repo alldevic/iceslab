@@ -1,5 +1,7 @@
 import { Caption } from '@/contours/nodes/components/NodeEdit/Caption';
-import { Box, NumberInput, Select, Stack, Switch, Text, TextInput } from '@mantine/core';
+import { Box, NumberInput, SegmentedControl, Select, Stack, Switch, Text, TextInput } from '@mantine/core';
+import { readIpv6Mode } from '@iceslab/shared';
+import { nodeIpv6EgressFact, nodeIpv6Fact, nodeIpv6ModeNote } from '@/contours/nodes/lib/nodeAdapterFacts';
 import { CARD, CYAN, HAIRLINE } from '@/contours/nodes/lib/colors';
 import { COUNTRY_OPTIONS } from '@/lib/domain/countries';
 import { FIELD } from '@/contours/nodes/lib/fieldStyles';
@@ -9,7 +11,7 @@ import { PROTOCOL_OPTIONS } from '@/contours/nodes/lib/nodeProtocols';
 import { ServerIcon } from '@/contours/nodes/components/NodeEdit/icons';
 import { useTranslation } from 'react-i18next';
 import { policyReachFacts, type PolicyReachFacts } from '@/contours/nodes/lib/policyReach';
-import { FAINT, MIST, MONO, MOSS } from '@/contours/nodes/lib/colors';
+import { AMBER, FAINT, MIST, MONO, MOSS } from '@/contours/nodes/lib/colors';
 import type { NodeEditor } from '@/contours/nodes/components/NodeEdit/useNodeEditForm';
 import { EngineChips } from '@/contours/nodes/components/EngineChips';
 import { LoadFailedLine } from '@/ui/LoadFailed';
@@ -172,6 +174,7 @@ export function NodeParamsForm({
                   placeholder="node.example.com"
                   {...form.getInputProps('domain')}
                 />
+                <Ipv6ModeField form={form} node={node} />
                 {/* The region list did not arrive: said, not an empty picker. */}
                 {regionsFailure && <LoadFailedLine message={regionsFailure.message} onRetry={regionsFailure.onRetry} />}
 
@@ -299,5 +302,57 @@ function PolicyApplicabilityLine({ state }: { state: PolicyReachFacts['state'] }
         {t(`nodeEdit.policyApplicability.${state}`)}
       </Text>
     </Box>
+  );
+}
+
+
+/**
+ * 18.6: the IPv6 switch of the node, with the facts it overrides beside it. The
+ * agent's own answer is `auto` (a global address and an outbound connection
+ * that went through); `on` and `off` are the operator's word over it. `on` on a
+ * node whose check fails is allowed and says so. mtproto stays on IPv4 either
+ * way, which the hint names.
+ */
+function Ipv6ModeField({ form, node }: Pick<NodeEditor, 'form' | 'node'>) {
+  const { t } = useTranslation();
+  const mode = readIpv6Mode(form.values.ipv6Mode);
+  const fact = nodeIpv6Fact(node?.cores);
+  const egress = nodeIpv6EgressFact(node?.cores);
+  const note = nodeIpv6ModeNote(node?.cores, mode);
+  const factText =
+    fact.state === 'unknown'
+      ? t('nodeEdit.ipv6.unknown')
+      : [
+          fact.state === 'none' ? t('nodeEdit.ipv6Mode.noAddress') : t('nodeEdit.ipv6Mode.hasAddress', { count: fact.count }),
+          (egress === 'works'
+            ? t('nodeEdit.ipv6Mode.egress.works')
+            : egress === 'fails'
+              ? t('nodeEdit.ipv6Mode.egress.fails')
+              : t('nodeEdit.ipv6Mode.egress.unknown')),
+        ].join(', ');
+  return (
+    <Stack gap={6}>
+      <Text style={{ fontSize: 14, fontWeight: 500 }}>{t('nodeEdit.ipv6Mode.label')}</Text>
+      <SegmentedControl
+        data-testid="ipv6-mode"
+        aria-label={t('nodeEdit.ipv6Mode.label')}
+        value={mode}
+        onChange={(v) => form.setFieldValue('ipv6Mode', readIpv6Mode(v))}
+        data={[
+          { value: 'auto', label: t('nodeEdit.ipv6Mode.auto') },
+          { value: 'on', label: t('nodeEdit.ipv6Mode.on') },
+          { value: 'off', label: t('nodeEdit.ipv6Mode.off') },
+        ]}
+      />
+      <Text style={{ fontSize: 12, lineHeight: '17px', color: MIST }}>{t('nodeEdit.ipv6Mode.hint')}</Text>
+      <Text style={{ fontSize: 12, lineHeight: '17px', color: FAINT }}>
+        {t('nodeEdit.ipv6Mode.facts')}: {factText}
+      </Text>
+      {note && (
+        <Text role="note" style={{ fontSize: 12, lineHeight: '17px', color: AMBER }}>
+          {note === 'onNotWorking' ? t('nodeEdit.ipv6Mode.note.onNotWorking') : t('nodeEdit.ipv6Mode.note.agentUnsupported')}
+        </Text>
+      )}
+    </Stack>
   );
 }

@@ -1341,6 +1341,15 @@ func (s *Server) applyPushKept(
 ) (o pushOutcome) {
 	o.policyRefusedBy = make(map[string]bool)
 	o.dnsRefusedBy = make(map[string]bool)
+	// 18.6: the node's IPv6 mode is in force before any core draws its config,
+	// on a push from the panel and on a restore from the store alike (the store
+	// holds the whole request), so a restarted agent runs on it before the
+	// panel's first poll. The answer is asked once here, outside the cores'
+	// locks: in auto it may run the egress check, and the cores ask the cache.
+	core.SetIPv6Mode(req.Ipv6Mode)
+	if s.cfg.IPv6Probe != nil {
+		core.EffectiveIPv6()
+	}
 	if kept == nil {
 		kept = &keptBlocks{}
 	}

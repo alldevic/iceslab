@@ -4,6 +4,8 @@ import (
 	"encoding/hex"
 	"strings"
 	"testing"
+
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 )
 
 // validSecret builds a secret shaped the way the panel's derivation shapes
@@ -103,5 +105,22 @@ func TestRenderConfig_RequiresSecret(t *testing.T) {
 	_, err := renderConfig(InboundConfig{Domain: "www.cloudflare.com"})
 	if err == nil || !strings.Contains(err.Error(), "Secret is required") {
 		t.Errorf("expected Secret-required error, got %v", err)
+	}
+}
+
+// 18.6: mtproto does not pick an address family from the node's IPv6 mode (it
+// is not one of the cores the switch reaches): prefer-ipv4 in every mode.
+func TestRenderConfig_StaysPreferIPv4InEveryIPv6Mode(t *testing.T) {
+	defer core.SetIPv6Mode(core.IPv6ModeAuto)
+	cfg := InboundConfig{Domain: "www.cloudflare.com", Secret: validSecret("www.cloudflare.com"), ListenPort: 443, StatsPort: 3129}
+	for _, mode := range []string{"auto", "on", "off"} {
+		core.SetIPv6Mode(mode)
+		blob, err := renderConfig(cfg)
+		if err != nil {
+			t.Fatalf("mode %s: %v", mode, err)
+		}
+		if !strings.Contains(string(blob), `prefer-ip = "prefer-ipv4"`) {
+			t.Errorf("mode %s: prefer-ip is not prefer-ipv4:\n%s", mode, blob)
+		}
 	}
 }

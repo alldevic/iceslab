@@ -1,4 +1,4 @@
-import type { CoreComponent, DnsCfg, EngineName, NodeCoreInfo, NodeCores, NodeCoreVersions } from '@iceslab/shared';
+import type { CoreComponent, DnsCfg, EngineName, Ipv6Mode, NodeCoreInfo, NodeCores, NodeCoreVersions } from '@iceslab/shared';
 import type { AwgProtocol } from '@/lib/domain/awg';
 import type { NodeGeoFact, NodeGeoIntended } from '@/lib/domain/geoSets';
 import { api } from '@/lib/net/client';
@@ -129,6 +129,8 @@ export interface Node {
   /** Who answers the name lookups of this node's users (nodes.mapper.ts). null =
    *  the node's built-in resolver set; absent on a server older than the field. */
   dns?: DnsCfg | null;
+  /** 18.6: the operator's IPv6 setting, auto | on | off. Absent = a server older than the field (reads as auto). */
+  ipv6Mode?: Ipv6Mode;
   /**
    * Поколение AmneziaWG, которое говорит модуль ядра на этой ноде (227054e):
    * ФАКТ из отчёта, не выбор, в PUT не уходит. См. `lib/domain/awg.ts`.
@@ -401,6 +403,8 @@ export interface UpdateNodeInput {
    * At most 16 servers, see `dnsProblems` (contours/nodes/lib/nodeDnsForm.ts).
    */
   dns?: DnsCfg | null;
+  /** 18.6: absent = untouched; a change re-pushes the node. */
+  ipv6Mode?: Ipv6Mode;
   /**
    * Три значения на компонент: версия пишется, null возвращает на пин,
    * пропущенный компонент не трогается; null на всё = все пины. Отказ 400

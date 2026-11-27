@@ -319,6 +319,12 @@ type ApplyInboundsRequest struct {
 	// agent does not hold with that sha256 refuses the WHOLE push before
 	// anything is applied: 409 GEO_MISSING.
 	Geo *NodeGeo `json:"geo,omitempty"`
+	// Ipv6Mode is the operator's word on this node's IPv6 egress (milestone
+	// 18.6): "on" or "off", which override the agent's own check for the cores
+	// that pick an address family. Absent or anything else = "auto". The panel
+	// never writes "auto", so a node on the default is sent the same bytes as
+	// before the field; an agent older than the field drops it.
+	Ipv6Mode string `json:"ipv6Mode,omitempty"`
 }
 
 // NodeGeo mirrors NodeGeo in shared/transport.ts. Contract:
