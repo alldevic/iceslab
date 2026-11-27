@@ -65,7 +65,7 @@ async function createUser(body: Record<string, unknown>) {
 describe('remnawave-compat facade (facade-on)', () => {
   it('wraps success in {response} with application/json', async () => {
     const res = await createUser({ username: `rwt_env_${Date.now()}` });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(201);
     expect(res.headers['content-type']).toContain('application/json');
     const body = res.json();
     expect(body).toHaveProperty('response');
@@ -79,7 +79,7 @@ describe('remnawave-compat facade (facade-on)', () => {
 
   it('accepts hwidDeviceLimit:0 (unlimited) on create and reads it back as 0', async () => {
     const create = await createUser({ username: `rwt_hwid0_${Date.now()}`, hwidDeviceLimit: 0 });
-    expect(create.statusCode).toBe(200);
+    expect(create.statusCode).toBe(201);
     const ref = create.json().response.id;
     createdUserRefs.push(ref);
     const get = await app.inject({ method: 'GET', url: `/${PREFIX}/api/users/${ref}`, headers: bearer(adminToken) });
@@ -200,7 +200,7 @@ describe('remnawave-compat facade (facade-on)', () => {
     // activation on its exact-int verify. Byte-precise must round-trip unchanged.
     const bytes = 13_237_418_240;
     const create = await createUser({ username: `rwt_bytes_${Date.now()}`, trafficLimitBytes: bytes });
-    expect(create.statusCode).toBe(200);
+    expect(create.statusCode).toBe(201);
     const uuid = create.json().response.id;
     createdUserRefs.push(uuid);
     expect(create.json().response.trafficLimitBytes).toBe(bytes);
@@ -256,7 +256,7 @@ describe('remnawave-compat facade (facade-on)', () => {
     expect(lookup.statusCode).toBe(404);
     // ...and re-creating with the same username now succeeds (index freed).
     const retry = await createUser({ username });
-    expect(retry.statusCode).toBe(200);
+    expect(retry.statusCode).toBe(201);
     createdUserRefs.push(retry.json().response.id);
   });
 

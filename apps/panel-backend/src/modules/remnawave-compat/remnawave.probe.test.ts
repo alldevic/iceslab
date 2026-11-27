@@ -52,7 +52,7 @@ const get = (url: string) => app.inject({ method: 'GET', url: `/${PREFIX}/api/${
 
 async function mk(body: Record<string, unknown>) {
   const res = await post('users', body);
-  if (res.statusCode === 200) createdUserRefs.push(res.json().response.id);
+  if (res.statusCode === 201) createdUserRefs.push(res.json().response.id);
   return res;
 }
 
@@ -60,7 +60,7 @@ describe('R6 empirical: full lifecycle sequence', () => {
   it('create → get → patch traffic → disable → enable → reset → by-tg → delete all succeed', async () => {
     const tg = String(Date.now()).slice(-9);
     const c = await mk({ username: `probe_life_${Date.now()}`, telegramId: tg, trafficLimitBytes: 13_237_418_240 });
-    expect(c.statusCode).toBe(200);
+    expect(c.statusCode).toBe(201);
     const ref = c.json().response.id;
     expect((await get(`users/${ref}`)).statusCode).toBe(200);
     expect((await patch({ id: ref, trafficLimitBytes: 61_424_509_440 })).statusCode).toBe(200);
@@ -74,7 +74,7 @@ describe('R6 empirical: full lifecycle sequence', () => {
     expect(revoked.json().response.subscriptionUrl).not.toBe(beforeUrl);
     // 3.x lookup is the filtered stream, not the removed by-telegram-id route.
     expect((await get(`users/stream?size=50&telegramId=${tg}`)).json().response.users.length).toBe(1);
-    expect((await app.inject({ method: 'DELETE', url: `/${PREFIX}/api/users/${ref}`, headers: bearer(adminToken) })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'DELETE', url: `/${PREFIX}/api/users/${ref}`, headers: bearer(adminToken) })).statusCode).toBe(204);
   });
 });
 
@@ -129,9 +129,9 @@ describe('R6 empirical: concurrency', () => {
   it('parallel create of the SAME username → exactly one 200, others 409 A019 (no 500)', async () => {
     const username = `probe_race_${Date.now()}`;
     const results = await Promise.all(Array.from({ length: 5 }, () => post('users', { username })));
-    for (const r of results) if (r.statusCode === 200) createdUserRefs.push(r.json().response.id);
+    for (const r of results) if (r.statusCode === 201) createdUserRefs.push(r.json().response.id);
     const codes = results.map((r) => r.statusCode);
-    expect(codes.filter((c) => c === 200)).toHaveLength(1);
+    expect(codes.filter((c) => c === 201)).toHaveLength(1);
     expect(codes.filter((c) => c === 500)).toHaveLength(0);
     expect(codes.filter((c) => c === 409)).toHaveLength(4);
   });

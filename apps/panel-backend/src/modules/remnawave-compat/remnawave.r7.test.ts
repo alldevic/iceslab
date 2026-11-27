@@ -52,7 +52,7 @@ const post = (url: string, payload?: unknown) =>
 
 async function mkUser(body: Record<string, unknown> = {}) {
   const res = await post('users', { username: `r7reg_${Date.now()}_${Math.trunc(performance.now() * 1000)}`, ...body });
-  if (res.statusCode === 200) createdUserRefs.push(res.json().response.id);
+  if (res.statusCode === 201) createdUserRefs.push(res.json().response.id);
   return res;
 }
 async function mkSquad(name?: string) {
@@ -120,7 +120,9 @@ describe('R7: the shop sends Content-Type: application/json on BODYLESS POST/DEL
     expect((await jsonNoBody('POST', `users/${uuid}/actions/disable`)).statusCode).toBe(200);
     expect((await jsonNoBody('POST', `users/${uuid}/actions/enable`)).statusCode).toBe(200);
     expect((await jsonNoBody('POST', `users/${uuid}/actions/reset-traffic`)).statusCode).toBe(200);
-    expect((await jsonNoBody('DELETE', `users/${uuid}`)).statusCode).toBe(200);
+    const del = await jsonNoBody('DELETE', `users/${uuid}`);
+    expect(del.statusCode).toBe(204);
+    expect(del.body).toBe('');
   });
 
   it('a genuinely malformed JSON body is a clean 400, not a 500', async () => {
@@ -139,7 +141,7 @@ describe('R7: squad ids are normalised (dedupe + case) and system squads are rej
   it('a duplicated squad uuid on create is deduped, not a bogus 409 A019', async () => {
     const squad = await mkSquad();
     const res = await mkUser({ activeInternalSquads: [squad, squad] });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(201);
     expect(res.json().response.activeInternalSquads.map((s: { uuid: string }) => s.uuid)).toEqual([squad]);
   });
 

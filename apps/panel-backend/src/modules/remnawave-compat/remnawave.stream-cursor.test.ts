@@ -74,7 +74,7 @@ async function mkUser(): Promise<number> {
     username: `cursor_${Date.now()}_${seq}`,
     telegramId: Number(COHORT),
   });
-  expect(res.statusCode).toBe(200);
+  expect(res.statusCode).toBe(201);
   return res.json().response.id as number;
 }
 
@@ -195,7 +195,7 @@ describe('/users/stream pages by keyset, so churn cannot hide a subscriber', () 
       telegramId: Number(COHORT),
       expireAt: wanted,
     });
-    expect(created.statusCode).toBe(200);
+    expect(created.statusCode).toBe(201);
     const ref = created.json().response.id as number;
 
     const res = await get(`users/${ref}`);

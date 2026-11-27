@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
+import { getLogger } from '../../lib/infra/logger.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import {
   loadBurnedNode,
@@ -369,5 +370,77 @@ describe('a swap carries the bindings and the node policy', () => {
     await prisma.node.update({ where: { id: own.spare.id }, data: { dns: { servers: ['9.9.9.9'] } as never } });
     await swapped(own.burned.id);
     expect((await prisma.node.findUniqueOrThrow({ where: { id: own.spare.id } })).dns).toEqual({ servers: ['9.9.9.9'] });
+  });
+});
+
+describe('a swap names the cascades that lost a hop', () => {
+  async function node(name: string, status: string, pool?: Record<string, unknown>) {
+    return makeNode({ name, status, pool });
+  }
+  async function cascade(name: string) {
+    seq += 1;
+    return prisma.cascade.create({ data: { name: `${name}-${seq}` } });
+  }
+  async function swapped(burnedId: string) {
+    let scheduled: (() => void) | undefined;
+    const notices: SwapNotice[] = [];
+    const c = new HotswapController(
+      { ...DEFAULT_HOTSWAP_CONFIG, enabled: true },
+      makeHotswapDeps({ runner: runnerMock().runner, notify: (n) => notices.push(n), schedule: (fn) => void (scheduled = fn) }),
+    );
+    c.onAnomaly(anomaly(burnedId));
+    scheduled!();
+    await vi.waitFor(() => expect(notices).toHaveLength(1), { timeout: 10_000 });
+    return notices[0] as Extract<SwapNotice, { kind: 'swapped' }>;
+  }
+
+  it('lists a cascade the burned node is an entry of, a transit of, an exit of, or a legacy hop of, once each, in the notice and the journal', async () => {
+    const burned = await node('burned', 'online', { asn: 'AS1' });
+    const spare = await node('spare', 'disabled', { spare: true, asn: 'AS2' });
+    const other = await node('other', 'online');
+
+    const entry = await cascade('c-entry');
+    const pos = await prisma.cascadePosition.create({ data: { cascadeId: entry.id, position: 0 } });
+    await prisma.cascadePositionNode.create({ data: { positionId: pos.id, nodeId: burned.id } });
+
+    // Entry AND exit of the same cascade: named once.
+    const twice = await cascade('c-twice');
+    const pos2 = await prisma.cascadePosition.create({ data: { cascadeId: twice.id, position: 0 } });
+    await prisma.cascadePositionNode.create({ data: { positionId: pos2.id, nodeId: burned.id } });
+    const dir = await prisma.cascadeDirection.create({ data: { cascadeId: twice.id, tag: 1 } });
+    await prisma.cascadeDirectionNode.create({ data: { directionId: dir.id, nodeId: burned.id } });
+
+    const legacy = await cascade('c-legacy');
+    await prisma.cascadeHop.create({ data: { cascadeId: legacy.id, nodeId: burned.id, position: 0 } });
+
+    // A cascade the burned node is not part of stays out of the list.
+    const unrelated = await cascade('c-unrelated');
+    const pos3 = await prisma.cascadePosition.create({ data: { cascadeId: unrelated.id, position: 0 } });
+    await prisma.cascadePositionNode.create({ data: { positionId: pos3.id, nodeId: other.id } });
+
+    const warn = vi.spyOn(getLogger(), 'warn');
+    const notice = await swapped(burned.id);
+
+    const names = [entry.name, twice.name, legacy.name].sort();
+    expect(notice.report.notes).toEqual([`cascades not rewired (the burned node is a hop of ${names.join(', ')})`]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`cascades not rewired, the burned node is a hop of ${names.join(', ')}`));
+    expect(notice.report.notes.join()).not.toContain(unrelated.name);
+
+    // Named, not rebuilt: the burned node is still the hop, the spare is in none.
+    expect(await prisma.cascadePositionNode.count({ where: { nodeId: burned.id } })).toBe(2);
+    expect(await prisma.cascadeDirectionNode.count({ where: { nodeId: burned.id } })).toBe(1);
+    expect(await prisma.cascadeHop.count({ where: { nodeId: burned.id } })).toBe(1);
+    expect(await prisma.cascadePositionNode.count({ where: { nodeId: spare.id } })).toBe(0);
+    expect(await prisma.cascadeDirectionNode.count({ where: { nodeId: spare.id } })).toBe(0);
+    expect(await prisma.cascadeHop.count({ where: { nodeId: spare.id } })).toBe(0);
+  });
+
+  it('adds no note and no journal line when the burned node is in no cascade', async () => {
+    const burned = await node('burned', 'online', { asn: 'AS1' });
+    await node('spare', 'disabled', { spare: true, asn: 'AS2' });
+    const warn = vi.spyOn(getLogger(), 'warn');
+    const notice = await swapped(burned.id);
+    expect(notice.report.notes).toEqual([]);
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('cascades not rewired'));
   });
 });

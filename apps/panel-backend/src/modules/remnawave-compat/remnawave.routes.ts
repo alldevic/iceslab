@@ -42,10 +42,12 @@ const USER_INCLUDE = {
  * Its MAJOR is the load-bearing part: the client derives the user-identity model
  * and the whole route set from it, so changing this to a 2.x string silently
  * re-points every user-scoped call at an identity this facade no longer emits.
- * The exact value is the client's certified preset for the 3.x generation, which
- * keeps us on its tested matrix instead of in best-effort mode.
+ * The exact value is the client's certified preset for the 3.x generation (the
+ * shop's `remnawave_support.json` at v3.8.6 names 3.4.10), which keeps us on its
+ * tested matrix instead of in best-effort mode, and equals the reference the
+ * shop stand compares against.
  */
-const REMNAWAVE_API_VERSION = '3.3.2';
+const REMNAWAVE_API_VERSION = '3.4.10';
 
 /** A telegram id from a stream filter, or null when it is not one. Separate from
  *  parseUserRef despite the similar shape: a telegram id is Telegram's number,
@@ -390,7 +392,8 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
       if (statusToNative(body.status) === 'disabled') {
         dto = await usersService.updateUser(dto.id, UpdateUserSchema.parse({ status: 'disabled' }));
       }
-      return sendResponse(reply, mapUserToRemna(dto, await mapCtx()));
+      // 201 like Remnawave's create (the shop's registry accepts 200 and 201).
+      return sendResponse(reply, mapUserToRemna(dto, await mapCtx()), 201);
     } catch (err) {
       await usersService.deleteUser(dto.id).catch(() => {});
       throw err;
@@ -461,11 +464,13 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
     return sendResponse(reply, mapUserToRemna(dto, await mapCtx()));
   });
 
-  // DELETE /api/users/:uuid — soft delete (minishop only checks `not error`).
+  // DELETE /api/users/:uuid — soft delete. 204 with no body, as Remnawave 3.x
+  // answers; the shop turns an empty 2xx body into a success (its registry lists
+  // 204 for users.delete with empty_success_body) and otherwise only checks `not error`.
   app.delete('/api/users/:ref', opts, async (request, reply) => {
     const { ref } = request.params as { ref: string };
     await usersService.deleteUser(await resolveUserId(ref));
-    return sendResponse(reply, { deleted: true });
+    return reply.code(204).send();
   });
 
   // ─────────────── Users: reads ───────────────
@@ -844,7 +849,7 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
   // module exists to make that declaration true — so this string and the shapes
   // below move together or not at all.
   //
-  // 3.3.2 is the client's certified preset for that generation (its
+  // 3.4.10 is the client's certified preset for that generation (its
   // remnawave_support.json), which puts us on the matrix it actually tests
   // rather than in the best-effort mode an unrecognised version falls into.
   //

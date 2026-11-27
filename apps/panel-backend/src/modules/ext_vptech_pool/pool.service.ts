@@ -306,7 +306,47 @@ export async function carryNodeSettings(burnedId: string, spareId: string): Prom
   return notes;
 }
 
-/** The repoint step: bindings first, then the node's own settings. */
+/**
+ * The names of the enabled-or-not cascades the node is a hop of: an entry or a
+ * transit position, a direction's exit pool, or a hop of a pre-v4 chain.
+ * Sorted and without repeats, so a node that is two hops of one cascade names
+ * it once.
+ */
+export async function cascadesThroughNode(nodeId: string): Promise<string[]> {
+  const [positions, directions, hops] = await Promise.all([
+    prisma.cascadePositionNode.findMany({
+      where: { nodeId },
+      select: { position: { select: { cascade: { select: { name: true } } } } },
+    }),
+    prisma.cascadeDirectionNode.findMany({
+      where: { nodeId },
+      select: { direction: { select: { cascade: { select: { name: true } } } } },
+    }),
+    prisma.cascadeHop.findMany({ where: { nodeId }, select: { cascade: { select: { name: true } } } }),
+  ]);
+  const names = new Set([
+    ...positions.map((p) => p.position.cascade.name),
+    ...directions.map((d) => d.direction.cascade.name),
+    ...hops.map((h) => h.cascade.name),
+  ]);
+  return [...names].sort();
+}
+
+/**
+ * Cascades are not rewired: a hop is the operator's design, and the replacement
+ * only NAMES the ones that lost a hop - in the journal and, as a note on the
+ * report, in the notification - so the operator rebuilds them.
+ */
+async function noteCascades(burnedId: string, spareId: string): Promise<string[]> {
+  const cascades = await cascadesThroughNode(burnedId);
+  if (cascades.length === 0) return [];
+  getLogger().warn(
+    `[ext-vptech-pool] repoint ${burnedId} -> ${spareId}: cascades not rewired, the burned node is a hop of ${cascades.join(', ')}`,
+  );
+  return [`cascades not rewired (the burned node is a hop of ${cascades.join(', ')})`];
+}
+
+/** The repoint step: bindings first, then the node's own settings, then the cascades to name. */
 export async function carryToSpare(burnedId: string, spareId: string): Promise<CarryReport> {
   const report = await carryBindings(burnedId, spareId);
   let settingsNotes: string[];
@@ -315,7 +355,13 @@ export async function carryToSpare(burnedId: string, spareId: string): Promise<C
   } catch (err) {
     settingsNotes = [`node settings not carried: ${errText(err)}`];
   }
-  return { ...report, notes: [...report.notes, ...settingsNotes] };
+  let cascadeNotes: string[];
+  try {
+    cascadeNotes = await noteCascades(burnedId, spareId);
+  } catch (err) {
+    cascadeNotes = [`cascades through the burned node not listed: ${errText(err)}`];
+  }
+  return { ...report, notes: [...report.notes, ...settingsNotes, ...cascadeNotes] };
 }
 
 /**

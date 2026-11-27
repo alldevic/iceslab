@@ -84,6 +84,7 @@ describe('rw3: the version this facade declares', () => {
     // route set from it. A 2.x string here would re-point every user-scoped call
     // at a UUID identity this facade no longer emits.
     expect(version).toMatch(/^3\./);
+    expect(version).toBe('3.4.10');
   });
 });
 

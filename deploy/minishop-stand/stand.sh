@@ -1058,7 +1058,7 @@ case "${1:-}" in
     # none had been called by a real shop: their whole guard was the panel's own
     # tests. The shop reaches them only through a chain of preconditions, every
     # link of which fails QUIETLY: it must certify the Remnawave version the
-    # facade declares (3.3.2 is in v3.8.6's `certified_versions`), a
+    # facade declares (3.4.10 is in v3.8.6's `certified_versions`), a
     # premium-bearing subscription must be ALIVE (the admin walk deletes its
     # buyer, so a probe run after one finds no candidates), the tariff's premium
     # squad must resolve to nodes (or the worker logs "no accessible nodes" and

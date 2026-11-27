@@ -67,7 +67,7 @@ async function mkUser(): Promise<{ id: string; ref: number }> {
     headers: bearer(),
     payload: { username: `wgdev_${Date.now()}_${seq++}` },
   });
-  if (res.statusCode !== 200) throw new Error(`mkUser failed: ${res.statusCode} ${res.body}`);
+  if (res.statusCode !== 201) throw new Error(`mkUser failed: ${res.statusCode} ${res.body}`);
   const ref = res.json().response.id as number;
   const row = await prisma.user.findFirst({ where: { numericId: BigInt(ref) }, select: { id: true } });
   userIds.push(row.id);
