@@ -38,13 +38,54 @@ export function defaultFrame(type: TemplateType): Frame {
   return readFrame(type, DEFAULT_TEMPLATE_BODIES[type]);
 }
 
-/** A deep copy of the frame without the service key, and whether it asked for
- *  the panel's routing. The cached frame is never written to. */
-export function openFrame(frame: Frame): { cfg: Frame; routing: boolean } {
+/** A deep copy of the frame without the service key, whether it asked for
+ *  the panel's routing, and whether it asked for the panel's DNS rules to be
+ *  poured into its own `dns` (`iceslab: { dns: merge }`, 19.8). The cached frame
+ *  is never written to. */
+export function openFrame(frame: Frame): { cfg: Frame; routing: boolean; dnsMerge: boolean } {
   const cfg = structuredClone(frame);
-  const service = cfg.iceslab as { routing?: unknown } | undefined;
+  const service = cfg.iceslab as { routing?: unknown; dns?: unknown } | undefined;
   delete cfg.iceslab;
-  return { cfg, routing: service?.routing === 'preset' };
+  return { cfg, routing: service?.routing === 'preset', dnsMerge: service?.dns === 'merge' };
+}
+
+/**
+ * Whether a frame's own `dns` is in a shape the panel's DNS rules can be poured
+ * into (19.8); in any other the frame wins whole, as without the mark:
+ *   - xray: an object whose `servers`, if any, is a list;
+ *   - mihomo: an object whose `nameserver-policy`, if any, is a map;
+ *   - sing-box: an object of the 1.12+ form: `servers` a non-empty list of typed
+ *     entries (the form before 1.12 names an `address` and has no `type`) and
+ *     `rules`, if any, a list. A section with no servers is not touched: the
+ *     panel's servers would become the first, the default for every other name.
+ * Stash and the old Clash get no rules whatever the mark says.
+ */
+export function dnsMergeable(type: TemplateType, dns: unknown): boolean {
+  if (!dns || typeof dns !== 'object' || Array.isArray(dns)) return false;
+  const d = dns as Frame;
+  switch (type) {
+    case 'xray-json':
+    case 'xray-json-array':
+      return d.servers === undefined || Array.isArray(d.servers);
+    case 'mihomo': {
+      const p = d['nameserver-policy'];
+      return p === undefined || (typeof p === 'object' && p !== null && !Array.isArray(p));
+    }
+    case 'singbox':
+      return (
+        Array.isArray(d.servers) &&
+        d.servers.length > 0 &&
+        d.servers.every((s) => typeof asObject(s).type === 'string' && asObject(s).address === undefined) &&
+        (d.rules === undefined || Array.isArray(d.rules))
+      );
+    default:
+      return false;
+  }
+}
+
+/** Whether the frame's own `dns` is merged with the panel's rules: the mark is there and the shape allows it (19.8). */
+export function frameMergesDns(type: TemplateType, frame: Frame): boolean {
+  return frameHasOwnDns(frame) && asObject(frame.iceslab).dns === 'merge' && dnsMergeable(type, frame.dns);
 }
 
 /** Whether the frame has a `dns` of its own: the test the builders make (xray

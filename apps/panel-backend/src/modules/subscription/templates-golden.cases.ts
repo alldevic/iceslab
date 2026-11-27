@@ -5,6 +5,7 @@ import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson } from './formats/singbox.js';
 import { buildXrayJson, buildXrayJsonArray } from './formats/xrayjson.js';
 import { expandCascadeEntry } from './cascade-entries.js';
+import { readFrame } from './subscription.frames.js';
 
 /**
  * A-236 step 3: the cases the Default-template golden is taken over. The
@@ -117,6 +118,25 @@ const MIHOMO_DNS_RULES: DnsRule[] = [
   { match: ['domain:corp.example', 'full:host.corp.example', 'geosite:category-ru'], server: 'tcp://10.0.0.1', note: '' },
   { match: ['geosite:category-ads-all'], server: 'https://dns.example/dns-query', note: '' },
 ];
+// Milestone 19.8: templates with a `dns` of their own and `iceslab: { dns: merge }`, one per family.
+export const MERGE_XRAY_FRAME = JSON.stringify({
+  iceslab: { routing: 'preset', dns: 'merge' },
+  log: { loglevel: 'warning' },
+  dns: { queryStrategy: 'UseIPv4', hosts: { 'pin.example': '192.0.2.7' }, servers: ['8.8.8.8', { address: '9.9.9.9', domains: ['domain:own.example'] }] },
+  outbounds: [{ tag: 'direct', protocol: 'freedom' }, { tag: 'block', protocol: 'blackhole' }],
+  routing: { rules: [] },
+});
+export const MERGE_MIHOMO_FRAME = [
+  'iceslab:', '  routing: preset', '  dns: merge',
+  'dns:', '  enable: true', '  nameserver:', '    - 9.9.9.9', '  nameserver-policy:', '    "+.own.example": 9.9.9.9', '    "+.corp.example": 8.8.8.8',
+  'proxies: []', 'proxy-groups:', '  - name: Pick', '    type: select', 'rules:', '  - MATCH,Pick', '',
+].join('\n');
+export const MERGE_SINGBOX_FRAME = JSON.stringify({
+  iceslab: { routing: 'preset', dns: 'merge' },
+  dns: { servers: [{ type: 'udp', tag: 'own', server: '9.9.9.9' }], rules: [{ domain_suffix: ['own.example'], server: 'own' }], final: 'own' },
+  outbounds: [{ type: 'selector', tag: 'Pick', outbounds: [] }, { type: 'direct', tag: 'direct' }],
+  route: { final: 'Pick' },
+});
 const CUSTOM_RULES = [{ type: 'field', domain: ['geosite:netflix'], outboundTag: 'direct' }];
 
 /** Every case: a name and the output of today's builder for it. */
@@ -150,6 +170,21 @@ export function goldenCases(): Record<string, () => string> {
       out[k('xrayjson')] = () => buildXrayJson(eps, { ...p.opts, dnsRules: XRAY_DNS_RULES });
       out[k('xkeen')] = () => buildXrayJson(eps, { ...p.opts, forRouter: true, dnsRules: XRAY_DNS_RULES });
       out[k('xrayjson-array')] = () => buildXrayJsonArray(eps, { ...p.opts, dnsRules: XRAY_DNS_RULES });
+    }
+  }
+  // Milestone 19.8: the same rules poured into a template's own `dns`. Added cases.
+  const xrayFrame = readFrame('xray-json', MERGE_XRAY_FRAME);
+  const mihomoFrame = readFrame('mihomo', MERGE_MIHOMO_FRAME);
+  const singboxFrame = readFrame('singbox', MERGE_SINGBOX_FRAME);
+  for (const [set, eps] of Object.entries(SETS)) {
+    for (const p of PRESETS) {
+      const k = (fmt: string) => `${fmt}/${set}/${p.key}/dns-merge`;
+      out[k('xrayjson')] = () => buildXrayJson(eps, { ...p.opts, frame: xrayFrame, dnsRules: XRAY_DNS_RULES });
+      out[k('xkeen')] = () => buildXrayJson(eps, { ...p.opts, forRouter: true, frame: xrayFrame, dnsRules: XRAY_DNS_RULES });
+      out[k('xrayjson-array')] = () =>
+        buildXrayJsonArray(eps, { ...p.opts, frame: readFrame('xray-json-array', MERGE_XRAY_FRAME), dnsRules: XRAY_DNS_RULES });
+      out[k('clash')] = () => buildClashYaml(eps, { ...p.opts, frame: mihomoFrame, dnsRules: MIHOMO_DNS_RULES });
+      out[k('singbox')] = () => buildSingboxJson(eps, { ...p.opts, frame: singboxFrame, dnsRules: SINGBOX_DNS_RULES });
     }
   }
   return out;

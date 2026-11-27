@@ -15,13 +15,13 @@ export interface DnsSkippingTemplate {
 
 /**
  * The templates of the panel that ask for its routing and still do not get the
- * DNS rules, because their own `dns` wins whole (m19.7). The same facts the
+ * DNS rules, because their own `dns` wins whole (m19.7); a template marked `dns: merge` (m19.8) does get them and is not listed. The same facts the
  * dry run of a template warns by, read from the list. A body that did not read
  * (`null`) and a server that does not say (absent) are left out: nothing is
  * known of them.
  */
 export function templatesSkippingDnsRules(templates: readonly SubscriptionTemplate[] | undefined): DnsSkippingTemplate[] {
   return (templates ?? [])
-    .filter((t) => RULE_TYPES.includes(t.type) && t.ownDns === true && t.asksRouting === true)
+    .filter((t) => RULE_TYPES.includes(t.type) && t.ownDns === true && t.mergesDns !== true && t.asksRouting === true)
     .map((t) => ({ id: t.id, type: t.type, name: t.name }));
 }

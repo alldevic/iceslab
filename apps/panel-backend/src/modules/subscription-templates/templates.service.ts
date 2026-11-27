@@ -10,7 +10,7 @@ import {
   isReservedName,
 } from './templates.defaults.js';
 import { checkTemplateBody } from './templates.parse.js';
-import { frameHasOwnDns, openFrame, readFrame, type Frame } from '../subscription/subscription.frames.js';
+import { frameHasOwnDns, frameMergesDns, openFrame, readFrame, type Frame } from '../subscription/subscription.frames.js';
 
 /**
  * A-236 step 2: subscription templates, the API contract 4.5a
@@ -26,6 +26,8 @@ export interface PublicTemplate {
   isDefault: boolean;
   /** The body has a `dns` of its own (it wins whole, the panel's DNS rules do not reach it); null when the body does not read. */
   ownDns: boolean | null;
+  /** The body marks `iceslab: { dns: merge }` and its `dns` can take the rules: they reach it, so it is not one that skips them (19.8); null when the body does not read. */
+  mergesDns: boolean | null;
   /** The body asks for `iceslab.routing: preset`; null when the body does not read. */
   asksRouting: boolean | null;
   updatedAt: string;
@@ -68,12 +70,15 @@ export class TemplateNotDefaultError extends Error {
 }
 
 /** Read at every listing: a body that does not parse is "unknown", not a failed list. */
-function dnsFacts(type: TemplateType, body: string): { ownDns: boolean | null; asksRouting: boolean | null } {
+function dnsFacts(
+  type: TemplateType,
+  body: string,
+): { ownDns: boolean | null; mergesDns: boolean | null; asksRouting: boolean | null } {
   try {
     const frame = readFrame(type, body);
-    return { ownDns: frameHasOwnDns(frame), asksRouting: openFrame(frame).routing };
+    return { ownDns: frameHasOwnDns(frame), mergesDns: frameMergesDns(type, frame), asksRouting: openFrame(frame).routing };
   } catch {
-    return { ownDns: null, asksRouting: null };
+    return { ownDns: null, mergesDns: null, asksRouting: null };
   }
 }
 

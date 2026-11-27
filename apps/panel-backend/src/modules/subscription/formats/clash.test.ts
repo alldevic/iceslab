@@ -758,6 +758,68 @@ describe('buildClashYaml DNS rules (stage 19.5)', () => {
     expect(doc.dns['enhanced-mode']).toBe('fake-ip');
     expect(doc.dns.nameserver).toEqual(['https://1.1.1.1/dns-query', 'https://1.0.0.1/dns-query']);
   });
+
+  describe('iceslab: { dns: merge } (19.8)', () => {
+    const tpl = (dns: string[], mark = 'dns: merge') =>
+      readFrame('mihomo', ['iceslab:', '  routing: preset', ...(mark ? [`  ${mark}`] : []), ...dns, 'proxies: []', 'proxy-groups:', '  - name: G', '    type: select', 'rules:', '  - MATCH,DIRECT', ''].join('\n'));
+    const OWN_DNS = ['dns:', '  enable: true', '  nameserver:', '    - 9.9.9.9', '  nameserver-policy:', '    "+.own.example": 9.9.9.9', '    "+.CORP.example": 8.8.8.8'];
+    type Doc = { dns: { enable: boolean; nameserver: string[]; 'nameserver-policy'?: Record<string, unknown> }; rules: string[] };
+    const doc = (y: string) => parseYaml(y) as Doc;
+
+    it('the entries join the template\'s nameserver-policy, theirs first; the same name is the operator\'s; the rest of dns stays', () => {
+      const out = buildClashYaml([xrayEp], { frame: tpl(OWN_DNS), dnsRules: RULES });
+      const d = doc(out).dns;
+      expect(d.enable).toBe(true);
+      expect(d.nameserver).toEqual(['9.9.9.9']);
+      expect(d['nameserver-policy']).toEqual({
+        '+.corp.example': 'tcp://10.0.0.1#G',
+        'one.example': 'tcp://10.0.0.1#G',
+        'geosite:category-ads-all': 'tcp://10.0.0.1#G',
+        '+.bare.example': '10.0.0.2#G',
+        '+.own.example': '9.9.9.9',
+      });
+      expect(Object.keys(d['nameserver-policy']!).at(-1)).toBe('+.own.example');
+      expect(out).not.toContain('iceslab');
+    });
+
+    it('a template with a dns and no policy: the section is made; a value that is a list stays', () => {
+      const d = doc(buildClashYaml([xrayEp], { frame: tpl(['dns:', '  enable: true']), dnsRules: RULES })).dns;
+      expect(d.enable).toBe(true);
+      expect(Object.keys(d['nameserver-policy']!)).toHaveLength(4);
+      const listed = doc(buildClashYaml([xrayEp], { frame: tpl(['dns:', '  nameserver-policy:', '    "+.x.example": [1.1.1.1, 8.8.8.8]']), dnsRules: RULES })).dns;
+      expect(listed['nameserver-policy']!['+.x.example']).toEqual(['1.1.1.1', '8.8.8.8']);
+      expect(listed['nameserver-policy']!['one.example']).toBe('tcp://10.0.0.1#G');
+    });
+
+    it('without the mark the output does not change, whatever the rules are', () => {
+      const frame = tpl(OWN_DNS, '');
+      expect(buildClashYaml([xrayEp], { frame, dnsRules: RULES })).toBe(buildClashYaml([xrayEp], { frame }));
+    });
+
+    it('a dns that is not a map, or a policy that is not a map: as written', () => {
+      for (const dns of [['dns: off'], ['dns:', '  - a'], ['dns:', '  nameserver-policy:', '    - a'], ['dns:', '  nameserver-policy: none']]) {
+        const frame = tpl(dns);
+        const unmarked = tpl(dns, '');
+        expect(buildClashYaml([xrayEp], { frame, dnsRules: RULES }), dns.join('|')).toBe(buildClashYaml([xrayEp], { frame: unmarked, dnsRules: RULES }));
+      }
+    });
+
+    it('no rules, no group with a node, no dns of its own: as written', () => {
+      const frame = tpl(OWN_DNS);
+      const unmarked = tpl(OWN_DNS, '');
+      expect(buildClashYaml([xrayEp], { frame, dnsRules: [] })).toBe(buildClashYaml([xrayEp], { frame: unmarked }));
+      expect(buildClashYaml([], { frame, dnsRules: RULES })).toBe(buildClashYaml([], { frame: unmarked }));
+      const none = readFrame('mihomo', ['iceslab:', '  routing: preset', '  dns: merge', 'proxies: []', 'proxy-groups:', '  - name: G', '    type: select', 'rules:', '  - MATCH,DIRECT', ''].join('\n'));
+      // The mark with no dns of the template's own is the ordinary path: the panel's block gets the entries.
+      const unmarkedNone = readFrame('mihomo', ['iceslab:', '  routing: preset', 'proxies: []', 'proxy-groups:', '  - name: G', '    type: select', 'rules:', '  - MATCH,DIRECT', ''].join('\n'));
+      expect(buildClashYaml([xrayEp], { frame: none, dnsRules: RULES })).toBe(buildClashYaml([xrayEp], { frame: unmarkedNone, dnsRules: RULES }));
+    });
+
+    it('the mark without `routing: preset` does nothing', () => {
+      const frame = readFrame('mihomo', ['iceslab:', '  dns: merge', ...OWN_DNS, 'proxies: []', 'proxy-groups:', '  - name: G', '    type: select', 'rules:', '  - MATCH,DIRECT', ''].join('\n'));
+      expect(buildClashYaml([xrayEp], { frame, dnsRules: RULES })).not.toContain('one.example');
+    });
+  });
 });
 
 describe('buildClashYaml IPv6 server', () => {

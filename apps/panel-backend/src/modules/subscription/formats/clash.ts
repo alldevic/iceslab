@@ -5,7 +5,7 @@ import { makeTagger } from '../endpoint-identity.js';
 import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
 import { clashCanUsePanelGeo, clashDeviceRuleLines, clashDomainRuleBody, clashNeedsGeo, mihomoNameserverPolicy } from '../subscription.device-rules.js';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { asArray, asObject, defaultFrame, openFrame, type Frame } from '../subscription.frames.js';
+import { asArray, asObject, defaultFrame, dnsMergeable, openFrame, type Frame } from '../subscription.frames.js';
 import type { SelfHostedGeo } from '../../geo-sets/geo-self-host.js';
 import { isIpv6Literal } from '../../../lib/util/ip.js';
 
@@ -599,7 +599,7 @@ export function renderClashFrame(
     geo?: SelfHostedGeo | null;
   },
 ): string {
-  const { cfg, routing } = openFrame(frame);
+  const { cfg, routing, dnsMerge } = openFrame(frame);
   const nodeNames = new Set(p.proxyNames);
 
   // Groups first: which receive nodes, which go.
@@ -630,6 +630,19 @@ export function renderClashFrame(
   // Where the panel's `proxy` rules go: the first group that holds a node.
   const target =
     kept.find((g) => asArray(g.proxies).some((m) => nodeNames.has(String(m))))?.name as string | undefined;
+
+  // `iceslab: { dns: merge }` (19.8): the operator's rules go into the template's own
+  // `nameserver-policy`, theirs ahead of the template's, a name met in both is theirs.
+  // Only mihomo is handed rules (dnsRules is empty for the other dialects).
+  if (routing && dnsMerge && dnsMergeable('mihomo', cfg.dns)) {
+    const entries = mihomoNameserverPolicy(p.dnsRules ?? [], target ?? null);
+    if (entries.length > 0) {
+      const dns = asObject(cfg.dns);
+      const names = new Set(entries.map(([k]) => k.toLowerCase()));
+      const kept = Object.entries(asObject(dns['nameserver-policy'])).filter(([k]) => !names.has(k.toLowerCase()));
+      cfg.dns = { ...dns, 'nameserver-policy': Object.fromEntries([...entries, ...kept]) };
+    }
+  }
 
   const lines: string[] = [];
   const keys = Object.keys(frame);

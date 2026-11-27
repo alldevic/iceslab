@@ -5,7 +5,7 @@ import { ADS_GEOSITE, BUILTIN_PRESET_RULES, splitGeoTags, type DeviceRouteRule }
 import type { PresetGeoInline } from '../../geo-sets/geo-preset-inline.js';
 import { xrayDeviceRules, xrayDnsPinRules, xrayDnsRules, type XrayProxyTarget } from '../subscription.device-rules.js';
 import { exitsHaveIpv6, xrayQueryStrategy } from '../subscription.address-family.js';
-import { asArray, asObject, defaultFrame, insertAfter, openFrame, type Frame } from '../subscription.frames.js';
+import { asArray, asObject, defaultFrame, dnsMergeable, insertAfter, openFrame, type Frame } from '../subscription.frames.js';
 
 /** An xray endpoint this format writes. The socks/http doors always; the rest
  *  as the shared table says (A-224), the same question the other formats ask,
@@ -297,6 +297,8 @@ const DNS_DEFAULT_SERVER = 'https://1.1.1.1/dns-query';
 
 /** What the operator's DNS rules add to a document (stage 19.4). */
 interface XrayDnsPlan {
+  /** The rules' servers alone, what a template's own `dns` takes under `iceslab: { dns: merge }` (19.8). */
+  servers: Record<string, unknown>[];
   /** The whole `dns` section: the rules' servers, then the regional and default ones. */
   dns: Record<string, unknown>;
   /** The routing rules that go first: the servers' own way out, then port 53 -> the dns outbound. */
@@ -331,6 +333,7 @@ function dnsPlanFor(
     : { queryStrategy: xrayQueryStrategy(exitsHaveIpv6(endpoints)), servers: [...servers, DNS_DEFAULT_SERVER] };
   const outbound = !opts.forRouter;
   return {
+    servers,
     dns,
     lead: [...xrayDnsPinRules(pins, target), ...(outbound ? [{ type: 'field', port: '53', outboundTag: DNS_OUT_TAG }] : [])],
     outbound,
@@ -605,7 +608,7 @@ export function buildXrayJson(
   // template or the Default (templates.defaults.ts: log, the client SOCKS
   // inbound, direct and block). forRouter (XKeen) drops log and the inbound;
   // the router owns those.
-  const { cfg, routing } = openFrame(opts.frame ?? defaultFrame('xray-json'));
+  const { cfg, routing, dnsMerge } = openFrame(opts.frame ?? defaultFrame('xray-json'));
   if (opts.forRouter) {
     delete cfg.log;
     delete cfg.inbounds;
@@ -619,6 +622,7 @@ export function buildXrayJson(
     // only where the frame asks for it.
     dns: routing ? (dnsPlan?.dns ?? splitDns) : null,
     dnsLead: routing ? dnsPlan : null,
+    dnsMerge: routing && dnsMerge,
     head: proxyOutbounds,
     // TLS-fragment - the freedom dialer the proxy outbounds tunnel through.
     // Only appended when on, so the off path stays byte-identical.
@@ -654,7 +658,10 @@ function ownIpRule(opts: XrayJsonBuildOpts, splitRules: readonly Record<string, 
  * The panel's pieces into an xray frame (A-236), the same for the single
  * config and for each element of the array:
  *   - split DNS right after `log` (first when there is no log), unless the
- *     frame has its own `dns`;
+ *     frame has its own `dns`; with `iceslab: { dns: merge }` the frame's `dns`
+ *     instead takes the operator's DNS rules' servers ahead of its own `servers`
+ *     (its other fields stay) and the rest of the rules' pieces go in as without
+ *     one; a `dns` that is not an object, or whose `servers` is not a list, wins whole;
  *   - the proxy outbounds before the frame's, the fragment dialer after;
  *   - routing: `domainStrategy` (the frame's, else IPOnDemand under a built-in
  *     split preset or an own one with an address rule, IPIfNonMatch under an own one without, else AsIs), the balancers, the frame's other keys, then the rules:
@@ -666,6 +673,8 @@ function fillXrayFrame(
     dns: Record<string, unknown> | null;
     /** The operator's DNS rules (19.4): leading routing rules and the dns outbound, added with `dns` and only when it is. */
     dnsLead: XrayDnsPlan | null;
+    /** The frame asks `iceslab: { dns: merge }` (and the panel's routing): its own `dns` takes the rules' servers (19.8). */
+    dnsMerge: boolean;
     head: Record<string, unknown>[];
     tail: Record<string, unknown>[];
     rules: Record<string, unknown>[];
@@ -678,8 +687,13 @@ function fillXrayFrame(
 ): Frame {
   // A frame with a `dns` of its own wins whole: none of the DNS rules' pieces is added.
   const ownDns = frame.dns !== undefined;
-  const cfg = p.dns && !ownDns ? insertAfter(frame, 'log', 'dns', p.dns) : frame;
-  const lead = ownDns ? null : p.dnsLead;
+  const merge = ownDns && p.dnsMerge && p.dnsLead !== null && dnsMergeable('xray-json', frame.dns);
+  let cfg = p.dns && !ownDns ? insertAfter(frame, 'log', 'dns', p.dns) : frame;
+  if (merge) {
+    const own = asObject(frame.dns);
+    cfg = { ...frame, dns: { ...own, servers: [...p.dnsLead!.servers, ...asArray(own.servers)] } };
+  }
+  const lead = ownDns && !merge ? null : p.dnsLead;
   const framed = asArray(cfg.outbounds);
   // The frame may already have an outbound of that tag: the rule then leads to it.
   const needDnsOut =
@@ -792,7 +806,7 @@ export function buildXrayJsonArray(
     // first, and the catch-all through it last. Precedence of the rules
     // mirrors buildXrayJson: custom rules, domain lists, the preset, then the
     // frame's own (the Default's torrent rule).
-    const { cfg, routing } = openFrame(frame);
+    const { cfg, routing, dnsMerge } = openFrame(frame);
     delete cfg.remarks;
     // A-236 step 6: the host's line under the server name, `meta` beside
     // `remarks` as Happ reads it (happ.su dev-docs/app-management, read 24.10),
@@ -809,6 +823,7 @@ export function buildXrayJsonArray(
       {
         dns: routing ? (dnsPlan?.dns ?? splitDns) : null,
         dnsLead: routing ? dnsPlan : null,
+        dnsMerge: routing && dnsMerge,
         head: [primary],
         tail: fragment,
         rules: routing ? [...(opts.customRules ?? []), ...customDomainRules, ...splitRules] : [],

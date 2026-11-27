@@ -25,6 +25,15 @@ describe('templatesSkippingDnsRules (m19.7)', () => {
     ]);
   });
 
+  it('m19.8: a template marked `dns: merge` whose dns takes the rules is not listed; one marked but unable to take them still is', () => {
+    const list = [
+      tpl({ id: 'a', type: 'xray-json', name: 'merged', ownDns: true, mergesDns: true }),
+      tpl({ id: 'b', type: 'singbox', name: 'old-form', ownDns: true, mergesDns: false }),
+      tpl({ id: 'c', type: 'mihomo', name: 'older-server', ownDns: true, mergesDns: undefined }),
+    ];
+    expect(templatesSkippingDnsRules(list).map((x) => x.name)).toEqual(['old-form', 'older-server']);
+  });
+
   it('leaves out stash and the old clash, a template that does not ask for the routing, and unknowns', () => {
     const list = [
       tpl({ id: 'a', type: 'stash', ownDns: true }),

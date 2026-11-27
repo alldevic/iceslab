@@ -44,12 +44,27 @@ describe('checking a body', () => {
   });
 
   it('refuses an unknown key inside iceslab, and a routing that is not "preset", with the line', () => {
-    const key = refusalOf('mihomo', 'iceslab:\n  routing: preset\n  dns: mine\nproxies:\n');
-    expect(key?.message).toContain('iceslab.dns is not a key the panel reads');
+    const key = refusalOf('mihomo', 'iceslab:\n  routing: preset\n  nope: mine\nproxies:\n');
+    expect(key?.message).toContain('iceslab.nope is not a key the panel reads');
     expect(key?.line).toBe(3);
     const preset = refusalOf('singbox', '{\n  "iceslab": { "routing": "ru-split" }\n}\n');
     expect(preset?.message).toContain('"preset"');
     expect(preset?.line).toBe(2);
+  });
+
+  it('m19.8: iceslab.dns takes "merge" in every type; any other value is refused with its line', () => {
+    for (const type of TEMPLATE_TYPES) {
+      const json = type === 'singbox' || type === 'xray-json' || type === 'xray-json-array';
+      const ok = json ? '{\n  "iceslab": { "routing": "preset", "dns": "merge" }\n}\n' : 'iceslab:\n  routing: preset\n  dns: merge\nproxies:\n';
+      expect(refusalOf(type, ok), type).toBeNull();
+    }
+    const yaml = refusalOf('mihomo', 'iceslab:\n  routing: preset\n  dns: mine\nproxies:\n');
+    expect(yaml?.message).toContain('iceslab.dns takes one value, "merge"');
+    expect(yaml?.line).toBe(3);
+    const json = refusalOf('singbox', '{\n  "iceslab": {\n    "dns": true\n  }\n}\n');
+    expect(json?.message).toContain('"merge"');
+    expect(json?.line).toBe(3);
+    expect(refusalOf('xray-json', '{\n  "iceslab": { "dns": "Merge" }\n}\n')?.line).toBe(2);
   });
 
   it('reads the group and provider keys of the Clash family, booleans only', () => {
@@ -92,7 +107,7 @@ describe('/api/subscription-templates', () => {
   const auth = () => ({ authorization: `Bearer ${token}` });
   type Dto = {
     id: string; type: string; name: string; body: string; isDefault: boolean;
-    ownDns: boolean | null; asksRouting: boolean | null; updatedAt: string;
+    ownDns: boolean | null; mergesDns: boolean | null; asksRouting: boolean | null; updatedAt: string;
   };
   const list = async () =>
     (JSON.parse((await app.inject({ method: 'GET', url: '/api/subscription-templates', headers: auth() })).body) as {
@@ -122,6 +137,27 @@ describe('/api/subscription-templates', () => {
     expect(all.find((t) => t.name === 'own')).toMatchObject({ ownDns: true, asksRouting: true });
     expect(all.find((t) => t.name === 'own-no-routing')).toMatchObject({ ownDns: true, asksRouting: false });
     expect(all.find((t) => t.name === 'broken')).toMatchObject({ ownDns: null, asksRouting: null });
+  });
+
+  it('m19.8: the list tells an own dns marked `dns: merge` that can take the rules from one that skips them', async () => {
+    const make = (type: string, name: string, body: string) =>
+      app.inject({ method: 'POST', url: '/api/subscription-templates', headers: auth(), payload: { type, name, body } });
+    const x = (dns: unknown, mark = true) => JSON.stringify({ iceslab: { routing: 'preset', ...(mark ? { dns: 'merge' } : {}) }, dns, outbounds: [] });
+    expect((await make('xray-json', 'marked', x({ servers: ['1.1.1.1'] }))).statusCode).toBe(201);
+    expect((await make('xray-json', 'unmarked', x({ servers: ['1.1.1.1'] }, false))).statusCode).toBe(201);
+    expect((await make('xray-json', 'marked-odd', x({ servers: 'dns.example' }))).statusCode).toBe(201);
+    const sb = (servers: unknown[]) => JSON.stringify({ iceslab: { routing: 'preset', dns: 'merge' }, dns: { servers }, outbounds: [{ type: 'selector', tag: 'S', outbounds: [] }], route: { final: 'S' } });
+    expect((await make('singbox', 'sb-new', sb([{ type: 'local', tag: 'l' }]))).statusCode).toBe(201);
+    expect((await make('singbox', 'sb-legacy', sb([{ tag: 'l', address: 'local' }]))).statusCode).toBe(201);
+    invalidateTemplateCache();
+    const all = await list();
+    const of = (n: string) => all.find((t) => t.name === n);
+    expect(of('marked')).toMatchObject({ ownDns: true, mergesDns: true });
+    expect(of('unmarked')).toMatchObject({ ownDns: true, mergesDns: false });
+    expect(of('marked-odd')).toMatchObject({ ownDns: true, mergesDns: false });
+    expect(of('sb-new')).toMatchObject({ ownDns: true, mergesDns: true });
+    expect(of('sb-legacy')).toMatchObject({ ownDns: true, mergesDns: false });
+    for (const t of all.filter((t) => t.isDefault)) expect(t.mergesDns, t.type).toBe(false);
   });
 
   it('creates an own template, refuses its name twice in a type, takes it in another', async () => {

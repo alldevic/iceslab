@@ -10,6 +10,7 @@ import { invalidateSrrCache } from '../srr/srr.service.js';
 import { invalidateTemplateCache } from '../subscription-templates/templates.service.js';
 import { endpointsForFormat, type SubscriptionEndpoint } from './subscription.formats.js';
 import { buildClashYaml } from './formats/clash.js';
+import { readFrame } from './subscription.frames.js';
 
 /**
  * A-236 step 4: the Clash family by core. One builder, the fields Stash and
@@ -100,6 +101,24 @@ describe('the DNS rules (stage 19.5)', () => {
       }
       const m = buildClashYaml(eps, { dialect: 'mihomo', routingPreset: preset, dnsRules });
       expect(m).toContain('"+.corp.example": "tcp://10.0.0.1#Auto"');
+    }
+  });
+});
+
+describe('the DNS rules and `dns: merge` (milestone 19.8)', () => {
+  const dnsRules = [{ match: ['domain:corp.example'], server: 'tcp://10.0.0.1', note: '' }];
+  const frame = (type: 'stash' | 'clash' | 'mihomo') =>
+    readFrame(type, ['iceslab:', '  routing: preset', '  dns: merge', 'dns:', '  enable: true', '  nameserver-policy:', '    "+.own.example": 9.9.9.9', 'proxies:', 'proxy-groups:', '  - name: G', '    type: select', 'rules:', '  - MATCH,G', ''].join('\n'));
+
+  it('mihomo pours them into the template\'s dns; Stash and legacy Clash hand out what they did without', () => {
+    const m = buildClashYaml(eps, { dialect: 'mihomo', frame: frame('mihomo'), dnsRules });
+    expect(m).toContain('+.own.example: 9.9.9.9');
+    expect(m).toContain('+.corp.example: tcp://10.0.0.1#G');
+    for (const dialect of ['stash', 'clash-legacy'] as const) {
+      const e = endpointsForFormat(dialect, eps);
+      const f = frame(dialect === 'stash' ? 'stash' : 'clash');
+      expect(buildClashYaml(e, { dialect, frame: f, dnsRules }), dialect).toBe(buildClashYaml(e, { dialect, frame: f }));
+      expect(buildClashYaml(e, { dialect, frame: f, dnsRules })).not.toContain('corp.example');
     }
   });
 });

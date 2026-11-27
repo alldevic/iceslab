@@ -53,6 +53,8 @@ export interface SubscriptionTemplate {
    * этой вехи поля не шлёт.
    */
   ownDns?: boolean | null;
+  /** Тело помечено `iceslab: { dns: merge }`, и его `dns` принимает правила: они до него доходят (веха 19.8). `null`: тело не разобралось. */
+  mergesDns?: boolean | null;
   /** Тело просит `iceslab.routing: preset`; `null`: тело не разобралось. */
   asksRouting?: boolean | null;
   updatedAt: string;

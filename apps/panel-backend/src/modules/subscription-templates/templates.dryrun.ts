@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { parse as parseYaml } from 'yaml';
 import { DRY_RUN_ADVISORY_CODES, type DryRunWarningCode, type TemplateType } from '@iceslab/shared';
 import type { SubscriptionEndpoint } from '../subscription/subscription.formats.js';
-import { frameHasOwnDns, openFrame, readFrame, type Frame } from '../subscription/subscription.frames.js';
+import { frameHasOwnDns, frameMergesDns, openFrame, readFrame, type Frame } from '../subscription/subscription.frames.js';
 import { buildClashYaml } from '../subscription/formats/clash.js';
 import { buildSingboxJson } from '../subscription/formats/singbox.js';
 import { buildXrayJson, buildXrayJsonArray } from '../subscription/formats/xrayjson.js';
@@ -100,13 +100,16 @@ async function coreCheck(bin: string, args: (f: string) => string[], configs: st
 
 /** The template has a `dns` of its own and asks for the panel's routing: the
  *  panel's DNS rules would reach it, and the `dns` wins whole instead. Xray,
- *  mihomo and sing-box only: the other types get no DNS rules at all. */
+ *  mihomo and sing-box only: the other types get no DNS rules at all. With
+ *  `iceslab: { dns: merge }` the rules are poured into the `dns` and there is
+ *  nothing to warn of, unless the `dns` is in a shape they cannot be poured
+ *  into (sing-box before 1.12, a `servers` that is not a list, ...). */
 function ownDnsWarning(type: TemplateType, frame: Frame): DryRunWarning | null {
   if (type === 'stash' || type === 'clash') return null;
-  if (!frameHasOwnDns(frame) || !openFrame(frame).routing) return null;
+  if (!frameHasOwnDns(frame) || !openFrame(frame).routing || frameMergesDns(type, frame)) return null;
   return {
     code: 'OWN_DNS_SKIPS_RULES',
-    message: 'the template has its own `dns` and it wins whole: the DNS rules of the panel are not run by this template',
+    message: 'the template has its own `dns` and it wins whole: the DNS rules of the panel are not run by this template (`iceslab: { dns: merge }` pours them into a `dns` of the current form)',
   };
 }
 

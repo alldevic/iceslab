@@ -105,9 +105,13 @@ export function checkTemplateBody(type: TemplateType, body: string): void {
     );
   }
 
-  checkServiceKey(root, ['routing', 'includeHiddenHosts'], at, (key, value) => {
+  checkServiceKey(root, ['routing', 'includeHiddenHosts', 'dns'], at, (key, value) => {
     if (key === 'routing' && !(isScalar(value) && value.value === 'preset')) {
       return 'iceslab.routing takes one value, "preset" (the routing preset in force)';
+    }
+    // 19.8: the panel's DNS rules poured into the template's own `dns`.
+    if (key === 'dns' && !(isScalar(value) && value.value === 'merge')) {
+      return 'iceslab.dns takes one value, "merge" (the panel\'s DNS rules go into the template\'s own dns)';
     }
     // A-236 step 6: the hosts the operator hid go into this frame's format.
     if (key === 'includeHiddenHosts') return booleanValue(key, value);

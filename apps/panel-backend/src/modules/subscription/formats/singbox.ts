@@ -6,7 +6,7 @@ import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-preset
 import { singboxDeviceRoute, singboxDnsRules } from '../subscription.device-rules.js';
 import type { SelfHostedGeo } from '../../geo-sets/geo-self-host.js';
 import type { SingboxExtRef } from '../../geo-sets/geo-ext-lists.js';
-import { asArray, asObject, defaultFrame, insertAfter, openFrame, type Frame } from '../subscription.frames.js';
+import { asArray, asObject, defaultFrame, dnsMergeable, insertAfter, openFrame, type Frame } from '../subscription.frames.js';
 
 /**
  * Sing-box JSON subscription formatter (sing-box 1.10+).
@@ -426,6 +426,32 @@ function dnsBlock(
   };
 }
 
+/**
+ * The operator's DNS servers after a frame's own `dns.servers` (the first of them
+ * is the default for a name no rule claims, so it must stay first) and their rules
+ * before its `dns.rules`. A server whose tag the frame already uses gets another
+ * (`-2`, `-3`, ...), and the rules that name it follow. The frame's other fields stay.
+ */
+function mergeSingboxDns(
+  own: Record<string, unknown>,
+  operator: { servers: Record<string, unknown>[]; rules: Record<string, unknown>[] },
+): Record<string, unknown> {
+  const ownServers = asArray(own.servers);
+  const taken = new Set(ownServers.map((s) => String(asObject(s).tag)));
+  const renamed = new Map<string, string>();
+  const servers = operator.servers.map((s) => {
+    const tag = String(s.tag);
+    let to = tag;
+    for (let i = 2; taken.has(to); i++) to = `${tag}-${i}`;
+    taken.add(to);
+    if (to === tag) return s;
+    renamed.set(tag, to);
+    return { ...s, tag: to };
+  });
+  const rules = operator.rules.map((r) => (renamed.has(String(r.server)) ? { ...r, server: renamed.get(String(r.server)) } : r));
+  return { ...own, servers: [...ownServers, ...servers], rules: [...rules, ...asArray(own.rules)] };
+}
+
 /** One route rule and one remote rule-set per `ext:` link; `proxy` goes where route.final goes, and is left out with no proxy. */
 function extRuleSets(
   refs: readonly SingboxExtRef[],
@@ -522,7 +548,7 @@ function fillSingboxFrame(
     dnsRules?: readonly DnsRule[];
   },
 ): string {
-  const { cfg, routing } = openFrame(frame);
+  const { cfg, routing, dnsMerge } = openFrame(frame);
   const own = asArray(cfg.outbounds).map(asObject);
   const gone = new Set<string>();
   const groups = own.flatMap((o) => {
@@ -547,10 +573,13 @@ function fillSingboxFrame(
   const preset = routing ? singboxDeviceRoute(deviceRules, target, dnsOpts.geo) : { rules: [], ruleSets: [] };
   // The operator's `ext:` lists come before the preset's rules, block first, as the clash rules do.
   const ext = routing ? extRuleSets(dnsOpts.extRefs ?? [], target) : { rules: [], ruleSets: [] };
+  // 19.8: `iceslab: { dns: merge }` pours the rules into the frame's own `dns` of the 1.12+ form.
+  const merging = routing && dnsMerge && target !== null && cfg.dns !== undefined && dnsMergeable('singbox', cfg.dns);
   const operator =
-    routing && target && cfg.dns === undefined
+    routing && target && (cfg.dns === undefined || merging)
       ? singboxDnsRules(dnsOpts.dnsRules ?? [], target, dnsOpts.geo)
       : { servers: [], rules: [], ruleSets: [] };
+  if (merging && operator.rules.length > 0) cfg.dns = mergeSingboxDns(asObject(cfg.dns), operator);
   const block = routing && target && cfg.dns === undefined ? dnsBlock(dnsOpts.preset, preset.rules, target, dnsOpts.strategy, operator) : null;
   const dns = block?.dns ?? null;
   // The hijack goes first: nothing of the frame's may route a DNS query away before it.

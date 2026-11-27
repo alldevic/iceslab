@@ -37,7 +37,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const GOLDEN = join(here, 'formats', '__testdata__', 'templates-default.golden.json');
 
 describe('the Default frames', () => {
-  it('render byte for byte what the builders wrote before frames (golden, 180 cases)', () => {
+  it('render byte for byte what the builders wrote before frames (golden, 240 cases)', () => {
     const golden = JSON.parse(readFileSync(GOLDEN, 'utf8')) as Record<string, string>;
     const cases = goldenCases();
     expect(Object.keys(cases).sort()).toEqual(Object.keys(golden).sort());
@@ -303,6 +303,27 @@ describe('the subscription and the dry run', () => {
     for (const type of ['stash', 'clash']) {
       expect(codes(await run(type, DEFAULT_TEMPLATE_BODIES[type as TemplateType].replace('proxies:', 'dns:\n  enable: true\nproxies:'))), type).toEqual([]);
     }
+    // m19.8: `dns: merge` pours the rules in, nothing to warn of; a dns the rules cannot be poured into still warns.
+    const marked = (o: Record<string, unknown>) => JSON.stringify({ iceslab: { routing: 'preset', dns: 'merge' }, ...o });
+    for (const type of ['xray-json', 'xray-json-array']) {
+      const base = JSON.parse(DEFAULT_TEMPLATE_BODIES[type as TemplateType]) as Record<string, unknown>;
+      delete base.iceslab;
+      expect(codes(await run(type, marked({ ...base, ...own }))), `${type} merge`).toEqual([]);
+      expect(codes(await run(type, marked({ ...base, dns: { servers: 'dns.example' } }))), `${type} odd`).toEqual([CODE]);
+      expect(codes(await run(type, marked({ ...base, dns: 'dns.example' }))), `${type} string`).toEqual([CODE]);
+    }
+    const sbBase = JSON.parse(DEFAULT_TEMPLATE_BODIES.singbox) as Record<string, unknown>;
+    delete sbBase.iceslab;
+    expect(codes(await run('singbox', marked({ ...sbBase, ...sbOwn })))).toEqual([]);
+    // sing-box before 1.12: served as written, and the advice stays despite the mark.
+    const legacy = marked({ ...sbBase, dns: { servers: [{ tag: 'own-dns', address: 'local' }] } });
+    const lr = await run('singbox', legacy);
+    expect(codes(lr)).toEqual([CODE]);
+    expect(lr.rendered).toContain('"address": "local"');
+    const mhMarked = (dns: string) =>
+      DEFAULT_TEMPLATE_BODIES.mihomo.replace('iceslab:\n  routing: preset\n', 'iceslab:\n  routing: preset\n  dns: merge\n').replace('\nproxies:', `\n${dns}proxies:`);
+    expect(codes(await run('mihomo', mhMarked('dns:\n  enable: true\n')))).toEqual([]);
+    expect(codes(await run('mihomo', mhMarked('dns:\n  enable: true\n  nameserver-policy:\n    - a\n')))).toEqual([CODE]);
     // A real refusal still refuses next to the advice.
     const both = await run('singbox', asking({ ...own, outbounds: [{ type: 'direct', tag: 'direct' }] }));
     expect(codes(both)).toEqual([CODE, 'NO_SELECTOR_HOLDS_NODE']);

@@ -680,6 +680,102 @@ describe('buildSingboxJson', () => {
     });
   });
 
+  describe('iceslab: { dns: merge } (19.8)', () => {
+    const r = (server: string, ...match: string[]) => ({ match, server, note: '' });
+    const RULES = [r('tcp://10.0.0.1', 'domain:corp.example', 'geosite:category-ru'), r('10.0.0.2', 'full:a.example')];
+    const OWN_SERVER = { type: 'udp', tag: 'own', server: '9.9.9.9' };
+    const OWN_RULE = { domain_suffix: ['own.example'], server: 'own' };
+    const tpl = (dns: unknown, extra: Record<string, unknown> = {}, mark: Record<string, unknown> = { dns: 'merge' }) =>
+      readFrame('singbox', JSON.stringify({
+        iceslab: { routing: 'preset', ...mark },
+        dns,
+        outbounds: [{ type: 'selector', tag: 'Pick', outbounds: [] }, { type: 'direct', tag: 'direct' }],
+        route: { final: 'Pick' },
+        ...extra,
+      }));
+    const OWN_DNS = { servers: [OWN_SERVER], rules: [OWN_RULE], final: 'own', strategy: 'prefer_ipv4' };
+    const hijacks = (cfg: SbConfig) => (cfg.route.rules ?? []).filter((x) => x.action === 'hijack-dns');
+    const sets = (cfg: SbConfig) => (cfg.route.rule_set ?? []).map((s) => s.tag);
+
+    it('the servers after the template\'s, the rules before its rules, the other fields as they were', () => {
+      const cfg = parse(buildSingboxJson([xrayEp], { frame: tpl(OWN_DNS), dnsRules: RULES }));
+      expect(cfg.dns!.servers.map((s) => s.tag)).toEqual(['own', 'dns-tcp-10.0.0.1', 'dns-udp-10.0.0.2']);
+      expect(cfg.dns!.servers[1]).toMatchObject({ detour: 'Pick' });
+      expect(cfg.dns!.rules).toEqual([
+        { rule_set: ['geosite-category-ru'], server: 'dns-tcp-10.0.0.1' },
+        { domain_suffix: ['corp.example'], server: 'dns-tcp-10.0.0.1' },
+        { domain: ['a.example'], server: 'dns-udp-10.0.0.2' },
+        OWN_RULE,
+      ]);
+      expect(cfg.dns!.final).toBe('own');
+      expect(cfg.dns!.strategy).toBe('prefer_ipv4');
+      // The template names no default_domain_resolver and the merge adds none.
+      expect(cfg.route.default_domain_resolver).toBeUndefined();
+    });
+
+    it('the hijack comes first and the geosite set is declared once, even when the template declares it too', () => {
+      const own = { rule_set: [{ type: 'remote', tag: 'geosite-category-ru', format: 'binary', url: 'https://example.test/x.srs' }], rules: [{ rule_set: ['geosite-category-ru'], action: 'route', outbound: 'direct' }] };
+      const cfg = parse(buildSingboxJson([xrayEp], { frame: tpl(OWN_DNS, { route: { final: 'Pick', ...own } }), dnsRules: RULES }));
+      expect(cfg.route.rules!.slice(0, 2)).toEqual([{ action: 'sniff', sniffer: ['dns'] }, { protocol: 'dns', action: 'hijack-dns' }]);
+      expect(sets(cfg)).toEqual(['geosite-category-ru']);
+      // Without a declaration of its own the set is declared by the merge.
+      expect(sets(parse(buildSingboxJson([xrayEp], { frame: tpl(OWN_DNS), dnsRules: RULES })))).toEqual(['geosite-category-ru']);
+    });
+
+    it('a server tag the template already uses: ours takes another, and the rules follow it', () => {
+      const clash = { servers: [{ type: 'udp', tag: 'dns-tcp-10.0.0.1', server: '9.9.9.9' }, { type: 'udp', tag: 'dns-tcp-10.0.0.1-2', server: '9.9.9.8' }], rules: [] };
+      const cfg = parse(buildSingboxJson([xrayEp], { frame: tpl(clash), dnsRules: RULES }));
+      expect(cfg.dns!.servers.map((s) => s.tag)).toEqual(['dns-tcp-10.0.0.1', 'dns-tcp-10.0.0.1-2', 'dns-tcp-10.0.0.1-3', 'dns-udp-10.0.0.2']);
+      expect(cfg.dns!.servers[2]).toMatchObject({ type: 'tcp', server: '10.0.0.1', detour: 'Pick' });
+      const tagsUsed = cfg.dns!.rules.map((x) => x.server);
+      expect(tagsUsed).toContain('dns-tcp-10.0.0.1-3');
+      expect(tagsUsed).not.toContain('dns-tcp-10.0.0.1');
+      const all = cfg.dns!.servers.map((s) => s.tag);
+      expect(new Set(all).size).toBe(all.length);
+    });
+
+    it('a template dns with no rules of its own gets the list', () => {
+      const cfg = parse(buildSingboxJson([xrayEp], { frame: tpl({ servers: [OWN_SERVER] }), dnsRules: RULES }));
+      expect(cfg.dns!.rules).toHaveLength(3);
+      expect(cfg.dns!.final).toBeUndefined();
+    });
+
+    it('without the mark the template wins whole, whatever the rules are', () => {
+      const frame = tpl(OWN_DNS, {}, {});
+      expect(buildSingboxJson([xrayEp], { frame, dnsRules: RULES })).toBe(buildSingboxJson([xrayEp], { frame }));
+      expect(parse(buildSingboxJson([xrayEp], { frame, dnsRules: RULES })).dns).toEqual(OWN_DNS);
+    });
+
+    it('the form before 1.12 (address, no type): served as written despite the mark', () => {
+      const legacy = { servers: [{ tag: 'old', address: 'tls://8.8.8.8', detour: 'Pick' }, { tag: 'local', address: 'local' }], rules: [{ outbound: 'any', server: 'local' }], final: 'old' };
+      const marked = tpl(legacy);
+      const out = buildSingboxJson([xrayEp], { frame: marked, dnsRules: RULES });
+      expect(out).toBe(buildSingboxJson([xrayEp], { frame: tpl(legacy, {}, {}), dnsRules: RULES }));
+      expect(parse(out).dns).toEqual(legacy);
+      expect(hijacks(parse(out))).toHaveLength(0);
+      // One typed server beside one with an address is not the new form either.
+      const mixed = { servers: [OWN_SERVER, { tag: 'old', address: '1.1.1.1' }] };
+      expect(parse(buildSingboxJson([xrayEp], { frame: tpl(mixed), dnsRules: RULES })).dns).toEqual(mixed);
+    });
+
+    it('servers missing, empty or not a list: as written', () => {
+      for (const dns of [{}, { servers: [] }, { servers: 'x' }, { servers: [OWN_SERVER], rules: 'x' }]) {
+        const out = buildSingboxJson([xrayEp], { frame: tpl(dns), dnsRules: RULES });
+        expect(parse(out).dns, JSON.stringify(dns)).toEqual(dns);
+        expect(hijacks(parse(out))).toHaveLength(0);
+      }
+    });
+
+    it('no rules, no node, no `routing: preset`: the template as written', () => {
+      const frame = tpl(OWN_DNS);
+      const unmarked = tpl(OWN_DNS, {}, {});
+      expect(buildSingboxJson([xrayEp], { frame, dnsRules: [] })).toBe(buildSingboxJson([xrayEp], { frame: unmarked }));
+      expect(buildSingboxJson([], { frame, dnsRules: RULES })).toBe(buildSingboxJson([], { frame: unmarked }));
+      const plain = readFrame('singbox', JSON.stringify({ iceslab: { dns: 'merge' }, dns: OWN_DNS, outbounds: [{ type: 'selector', tag: 'Pick', outbounds: [] }], route: { final: 'Pick' } }));
+      expect(parse(buildSingboxJson([xrayEp], { frame: plain, dnsRules: RULES })).dns).toEqual(OWN_DNS);
+    });
+  });
+
   // ───── Byte-identity regression guards (H2) ─────
 
   describe('routingPreset byte-identity (H2 guard)', () => {

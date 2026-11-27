@@ -10,6 +10,7 @@ import { buildXrayJson, buildXrayJsonArray } from './formats/xrayjson.js';
 import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson } from './formats/singbox.js';
 import { effectiveDnsRules, mihomoNameserverPolicy, mihomoPolicyName, mihomoPolicyServer, singboxDnsRules, xrayDnsPinRules, xrayDnsRules } from './subscription.device-rules.js';
+import { readFrame } from './subscription.frames.js';
 
 /**
  * A-229 part 4: device routing presets rendered from one structure.
@@ -431,6 +432,64 @@ describe('singboxDnsRules (milestone 19.6)', () => {
   it('no proxy, nothing; a server that does not parse, skipped', () => {
     expect(singboxDnsRules([r('10.0.0.1', 'a.example')], null)).toEqual({ servers: [], rules: [], ruleSets: [] });
     expect(singboxDnsRules([r('udp://10.0.0.1', 'a.example')], 'Auto').rules).toEqual([]);
+  });
+});
+
+describe.skipIf(!XRAY_BIN)('xray -test accepts a template\'s own dns with the rules merged in (19.8)', () => {
+  const assets = process.env.XRAY_LOCATION_ASSET ?? dirname(XRAY_BIN);
+  const dnsRules = [
+    { match: ['corp.example', 'full:www.corp2.example'], server: '10.0.0.1', note: '' },
+    { match: ['domain:a.example'], server: 'tcp://10.0.0.2:5353', note: '' },
+    { match: ['b.example'], server: 'https://dns.corp.example/dns-query', note: '' },
+  ];
+  it('flat, xkeen and array, over a built-in and an own preset, servers as strings, objects and absent', () => {
+    const own = [{ queryStrategy: 'UseIPv4', servers: ['8.8.8.8', { address: '9.9.9.9', domains: ['domain:own.example'] }] }, { hosts: { 'h.example': '192.0.2.1' } }, {}];
+    for (const dns of own) {
+      const body = JSON.stringify({ iceslab: { routing: 'preset', dns: 'merge' }, dns, outbounds: [{ tag: 'direct', protocol: 'freedom' }, { tag: 'block', protocol: 'blackhole' }], routing: { rules: [] } });
+      for (const o of [{ routingPreset: 'proxy-all' as const }, { ownPresetRules: [{ match: ['example.io'], action: 'direct' as const, note: '' }] }]) {
+        const single = readFrame('xray-json', body);
+        for (const config of [
+          buildXrayJson(LOADABLE, { ...o, frame: single, dnsRules }),
+          buildXrayJson(LOADABLE, { ...o, frame: single, dnsRules, forRouter: true }),
+          ...(JSON.parse(buildXrayJsonArray(LOADABLE, { ...o, frame: readFrame('xray-json-array', body), dnsRules })) as unknown[]).map((c) => JSON.stringify(c)),
+        ]) {
+          expect(JSON.parse(config).dns.servers.length).toBeGreaterThanOrEqual(3);
+          expect(run(XRAY_BIN, (f) => ['-test', '-c', f], config, { XRAY_LOCATION_ASSET: assets })).toBe('');
+        }
+      }
+    }
+  });
+});
+
+describe.skipIf(!SINGBOX_BIN)('sing-box check accepts a template\'s own dns with the rules merged in (19.8)', () => {
+  const r = (server: string, ...match: string[]) => ({ match, server, note: '' });
+  const dnsRules = [
+    r('10.0.0.1', 'a.example', 'geosite:category-ru'),
+    r('tcp://10.0.0.2:5300', 'full:b.example'),
+    r('tls://dns.example', 'domain:c.example'),
+    r('https://dns.example:8443/q', 'd.example'),
+  ];
+  it.each([
+    ['proxy-all', { routingPreset: 'proxy-all' as const }],
+    ['ru-split', { routingPreset: 'ru-split' as const }],
+    ['own', { ownPresetRules: EVERY_KIND }],
+  ])('%s, a tag that clashes with a template server too', (_n, opts) => {
+    const frame = readFrame('singbox', JSON.stringify({
+      iceslab: { routing: 'preset', dns: 'merge' },
+      dns: {
+        servers: [{ type: 'udp', tag: 'own', server: '9.9.9.9' }, { type: 'udp', tag: 'dns-udp-10.0.0.1', server: '9.9.9.8' }],
+        rules: [{ domain_suffix: ['own.example'], server: 'own' }],
+        final: 'own',
+      },
+      outbounds: [{ type: 'selector', tag: 'Pick', outbounds: [] }, { type: 'direct', tag: 'direct' }],
+      // A template's own dns is the operator's to complete: the proxy hosts need a resolver (1.12+).
+      route: { final: 'Pick', default_domain_resolver: 'own' },
+    }));
+    const config = buildSingboxJson(LOADABLE, { ...opts, frame, dnsRules });
+    const dns = JSON.parse(config).dns as { servers: { tag: string }[]; rules: unknown[] };
+    expect(dns.servers.map((s) => s.tag)).toContain('dns-udp-10.0.0.1-2');
+    expect(dns.rules.length).toBeGreaterThan(1);
+    expect(run(SINGBOX_BIN, (f) => ['check', '-c', f], config)).toBe('');
   });
 });
 

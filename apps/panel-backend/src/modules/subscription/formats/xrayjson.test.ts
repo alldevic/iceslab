@@ -1277,4 +1277,98 @@ describe('DNS rules (19.4)', () => {
     const cfg = parse(buildXrayJson([xrayEp], { ownPresetRules: OWN, dnsRules: CORP, tlsFragment: true }));
     expect(tags(cfg).slice(-2)).toEqual(['fragment', 'dns-out']);
   });
+
+  describe('iceslab: { dns: merge } (19.8)', () => {
+    const OUTS = [{ tag: 'direct', protocol: 'freedom' }, { tag: 'block', protocol: 'blackhole' }];
+    // Same key order with and without the mark, so the output compares byte for byte.
+    const MERGE = (dns: unknown, mark = true) =>
+      JSON.stringify({
+        iceslab: { routing: 'preset', ...(mark ? { dns: 'merge' } : {}) },
+        ...(dns === undefined ? {} : { dns }),
+        outbounds: OUTS,
+        routing: { rules: [] },
+      });
+    const frameOf = (dns: unknown, type: 'xray-json' | 'xray-json-array' = 'xray-json') => readFrame(type, MERGE(dns));
+    const OWN_STR = { queryStrategy: 'UseIP', hosts: { 'h.example': '192.0.2.1' }, servers: ['8.8.8.8'] };
+    const o = { ownPresetRules: OWN, dnsRules: CORP };
+
+    it('servers a list of strings: the rules\' servers first, the template\'s other fields as they were', () => {
+      const cfg = parse(buildXrayJson([xrayEp], { ...o, frame: frameOf(OWN_STR) }));
+      expect(dnsOf(cfg)).toEqual({ ...OWN_STR, servers: [corpServer, '8.8.8.8'] });
+      expect(Object.keys(dnsOf(cfg)!)).toEqual(['queryStrategy', 'hosts', 'servers']);
+    });
+
+    it('servers a list of objects, and servers absent', () => {
+      const objs = [{ address: '9.9.9.9', domains: ['domain:own.example'] }];
+      expect(dnsOf(parse(buildXrayJson([xrayEp], { ...o, frame: frameOf({ servers: objs }) })))).toEqual({ servers: [corpServer, ...objs] });
+      expect(dnsOf(parse(buildXrayJson([xrayEp], { ...o, frame: frameOf({ tag: 'dns-in' }) })))).toEqual({ tag: 'dns-in', servers: [corpServer] });
+      expect(dnsOf(parse(buildXrayJson([xrayEp], { ...o, frame: frameOf({}) })))).toEqual({ servers: [corpServer] });
+    });
+
+    it('the pin, the dns outbound and the port 53 rule go in as without a dns of the template\'s own', () => {
+      const merged = parse(buildXrayJson([xrayEp], { ...o, frame: frameOf(OWN_STR) }));
+      const plain = parse(buildXrayJson([xrayEp], { ...o, frame: readFrame('xray-json', MERGE(undefined, false)) }));
+      expect(merged.routing.rules).toEqual(plain.routing.rules);
+      expect(tags(merged)).toEqual(tags(plain));
+      expect(tags(merged)).toContain('dns-out');
+      expect(merged.routing.rules.some((r) => r.port === '53')).toBe(true);
+    });
+
+    it('the operator\'s rule goes first, so for a name in both it answers', () => {
+      const own = [{ address: '9.9.9.9', domains: ['domain:corp.example'] }];
+      const servers = dnsOf(parse(buildXrayJson([xrayEp], { ...o, frame: frameOf({ servers: own }) })))!.servers;
+      expect(servers).toEqual([corpServer, ...own]);
+    });
+
+    it('xkeen: the servers and the pin, no dns outbound and no port 53 rule', () => {
+      const cfg = parse(buildXrayJson([xrayEp], { ...o, forRouter: true, frame: frameOf(OWN_STR) }));
+      expect(dnsOf(cfg)).toEqual({ ...OWN_STR, servers: [corpServer, '8.8.8.8'] });
+      expect(tags(cfg)).not.toContain('dns-out');
+      expect(text(cfg.routing.rules)).not.toContain('"port":"53"');
+      expect(text(cfg.routing.rules)).toContain('10.0.0.2');
+    });
+
+    it('the array: every element', () => {
+      const cfgs = parseArray(buildXrayJsonArray([xrayEp, xrayEp2], { ...o, frame: frameOf(OWN_STR, 'xray-json-array') }));
+      expect(cfgs).toHaveLength(2);
+      for (const c of cfgs) {
+        expect((c as unknown as { dns: Dns }).dns).toEqual({ ...OWN_STR, servers: [corpServer, '8.8.8.8'] });
+        expect(c.outbounds.map((x) => x.tag)).toContain('dns-out');
+      }
+    });
+
+    it('a dns that is not an object, or servers that is not a list: it stands whole, as without the mark', () => {
+      for (const dns of ['dns.example', ['8.8.8.8'], { servers: '8.8.8.8' }, { servers: { a: 1 } }]) {
+        const frame = frameOf(dns);
+        const marked = buildXrayJson([xrayEp], { ...o, frame });
+        const bare = buildXrayJson([xrayEp], { ...o, frame: readFrame('xray-json', MERGE(dns, false)) });
+        expect(marked, text(dns)).toBe(bare);
+        expect(dnsOf(parse(marked))).toEqual(dns);
+        expect(tags(parse(marked))).not.toContain('dns-out');
+      }
+    });
+
+    it('without the mark the template wins whole, whatever the rules are', () => {
+      const frame = readFrame('xray-json', MERGE(OWN_STR, false));
+      const cfg = parse(buildXrayJson([xrayEp], { ...o, frame }));
+      expect(dnsOf(cfg)).toEqual(OWN_STR);
+      expect(buildXrayJson([xrayEp], { ...o, frame })).toBe(buildXrayJson([xrayEp], { ...o, frame, dnsRules: [] }));
+    });
+
+    it('with the mark and no rules (or no proxy, or all DoT) the template is served as written', () => {
+      const frame = frameOf(OWN_STR);
+      const unmarked = readFrame('xray-json', MERGE(OWN_STR, false));
+      for (const [eps, rules] of [[[xrayEp], []], [[], CORP], [[xrayEp], [rule('tls://10.0.0.9', 'dot.example')]]] as const) {
+        expect(buildXrayJson([...eps], { ...o, frame, dnsRules: rules })).toBe(buildXrayJson([...eps], { ...o, frame: unmarked, dnsRules: rules }));
+      }
+      expect(buildXrayJsonArray([xrayEp], { ...o, frame: frameOf(OWN_STR, 'xray-json-array'), dnsRules: [] })).toBe(
+        buildXrayJsonArray([xrayEp], { ...o, frame: readFrame('xray-json-array', MERGE(OWN_STR, false)), dnsRules: [] }),
+      );
+    });
+
+    it('the mark without `routing: preset` does nothing: no panel routing reaches that frame', () => {
+      const frame = readFrame('xray-json', JSON.stringify({ iceslab: { dns: 'merge' }, dns: OWN_STR, outbounds: [{ tag: 'direct', protocol: 'freedom' }], routing: { rules: [] } }));
+      expect(dnsOf(parse(buildXrayJson([xrayEp], { ...o, frame })))).toEqual(OWN_STR);
+    });
+  });
 });
