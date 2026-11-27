@@ -37,7 +37,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const GOLDEN = join(here, 'formats', '__testdata__', 'templates-default.golden.json');
 
 describe('the Default frames', () => {
-  it('render byte for byte what the builders wrote before frames (golden, 120 cases)', () => {
+  it('render byte for byte what the builders wrote before frames (golden, 156 cases)', () => {
     const golden = JSON.parse(readFileSync(GOLDEN, 'utf8')) as Record<string, string>;
     const cases = goldenCases();
     expect(Object.keys(cases).sort()).toEqual(Object.keys(golden).sort());

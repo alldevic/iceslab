@@ -95,6 +95,13 @@ const PRESETS: { key: string; opts: { routingPreset?: RoutingPresetId; ownPreset
   { key: 'own', opts: { ownPresetRules: OWN } },
 ];
 
+// Stage 19.4: DNS rules of the kinds xray runs, and a DoT one it does not.
+const DNS_RULES = [
+  { match: ['corp.example', 'geosite:category-ads-all'], server: 'tcp://10.0.0.2', note: '' },
+  { match: ['full:www.other.example'], server: 'https://dns.corp.example/dns-query', note: '' },
+  { match: ['skipped.example'], server: 'tls://10.0.0.9', note: '' },
+];
+
 const CDL = { direct: ['domain:direct.example', 'plain.example'], proxy: ['proxied.example'], block: ['ads.example'] };
 const CUSTOM_RULES = [{ type: 'field', domain: ['geosite:netflix'], outboundTag: 'direct' }];
 
@@ -116,6 +123,17 @@ export function goldenCases(): Record<string, () => string> {
       out[k('xrayjson-array')] = () => buildXrayJsonArray(eps, { ...p.opts });
       out[k('xrayjson-array', '/all-options')] = () =>
         buildXrayJsonArray(eps, { ...p.opts, customRules: CUSTOM_RULES, customDomainLists: CDL, tlsFragment: true });
+    }
+  }
+  // Stage 19.4: with DNS rules the xray formats grow a `dns` section, the dns
+  // outbound and the port 53 rule (not in xkeen). Added cases; the ones above are
+  // the empty-rules output and stay as they were.
+  for (const [set, eps] of Object.entries(SETS)) {
+    for (const p of PRESETS) {
+      const k = (fmt: string) => `${fmt}/${set}/${p.key}/dns-rules`;
+      out[k('xrayjson')] = () => buildXrayJson(eps, { ...p.opts, dnsRules: DNS_RULES });
+      out[k('xkeen')] = () => buildXrayJson(eps, { ...p.opts, forRouter: true, dnsRules: DNS_RULES });
+      out[k('xrayjson-array')] = () => buildXrayJsonArray(eps, { ...p.opts, dnsRules: DNS_RULES });
     }
   }
   return out;

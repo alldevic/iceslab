@@ -1,5 +1,5 @@
 import { isIP } from 'node:net';
-import { GEO_SRS_NAME, type DnsRule } from '@iceslab/shared';
+import { GEO_SRS_NAME, parseDnsServer, type DnsRule } from '@iceslab/shared';
 import type { DeviceRouteRule } from '../routing-presets/routing-presets.builtins.js';
 import type { SelfHostedGeo } from '../geo-sets/geo-self-host.js';
 import { parseGeoRef } from '../geo-sets/geo-names.js';
@@ -276,4 +276,62 @@ export function effectiveDnsRules(
   panelRules: readonly DnsRule[],
 ): DnsRule[] {
   return [...(preset.kind === 'custom' ? preset.dnsRules : []), ...panelRules];
+}
+
+/** What a list of DNS rules becomes in an xray `dns` section (stage 19.4). */
+export interface XrayDnsRules {
+  /** One `dns.servers` object per rule xray can run: address, domains, `skipFallback`. */
+  servers: Record<string, unknown>[];
+  /** Where those servers sit, so the routing can fix their way out: an IP, or a host name (a DoH server given by name). Distinct, in order. */
+  pins: { ips: string[]; hosts: string[] };
+  /** The rules left out: xray has no such server kind (DoT; m19-01: `tls://` is taken for a host name and never answers). */
+  skipped: DnsRule[];
+}
+
+const bracket = (host: string): string => (host.includes(':') ? `[${host}]` : host);
+
+/**
+ * DNS rules as xray `dns.servers` entries, in the rules' order (xray takes the
+ * first server whose `domains` match, so the order is the precedence). The
+ * server string by kind, as measured on xray 26.3.27 (m19-01): an IP is the
+ * plain `address`, TCP `tcp://IP[:port]`, DoH `https://HOST[:port]/path`; a DoT
+ * rule is skipped and returned in `skipped`. Names go through the translation
+ * the routing rules use (a bare name is `domain:NAME`); `skipFallback` keeps
+ * the names off the default server, so a server that does not answer leaves
+ * them unresolved rather than asked elsewhere (decision of 19.2).
+ */
+export function xrayDnsRules(rules: readonly DnsRule[]): XrayDnsRules {
+  const servers: Record<string, unknown>[] = [];
+  const ips = new Set<string>();
+  const hosts = new Set<string>();
+  const skipped: DnsRule[] = [];
+  for (const r of rules) {
+    const s = parseDnsServer(r.server);
+    if (!s || s.kind === 'tls') {
+      skipped.push(r);
+      continue;
+    }
+    let address: string;
+    if (s.kind === 'udp') address = s.host;
+    else if (s.kind === 'tcp') address = `tcp://${bracket(s.host)}${s.port === 53 ? '' : `:${s.port}`}`;
+    else address = `https://${bracket(s.host)}${s.port === 443 ? '' : `:${s.port}`}${s.path}`;
+    servers.push({ address, domains: r.match.map(xrayDomain), skipFallback: true });
+    (isIP(s.host) !== 0 ? ips : hosts).add(s.host);
+  }
+  return { servers, pins: { ips: [...ips], hosts: [...hosts] }, skipped };
+}
+
+/**
+ * The routing rules that send the DNS servers' own queries where `target` says
+ * (the proxy, for a server only the node reaches): the first rules of a
+ * document with DNS rules. Without them the query of xray's own resolver to a
+ * server on port 53 meets the "port 53 -> dns" rule and is never answered
+ * (m19-01, check 8), and for tcp/DoH the way out is the one thing that picks
+ * "through the tunnel" or "direct". An IP by address, a name by `full:`.
+ */
+export function xrayDnsPinRules(pins: XrayDnsRules['pins'], target: Exclude<XrayProxyTarget, null>): Record<string, unknown>[] {
+  return [
+    ...(pins.ips.length ? [{ type: 'field', ip: pins.ips, ...target }] : []),
+    ...(pins.hosts.length ? [{ type: 'field', domain: pins.hosts.map((h) => `full:${h}`), ...target }] : []),
+  ];
 }

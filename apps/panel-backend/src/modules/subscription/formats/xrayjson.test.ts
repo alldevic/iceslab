@@ -1096,3 +1096,185 @@ describe('buildXrayJson IPv6 address', () => {
     expect(buildXrayJson([{ ...xrayEp, host: '2001:db8::1' }])).toContain('"address": "2001:db8::1"');
   });
 });
+
+// Stage 19.4: the operator's "names -> DNS server" rules in the xray formats.
+describe('DNS rules (19.4)', () => {
+  const rule = (server: string, ...match: string[]) => ({ match, server, note: '' });
+  const CORP = [rule('tcp://10.0.0.2', 'corp.example', 'geosite:category-ads-all')];
+  const DEFAULT_SERVER = 'https://1.1.1.1/dns-query';
+  const text = (o: unknown) => JSON.stringify(o);
+  const RU: PresetGeoInline = {
+    domains: { 'category-ru': ['domain:yandex.ru'], 'category-gov-ru': ['domain:gosuslugi.ru'] },
+    cidrs: { ru: ['5.3.0.0/16'] },
+  };
+  const PRESET_FRAME = (extra: Record<string, unknown> = {}) =>
+    readFrame(
+      'xray-json',
+      JSON.stringify({
+        iceslab: { routing: 'preset' },
+        outbounds: [{ tag: 'direct', protocol: 'freedom' }, { tag: 'block', protocol: 'blackhole' }],
+        routing: { rules: [] },
+        ...extra,
+      }),
+    );
+  type Dns = { queryStrategy?: string; servers: unknown[] };
+  const dnsOf = (c: XrayConfig) => (c as unknown as { dns?: Dns }).dns;
+  const tags = (c: XrayConfig) => c.outbounds.map((o) => o.tag);
+  const OWN: DeviceRouteRule[] = [{ match: ['geosite:google'], action: 'direct', note: '' }];
+  const corpServer = { address: 'tcp://10.0.0.2', domains: ['domain:corp.example', 'geosite:category-ads-all'], skipFallback: true };
+
+  it('own preset without rules: no dns, no dns outbound, no port 53 rule (as before)', () => {
+    const cfg = parse(buildXrayJson([xrayEp], { ownPresetRules: OWN, dnsRules: [] }));
+    expect(dnsOf(cfg)).toBeUndefined();
+    expect(tags(cfg)).not.toContain('dns-out');
+    expect(text(cfg.routing.rules)).not.toContain('"port":"53"');
+  });
+
+  it('own preset with a rule: the rule server, then the default server; the pin first, then port 53 to the dns outbound', () => {
+    const cfg = parse(buildXrayJson([xrayEp], { ownPresetRules: OWN, dnsRules: CORP }));
+    expect(dnsOf(cfg)).toEqual({ queryStrategy: 'UseIPv4', servers: [corpServer, DEFAULT_SERVER] });
+    const p = endpointTag(xrayEp);
+    expect(cfg.routing.rules[0]).toEqual({ type: 'field', ip: ['10.0.0.2'], outboundTag: p });
+    expect(cfg.routing.rules[1]).toEqual({ type: 'field', port: '53', outboundTag: 'dns-out' });
+    expect(cfg.routing.rules[2]).toMatchObject({ domain: ['geosite:google'], outboundTag: 'direct' });
+    expect(tags(cfg)).toEqual([p, 'direct', 'block', 'dns-out']);
+    expect(cfg.outbounds[3]).toEqual({ tag: 'dns-out', protocol: 'dns' });
+    // dns follows log; the strategy for the document's domains is not changed by it.
+    expect(Object.keys(cfg).indexOf('dns')).toBe(Object.keys(cfg).indexOf('log') + 1);
+    expect(cfg.routing.domainStrategy).toBe('IPIfNonMatch');
+  });
+
+  it('proxy-all (a built-in without split DNS) gets the section too, with panel-wide rules', () => {
+    const cfg = parse(buildXrayJson([xrayEp], { routingPreset: 'proxy-all', dnsRules: CORP }));
+    expect(dnsOf(cfg)!.servers).toEqual([corpServer, DEFAULT_SERVER]);
+    expect(cfg.routing.domainStrategy).toBe('AsIs');
+  });
+
+  it('ru-split: the operator rule stands before the regional server, then the fallback; an overlapping name is the operator\'s', () => {
+    const rules = [rule('tcp://10.0.0.2', 'geosite:category-ru', 'corp.example')];
+    const cfg = parse(buildXrayJson([xrayEp], { routingPreset: 'ru-split', dnsRules: rules }));
+    const d = dnsOf(cfg)!;
+    expect(d.servers).toEqual([
+      { address: 'tcp://10.0.0.2', domains: ['geosite:category-ru', 'domain:corp.example'], skipFallback: true },
+      { address: '77.88.8.8', domains: ['geosite:category-ru', 'geosite:category-gov-ru'], skipFallback: true },
+      DEFAULT_SERVER,
+    ]);
+    expect(d.queryStrategy).toBe('UseIPv4');
+    expect(cfg.routing.domainStrategy).toBe('IPOnDemand');
+    expect(cfg.routing.rules[0]).toMatchObject({ ip: ['10.0.0.2'] });
+    // the inlined region's lists feed the regional server only, the operator's names stay as written
+    const inlined = parse(buildXrayJson([xrayEp], { routingPreset: 'ru-split', dnsRules: rules, presetGeoInline: RU }));
+    expect((dnsOf(inlined)!.servers[0] as { domains: string[] }).domains).toEqual(['geosite:category-ru', 'domain:corp.example']);
+  });
+
+  it('cn-split likewise', () => {
+    const d = dnsOf(parse(buildXrayJson([xrayEp], { routingPreset: 'cn-split', dnsRules: CORP })))!;
+    expect(d.servers).toEqual([corpServer, expect.objectContaining({ address: '223.5.5.5' }), DEFAULT_SERVER]);
+  });
+
+  it('a server named by host (DoH) is pinned by full: name, an IP one by address; the two rules are one each', () => {
+    const rules = [rule('https://dns.corp.example/dns-query', 'a.example'), rule('tcp://10.0.0.2', 'b.example'), rule('10.0.0.3', 'c.example')];
+    const cfg = parse(buildXrayJson([xrayEp], { ownPresetRules: OWN, dnsRules: rules }));
+    const p = endpointTag(xrayEp);
+    expect(cfg.routing.rules.slice(0, 3)).toEqual([
+      { type: 'field', ip: ['10.0.0.2', '10.0.0.3'], outboundTag: p },
+      { type: 'field', domain: ['full:dns.corp.example'], outboundTag: p },
+      { type: 'field', port: '53', outboundTag: 'dns-out' },
+    ]);
+  });
+
+  it('the balancer bundle pins to the balancer', () => {
+    const cfg = parse(buildXrayJson([xrayEp, xrayEp2], { bundle: 'balancer', ownPresetRules: OWN, dnsRules: CORP }));
+    expect(cfg.routing.rules[0]).toEqual({ type: 'field', ip: ['10.0.0.2'], balancerTag: 'balancer-auto' });
+  });
+
+  it('DoT only: skipped, the document is what it was without rules; DoT beside others: only the others', () => {
+    const dot = [rule('tls://10.0.0.9', 'x.example')];
+    expect(buildXrayJson([xrayEp], { ownPresetRules: OWN, dnsRules: dot })).toBe(buildXrayJson([xrayEp], { ownPresetRules: OWN }));
+    expect(buildXrayJsonArray([xrayEp], { routingPreset: 'ru-split', dnsRules: dot })).toBe(buildXrayJsonArray([xrayEp], { routingPreset: 'ru-split' }));
+    const cfg = parse(buildXrayJson([xrayEp], { ownPresetRules: OWN, dnsRules: [...dot, ...CORP] }));
+    expect(dnsOf(cfg)!.servers).toEqual([corpServer, DEFAULT_SERVER]);
+    expect(text(cfg.routing.rules)).not.toContain('10.0.0.9');
+  });
+
+  it('empty rules: byte for byte the output without the option, in all three forms', () => {
+    for (const routingPreset of ['proxy-all', 'ru-split', 'cn-split'] as const) {
+      expect(buildXrayJson([xrayEp], { routingPreset, dnsRules: [] })).toBe(buildXrayJson([xrayEp], { routingPreset }));
+      expect(buildXrayJsonArray([xrayEp, hy2Ep], { routingPreset, dnsRules: [] })).toBe(buildXrayJsonArray([xrayEp, hy2Ep], { routingPreset }));
+      expect(buildXrayJson([xrayEp], { routingPreset, forRouter: true, dnsRules: [] })).toBe(buildXrayJson([xrayEp], { routingPreset, forRouter: true }));
+    }
+  });
+
+  it('array: each config pins to its own proxy and carries the dns outbound; hysteria too', () => {
+    const arr = parseArray(buildXrayJsonArray([xrayEp, xrayEp2, hy2Ep], { ownPresetRules: OWN, dnsRules: CORP }));
+    expect(arr).toHaveLength(3);
+    for (const [i, e] of [xrayEp, xrayEp2, hy2Ep].entries()) {
+      const c = arr[i]!;
+      const t = endpointTag(e);
+      expect(dnsOf(c)).toEqual({ queryStrategy: 'UseIPv4', servers: [corpServer, DEFAULT_SERVER] });
+      expect(c.routing.rules[0]).toEqual({ type: 'field', ip: ['10.0.0.2'], outboundTag: t });
+      expect(c.routing.rules[1]).toEqual({ type: 'field', port: '53', outboundTag: 'dns-out' });
+      expect(tags(c).filter((x) => x === 'dns-out')).toHaveLength(1);
+    }
+  });
+
+  it('xkeen: the dns section and the pin, no dns outbound, no port 53 rule', () => {
+    const cfg = parse(buildXrayJson([xrayEp], { ownPresetRules: OWN, dnsRules: CORP, forRouter: true }));
+    expect(dnsOf(cfg)!.servers).toEqual([corpServer, DEFAULT_SERVER]);
+    expect(cfg.routing.rules[0]).toEqual({ type: 'field', ip: ['10.0.0.2'], outboundTag: endpointTag(xrayEp) });
+    expect(tags(cfg)).not.toContain('dns-out');
+    expect(text(cfg.routing.rules)).not.toContain('"port":"53"');
+    expect(cfg.log).toBeUndefined();
+    const split = parse(buildXrayJson([xrayEp], { routingPreset: 'ru-split', dnsRules: CORP, forRouter: true }));
+    expect(dnsOf(split)!.servers).toHaveLength(3);
+    expect(tags(split)).not.toContain('dns-out');
+  });
+
+  it('a frame with no proxy gets none of it', () => {
+    const base = buildXrayJson([], { ownPresetRules: OWN });
+    expect(buildXrayJson([], { ownPresetRules: OWN, dnsRules: CORP })).toBe(base);
+    const ru = buildXrayJson([], { routingPreset: 'ru-split' });
+    expect(buildXrayJson([], { routingPreset: 'ru-split', dnsRules: CORP })).toBe(ru);
+    expect(buildXrayJsonArray([], { ownPresetRules: OWN, dnsRules: CORP })).toBe('[]\n');
+    // nodes of other protocols only: no xray proxy either
+    expect(buildXrayJson([naiveEp], { ownPresetRules: OWN, dnsRules: CORP })).toBe(buildXrayJson([naiveEp], { ownPresetRules: OWN }));
+  });
+
+  it('a frame with its own dns: it stands whole, nothing of the rules is added', () => {
+    const frame = PRESET_FRAME({ dns: { servers: ['9.9.9.9'] } });
+    for (const o of [{ ownPresetRules: OWN }, { routingPreset: 'ru-split' as const }]) {
+      const cfg = parse(buildXrayJson([xrayEp], { ...o, frame, dnsRules: CORP }));
+      expect(dnsOf(cfg)).toEqual({ servers: ['9.9.9.9'] });
+      expect(tags(cfg)).not.toContain('dns-out');
+      expect(text(cfg.routing.rules)).not.toContain('10.0.0.2');
+      expect(text(cfg.routing.rules)).not.toContain('"port":"53"');
+      expect(buildXrayJson([xrayEp], { ...o, frame, dnsRules: CORP })).toBe(buildXrayJson([xrayEp], { ...o, frame }));
+    }
+  });
+
+  it('a frame without iceslab.routing: preset gets no panel routing, so none of it', () => {
+    const frame = readFrame('xray-json', JSON.stringify({ outbounds: [{ tag: 'direct', protocol: 'freedom' }], routing: { rules: [] } }));
+    expect(buildXrayJson([xrayEp], { ownPresetRules: OWN, frame, dnsRules: CORP })).toBe(buildXrayJson([xrayEp], { ownPresetRules: OWN, frame }));
+    const cfg = parse(buildXrayJson([xrayEp], { ownPresetRules: OWN, frame, dnsRules: CORP }));
+    expect(dnsOf(cfg)).toBeUndefined();
+    expect(tags(cfg)).not.toContain('dns-out');
+  });
+
+  it('a frame outbound already tagged dns-out is used, not added twice; the frame\'s own rules come after the panel\'s', () => {
+    const frame = PRESET_FRAME({
+      outbounds: [{ tag: 'direct', protocol: 'freedom' }, { tag: 'dns-out', protocol: 'dns', settings: { nonRecursive: true } }],
+      routing: { rules: [{ type: 'field', protocol: ['bittorrent'], outboundTag: 'direct' }] },
+    });
+    const cfg = parse(buildXrayJson([xrayEp], { ownPresetRules: OWN, frame, dnsRules: CORP }));
+    expect(tags(cfg).filter((x) => x === 'dns-out')).toHaveLength(1);
+    expect(cfg.outbounds.find((o) => o.tag === 'dns-out')).toEqual({ tag: 'dns-out', protocol: 'dns', settings: { nonRecursive: true } });
+    expect(cfg.routing.rules[1]).toEqual({ type: 'field', port: '53', outboundTag: 'dns-out' });
+    const bt = cfg.routing.rules.findIndex((r) => (r.protocol as string[] | undefined)?.[0] === 'bittorrent');
+    expect(bt).toBeGreaterThan(1);
+  });
+
+  it('the TLS fragment dialer and the dns outbound both stay: fragment before dns-out', () => {
+    const cfg = parse(buildXrayJson([xrayEp], { ownPresetRules: OWN, dnsRules: CORP, tlsFragment: true }));
+    expect(tags(cfg).slice(-2)).toEqual(['fragment', 'dns-out']);
+  });
+});

@@ -3,7 +3,7 @@ import { emitsVisionFlow, isPlainXray, type SubscriptionEndpoint } from '../subs
 import { endpointTag, makeTagger } from '../endpoint-identity.js';
 import { ADS_GEOSITE, BUILTIN_PRESET_RULES, splitGeoTags, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
 import type { PresetGeoInline } from '../../geo-sets/geo-preset-inline.js';
-import { xrayDeviceRules } from '../subscription.device-rules.js';
+import { xrayDeviceRules, xrayDnsPinRules, xrayDnsRules, type XrayProxyTarget } from '../subscription.device-rules.js';
 import { exitsHaveIpv6, xrayQueryStrategy } from '../subscription.address-family.js';
 import { asArray, asObject, defaultFrame, insertAfter, openFrame, type Frame } from '../subscription.frames.js';
 
@@ -77,8 +77,8 @@ export interface XrayJsonBuildOpts {
    * preset's, and no split DNS is written (see splitDnsFor).
    */
   ownPresetRules?: readonly DeviceRouteRule[];
-  /** Stage 19.2: the DNS rules in force (the preset's own, then the panel-wide);
-   *  delivered, not read yet: the formats start writing them in 19.4-19.6. */
+  /** Stage 19: the DNS rules in force (the preset's own, then the panel-wide),
+   *  written as `dns.servers` entries ahead of the default server (see dnsPlanFor). */
   dnsRules?: readonly DnsRule[];
   /**
    * Milestone 12.5: the region's matchers of a built-in split preset, written
@@ -288,6 +288,53 @@ function splitDnsFor(
     ? (dns.servers as unknown[]).map((srv) => (srv && typeof srv === 'object' && 'domains' in srv ? { ...srv, domains } : srv))
     : dns.servers;
   return { queryStrategy: xrayQueryStrategy(exitsHaveIpv6(endpoints)), ...dns, servers };
+}
+
+/** The outbound of protocol `dns` the "port 53" rule leads to. */
+const DNS_OUT_TAG = 'dns-out';
+/** The server the names no rule claims go to: the one 12.2 gave the built-in presets. */
+const DNS_DEFAULT_SERVER = 'https://1.1.1.1/dns-query';
+
+/** What the operator's DNS rules add to a document (stage 19.4). */
+interface XrayDnsPlan {
+  /** The whole `dns` section: the rules' servers, then the regional and default ones. */
+  dns: Record<string, unknown>;
+  /** The routing rules that go first: the servers' own way out, then port 53 -> the dns outbound. */
+  lead: Record<string, unknown>[];
+  /** Whether the dns outbound is wanted (not in the router form: the router's own DNS answers, decision 6). */
+  outbound: boolean;
+}
+
+/**
+ * The operator's DNS rules as a `dns` section with what must go with it, or
+ * null when there is nothing to write: no rules, every rule of a kind xray does
+ * not run (DoT; skipped, no warning in the response), or no proxy to send the
+ * servers' queries through. The rules' servers come first, so for a name a
+ * built-in region also claims the operator's rule answers (decision 3); the
+ * regional and fallback servers (or, for an own preset and proxy-all, the 12.2
+ * default) follow. Added to the document only when the frame has no `dns` of
+ * its own (fillXrayFrame). Measured in m19-01: without the dns outbound and the
+ * port 53 rule the section does not answer the apps; without the pin the
+ * server's own query is caught by the port 53 rule.
+ */
+function dnsPlanFor(
+  opts: XrayJsonBuildOpts,
+  endpoints: readonly SubscriptionEndpoint[],
+  regional: Record<string, unknown> | null,
+  target: XrayProxyTarget,
+): XrayDnsPlan | null {
+  if (!target || !opts.dnsRules?.length) return null;
+  const { servers, pins } = xrayDnsRules(opts.dnsRules);
+  if (servers.length === 0) return null;
+  const dns = regional
+    ? { ...regional, servers: [...servers, ...(regional.servers as unknown[])] }
+    : { queryStrategy: xrayQueryStrategy(exitsHaveIpv6(endpoints)), servers: [...servers, DNS_DEFAULT_SERVER] };
+  const outbound = !opts.forRouter;
+  return {
+    dns,
+    lead: [...xrayDnsPinRules(pins, target), ...(outbound ? [{ type: 'field', port: '53', outboundTag: DNS_OUT_TAG }] : [])],
+    outbound,
+  };
 }
 
 /**
@@ -546,14 +593,13 @@ export function buildXrayJson(
 
   // A `proxy` rule goes where the catch-all goes: the balancer, else the first
   // proxy; with no proxy at all it is left out (the catch-all is direct).
-  const splitRules = xrayDeviceRules(
-    deviceRules,
-    balancerActive
-      ? { balancerTag: 'balancer-auto' }
-      : proxyTags.length > 0
-        ? { outboundTag: proxyTags[0]! }
-        : null,
-  );
+  const proxyTarget: XrayProxyTarget = balancerActive
+    ? { balancerTag: 'balancer-auto' }
+    : proxyTags.length > 0
+      ? { outboundTag: proxyTags[0]! }
+      : null;
+  const splitRules = xrayDeviceRules(deviceRules, proxyTarget);
+  const dnsPlan = dnsPlanFor(opts, endpoints, splitDns, proxyTarget);
 
   // A-236 step 3: all of it goes into the frame, the operator's xray-json
   // template or the Default (templates.defaults.ts: log, the client SOCKS
@@ -571,7 +617,8 @@ export function buildXrayJson(
   const config = fillXrayFrame(named, {
     // The panel's routing (split DNS, custom rules and lists, the preset)
     // only where the frame asks for it.
-    dns: routing ? splitDns : null,
+    dns: routing ? (dnsPlan?.dns ?? splitDns) : null,
+    dnsLead: routing ? dnsPlan : null,
     head: proxyOutbounds,
     // TLS-fragment - the freedom dialer the proxy outbounds tunnel through.
     // Only appended when on, so the off path stays byte-identical.
@@ -617,6 +664,8 @@ function fillXrayFrame(
   frame: Frame,
   p: {
     dns: Record<string, unknown> | null;
+    /** The operator's DNS rules (19.4): leading routing rules and the dns outbound, added with `dns` and only when it is. */
+    dnsLead: XrayDnsPlan | null;
     head: Record<string, unknown>[];
     tail: Record<string, unknown>[];
     rules: Record<string, unknown>[];
@@ -627,8 +676,15 @@ function fillXrayFrame(
     catchAll: Record<string, unknown>;
   },
 ): Frame {
-  const cfg = p.dns && frame.dns === undefined ? insertAfter(frame, 'log', 'dns', p.dns) : frame;
-  cfg.outbounds = [...p.head, ...asArray(cfg.outbounds), ...p.tail];
+  // A frame with a `dns` of its own wins whole: none of the DNS rules' pieces is added.
+  const ownDns = frame.dns !== undefined;
+  const cfg = p.dns && !ownDns ? insertAfter(frame, 'log', 'dns', p.dns) : frame;
+  const lead = ownDns ? null : p.dnsLead;
+  const framed = asArray(cfg.outbounds);
+  // The frame may already have an outbound of that tag: the rule then leads to it.
+  const needDnsOut =
+    lead?.outbound === true && ![...p.head, ...framed].some((o) => asObject(o).tag === DNS_OUT_TAG);
+  cfg.outbounds = [...p.head, ...framed, ...p.tail, ...(needDnsOut ? [{ tag: DNS_OUT_TAG, protocol: 'dns' }] : [])];
   const r = asObject(cfg.routing);
   const rest = Object.fromEntries(
     Object.entries(r).filter(([k]) => k !== 'domainStrategy' && k !== 'balancers' && k !== 'rules'),
@@ -645,7 +701,7 @@ function fillXrayFrame(
     domainStrategy: r.domainStrategy ?? (p.onDemand ? 'IPOnDemand' : p.split ? 'IPIfNonMatch' : 'AsIs'),
     ...(balancers.length > 0 ? { balancers } : {}),
     ...rest,
-    rules: [...p.rules, ...asArray(r.rules), p.catchAll],
+    rules: [...(lead?.lead ?? []), ...p.rules, ...asArray(r.rules), p.catchAll],
   };
   return cfg;
 }
@@ -728,6 +784,7 @@ export function buildXrayJsonArray(
 
     // A `proxy` rule goes to this config's own proxy.
     const splitRules = xrayDeviceRules(deviceRules, { outboundTag: tag });
+    const dnsPlan = dnsPlanFor(opts, endpoints, splitDns, { outboundTag: tag });
 
     // A-236 step 3: each element is the frame (the operator's xray-json-array
     // template or the Default: log, SOCKS inbound, direct and block, the
@@ -750,7 +807,8 @@ export function buildXrayJsonArray(
     return fillXrayFrame(
       { remarks: remark, ...(meta ? { meta } : {}), ...cfg },
       {
-        dns: routing ? splitDns : null,
+        dns: routing ? (dnsPlan?.dns ?? splitDns) : null,
+        dnsLead: routing ? dnsPlan : null,
         head: [primary],
         tail: fragment,
         rules: routing ? [...(opts.customRules ?? []), ...customDomainRules, ...splitRules] : [],

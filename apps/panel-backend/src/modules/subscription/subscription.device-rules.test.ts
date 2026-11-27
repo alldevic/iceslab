@@ -9,7 +9,7 @@ import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../routing-presets/r
 import { buildXrayJson, buildXrayJsonArray } from './formats/xrayjson.js';
 import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson } from './formats/singbox.js';
-import { effectiveDnsRules } from './subscription.device-rules.js';
+import { effectiveDnsRules, xrayDnsPinRules, xrayDnsRules } from './subscription.device-rules.js';
 
 /**
  * A-229 part 4: device routing presets rendered from one structure.
@@ -247,6 +247,32 @@ describe.skipIf(!XRAY_BIN)('xray -test accepts an own preset of every kind', () 
   });
 });
 
+describe.skipIf(!XRAY_BIN)('xray -test accepts the documents with DNS rules of every kind (19.4)', () => {
+  const assets = process.env.XRAY_LOCATION_ASSET ?? dirname(XRAY_BIN);
+  const haveGeo = existsSync(join(assets, 'geosite.dat')) && existsSync(join(assets, 'geoip.dat'));
+  const dnsRules = [
+    { match: ['corp.example', 'full:www.corp2.example'], server: '10.0.0.1', note: '' },
+    { match: ['domain:a.example'], server: 'tcp://10.0.0.2:5353', note: '' },
+    { match: ['b.example'], server: 'https://dns.corp.example/dns-query', note: '' },
+    { match: ['c.example'], server: 'https://10.0.0.4:8443/q', note: '' },
+    { match: ['d.example'], server: 'tcp://[2001:db8::53]', note: '' },
+    { match: ['geosite:category-ads-all'], server: 'tcp://10.0.0.5', note: '' },
+  ];
+  it.skipIf(!haveGeo)('flat, balancer, array and xkeen, over a built-in and an own preset', () => {
+    const opts = [{ routingPreset: 'ru-split' as const }, { ownPresetRules: EVERY_KIND }, { routingPreset: 'proxy-all' as const }];
+    for (const o of opts) {
+      for (const config of [
+        buildXrayJson(LOADABLE, { ...o, dnsRules }),
+        buildXrayJson(LOADABLE, { ...o, dnsRules, bundle: 'balancer' }),
+        buildXrayJson(LOADABLE, { ...o, dnsRules, forRouter: true }),
+        ...(JSON.parse(buildXrayJsonArray(LOADABLE, { ...o, dnsRules })) as unknown[]).map((c) => JSON.stringify(c)),
+      ]) {
+        expect(run(XRAY_BIN, (f) => ['-test', '-c', f], config, { XRAY_LOCATION_ASSET: assets })).toBe('');
+      }
+    }
+  });
+});
+
 describe.skipIf(!XRAY_BIN)('xray -test accepts the split presets with the lists written in (f12-21)', () => {
   // No geo files are given: a document that names no category must load without them.
   const empty = mkdtempSync(join(tmpdir(), 'iceslab-nogeo-'));
@@ -311,5 +337,61 @@ describe('effectiveDnsRules (stage 19.2)', () => {
     const out = effectiveDnsRules(own, panel);
     expect(out).toEqual([...own.dnsRules, ...panel]);
     expect(out[0]!.server).toBe('10.0.0.1');
+  });
+});
+
+describe('xrayDnsRules (stage 19.4)', () => {
+  const r = (server: string, ...match: string[]) => ({ match, server, note: '' });
+
+  it('every kind xray runs: an IP, tcp://, https://; the names as the routing rules spell them', () => {
+    const out = xrayDnsRules([
+      r('10.0.0.1', 'corp.example'),
+      r('tcp://10.0.0.2', 'domain:a.example', 'full:www.b.example'),
+      r('tcp://10.0.0.3:5353', 'geosite:category-ads-all'),
+      r('https://dns.corp.example/dns-query', 'c.example'),
+      r('https://10.0.0.4:8443/q', 'd.example'),
+      r('tcp://[2001:db8::53]', 'e.example'),
+      r('2001:db8::54', 'f.example'),
+    ]);
+    expect(out.skipped).toEqual([]);
+    expect(out.servers).toEqual([
+      { address: '10.0.0.1', domains: ['domain:corp.example'], skipFallback: true },
+      { address: 'tcp://10.0.0.2', domains: ['domain:a.example', 'full:www.b.example'], skipFallback: true },
+      { address: 'tcp://10.0.0.3:5353', domains: ['geosite:category-ads-all'], skipFallback: true },
+      { address: 'https://dns.corp.example/dns-query', domains: ['domain:c.example'], skipFallback: true },
+      { address: 'https://10.0.0.4:8443/q', domains: ['domain:d.example'], skipFallback: true },
+      { address: 'tcp://[2001:db8::53]', domains: ['domain:e.example'], skipFallback: true },
+      { address: '2001:db8::54', domains: ['domain:f.example'], skipFallback: true },
+    ]);
+    expect(out.pins).toEqual({
+      ips: ['10.0.0.1', '10.0.0.2', '10.0.0.3', '10.0.0.4', '2001:db8::53', '2001:db8::54'],
+      hosts: ['dns.corp.example'],
+    });
+  });
+
+  it('DoT is skipped and returned, with its rule and no pin', () => {
+    const dot = r('tls://10.0.0.9', 'x.example');
+    const out = xrayDnsRules([dot, r('tcp://10.0.0.2', 'y.example')]);
+    expect(out.skipped).toEqual([dot]);
+    expect(out.servers).toHaveLength(1);
+    expect(out.pins.ips).toEqual(['10.0.0.2']);
+  });
+
+  it('nothing but DoT: no servers', () => {
+    expect(xrayDnsRules([r('tls://dot.example', 'x.example')]).servers).toEqual([]);
+    expect(xrayDnsRules([])).toEqual({ servers: [], pins: { ips: [], hosts: [] }, skipped: [] });
+  });
+
+  it('one address for two rules is pinned once', () => {
+    expect(xrayDnsRules([r('tcp://10.0.0.2', 'a.example'), r('tcp://10.0.0.2:5353', 'b.example')]).pins.ips).toEqual(['10.0.0.2']);
+  });
+
+  it('the pin rules: addresses by ip, a name by full:, to the target', () => {
+    expect(xrayDnsPinRules({ ips: ['10.0.0.2'], hosts: ['dns.corp.example'] }, { outboundTag: 'p' })).toEqual([
+      { type: 'field', ip: ['10.0.0.2'], outboundTag: 'p' },
+      { type: 'field', domain: ['full:dns.corp.example'], outboundTag: 'p' },
+    ]);
+    expect(xrayDnsPinRules({ ips: ['10.0.0.2'], hosts: [] }, { balancerTag: 'b' })).toEqual([{ type: 'field', ip: ['10.0.0.2'], balancerTag: 'b' }]);
+    expect(xrayDnsPinRules({ ips: [], hosts: [] }, { outboundTag: 'p' })).toEqual([]);
   });
 });
