@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nodeIpv6Fact, slotConflictsOf, slotLabel, userScopeGapsOf } from '@/contours/nodes/lib/nodeAdapterFacts';
+import { nodeIpv6EgressFact, nodeIpv6Fact, slotConflictsOf, slotLabel, userScopeGapsOf } from '@/contours/nodes/lib/nodeAdapterFacts';
 
 describe('slotLabel: слот словами', () => {
   const t = (key: string, vars?: Record<string, unknown>) => `${key}${vars ? ' ' + JSON.stringify(vars) : ''}`;
@@ -89,5 +89,17 @@ describe('nodeIpv6Fact (18.2): строка IPv6 на карточке ноды'
     });
     expect(nodeIpv6Fact(null).state).toBe('unknown');
     expect(nodeIpv6Fact(undefined).state).toBe('unknown');
+  });
+});
+
+describe('nodeIpv6EgressFact (18.5): строка проверки исходящего IPv6', () => {
+  const at = '2026-11-27T00:00:00.000Z';
+  const base = { stack: true, global: true, addresses: ['2001:db8::1'] };
+  it('три состояния: проходит, не проходит, агент не сообщает', () => {
+    expect(nodeIpv6EgressFact({ observedAt: at, cores: [], ipv6: { ...base, egress: true } })).toBe('works');
+    expect(nodeIpv6EgressFact({ observedAt: at, cores: [], ipv6: { ...base, egress: false } })).toBe('fails');
+    expect(nodeIpv6EgressFact({ observedAt: at, cores: [], ipv6: base })).toBe('unknown');
+    expect(nodeIpv6EgressFact({ observedAt: at, cores: [] })).toBe('unknown');
+    expect(nodeIpv6EgressFact(null)).toBe('unknown');
   });
 });

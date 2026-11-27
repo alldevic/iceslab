@@ -13,7 +13,11 @@ import (
 	"strings"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/atomicfile"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 )
+
+// nodeHasIPv6 is read at every render, a variable so tests pin the answer.
+var nodeHasIPv6 = core.EffectiveIPv6
 
 // validateInboundYAMLSafe enforces "no character that could break out of a
 // single-line YAML scalar value" on the two panel-pushed strings that get
@@ -367,9 +371,30 @@ func renderConfig(adapterCfg Config, inbound InboundConfig, handoff *ChainHandof
 		if err := writeChainOutbound(&b, handoff); err != nil {
 			return nil, err
 		}
+	} else {
+		writeDirectOutbound(&b)
 	}
 
 	return b.Bytes(), nil
+}
+
+// writeDirectOutbound states the address family hysteria dials names with (18.5;
+// it used to be /etc/gai.conf for the whole host, written by the bootstrap).
+// "64": IPv6 first, where the node leaves by IPv6 (core.EffectiveIPv6); "46":
+// IPv4 first, which is what the gai.conf line did and what a node without
+// working IPv6 needs, since Go's resolver otherwise tries IPv6 first and the
+// request dies at that hop. Not written for a chain hand-off: its only outbound
+// is the chain's socks5 (see writeChainOutbound).
+func writeDirectOutbound(b *bytes.Buffer) {
+	mode := "46"
+	if nodeHasIPv6() {
+		mode = "64"
+	}
+	b.WriteString("\noutbounds:\n")
+	b.WriteString("  - name: direct\n")
+	b.WriteString("    type: direct\n")
+	b.WriteString("    direct:\n")
+	fmt.Fprintf(b, "      mode: \"%s\"\n", mode)
 }
 
 // writeChainOutbound appends the hand-off to the chain: ONE socks5 outbound,

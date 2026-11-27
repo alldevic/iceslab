@@ -60,6 +60,12 @@ func checkGolden(t *testing.T, name string, got []byte) {
 // hand-off to the chain must not move a single byte of it for a node that has
 // none: an unrelated node restarting its core on deploy is the least of it, a
 // changed default route would be the worst.
+//
+// 18.5 moved this golden once, on purpose: the family preference left
+// /etc/gai.conf (a line the bootstrap wrote for the whole host) for the config,
+// so the render now ends with a `direct` outbound whose mode is "46" (IPv4 first,
+// what the gai.conf line did) on a node without working IPv6. Nothing else in it
+// moved; TestChainAddsOneBlockAndMovesNothingElse reads that as a diff.
 func TestRenderWithoutChainIsUnchanged(t *testing.T) {
 	blob, err := renderConfig(goldenCfg, goldenInbound, nil)
 	if err != nil {
@@ -106,10 +112,17 @@ func TestChainAddsOneBlockAndMovesNothingElse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(string(with), string(without)) {
+	// The direct block (18.5) is the one thing the hand-off takes away: with a
+	// chain the socks5 outbound is the only way out.
+	direct := "\noutbounds:\n  - name: direct\n    type: direct\n    direct:\n      mode: \"46\"\n"
+	if !strings.HasSuffix(string(without), direct) {
+		t.Fatalf("no direct block at the end of the render:\n%s", without)
+	}
+	base := strings.TrimSuffix(string(without), direct)
+	if !strings.HasPrefix(string(with), base) {
 		t.Fatal("the hand-off changed something other than appending its own block")
 	}
-	added := strings.TrimPrefix(string(with), string(without))
+	added := strings.TrimPrefix(string(with), base)
 	want := "\noutbounds:\n" +
 		"  - name: chain\n" +
 		"    type: socks5\n" +
@@ -237,7 +250,7 @@ func TestApplyCascade_NilTakesTheHandoffAway(t *testing.T) {
 		t.Fatal(err)
 	}
 	blob, _ := os.ReadFile(cfgPath)
-	if strings.Contains(string(blob), "outbounds:") {
+	if strings.Contains(string(blob), "name: chain") {
 		t.Errorf("the hand-off survived its removal:\n%s", blob)
 	}
 }
@@ -282,7 +295,35 @@ func TestApplyCascade_RefusedHandoffIsNotKept(t *testing.T) {
 		t.Fatal(err)
 	}
 	blob, _ := os.ReadFile(cfgPath)
-	if strings.Contains(string(blob), "outbounds:") {
+	if strings.Contains(string(blob), "name: chain") {
 		t.Errorf("the refused hand-off was rendered by the next push:\n%s", blob)
+	}
+}
+
+func init() { nodeHasIPv6 = func() bool { return false } }
+
+// 18.5: the family hysteria dials with follows core.EffectiveIPv6. "64" where
+// the node leaves by IPv6, "46" otherwise; a chain entry gets neither.
+func TestDirectOutboundModeFollowsTheNodesIPv6(t *testing.T) {
+	defer func(f func() bool) { nodeHasIPv6 = f }(nodeHasIPv6)
+	for _, c := range []struct {
+		v6   bool
+		mode string
+	}{{true, `mode: "64"`}, {false, `mode: "46"`}} {
+		nodeHasIPv6 = func() bool { return c.v6 }
+		blob, err := renderConfig(goldenCfg, goldenInbound, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(blob), c.mode) || strings.Count(string(blob), "  - name: ") != 1 {
+			t.Errorf("v6=%v: want %s once, got:\n%s", c.v6, c.mode, blob)
+		}
+		chain, err := renderConfig(goldenCfg, goldenInbound, goldenHandoff)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(chain), "mode:") {
+			t.Errorf("v6=%v: a chain entry must carry no direct outbound:\n%s", c.v6, chain)
+		}
 	}
 }

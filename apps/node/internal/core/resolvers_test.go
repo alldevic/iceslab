@@ -1,6 +1,8 @@
 package core
 
 import (
+	"context"
+	"errors"
 	"net"
 	"reflect"
 	"testing"
@@ -64,5 +66,72 @@ func TestProbeIPv6IsConsistent(t *testing.T) {
 	f := ProbeIPv6()
 	if f.Global != (len(f.Addresses) > 0) {
 		t.Errorf("global %v with %d addresses", f.Global, len(f.Addresses))
+	}
+}
+
+// fakeNet answers a dial the way a host would: IPv4 reachable, IPv6 only where
+// the test says. A dial that is not an IPv6 socket succeeds, so a probe that
+// forgot the family reads "works" here and the test catches it.
+func fakeNet(v6ok map[string]bool) dialFunc {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if network != "tcp6" {
+			a, b := net.Pipe()
+			b.Close()
+			return a, nil
+		}
+		if v6ok[addr] {
+			a, b := net.Pipe()
+			b.Close()
+			return a, nil
+		}
+		return nil, errors.New("network is unreachable")
+	}
+}
+
+func TestIPv6EgressIsAskedOverAnIPv6SocketOnly(t *testing.T) {
+	targets := []string{"[2606:4700:4700::1111]:443", "[2001:4860:4860::8888]:443"}
+	if IPv6EgressWorks(targets, fakeNet(nil), time.Second) {
+		t.Error("IPv4 reachable and IPv6 not must read as no IPv6 egress")
+	}
+	if !IPv6EgressWorks(targets, fakeNet(map[string]bool{targets[1]: true}), time.Second) {
+		t.Error("any one target answering is enough")
+	}
+}
+
+func TestIPv6EgressTargetsComeFromTheEnvOrTheDefaults(t *testing.T) {
+	if got := IPv6EgressTargets(""); !reflect.DeepEqual(got, DefaultIPv6EgressTargets) {
+		t.Errorf("default %v", got)
+	}
+	if got := IPv6EgressTargets(" , "); !reflect.DeepEqual(got, DefaultIPv6EgressTargets) {
+		t.Errorf("blank entries %v", got)
+	}
+	got := IPv6EgressTargets("[2001:db8::1]:443, example.test:80 ,")
+	if want := []string{"[2001:db8::1]:443", "example.test:80"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	// The default is a copy: a caller cannot rewrite it.
+	IPv6EgressTargets("")[0] = "x"
+	if DefaultIPv6EgressTargets[0] == "x" {
+		t.Error("the defaults were modified through the returned slice")
+	}
+}
+
+// The one answer every core reads: an address AND a connection that went out.
+func TestEffectiveIPv6NeedsAnAddressAndAWorkingEgress(t *testing.T) {
+	defer func(p *IPv6Prober) { sharedIPv6 = p }(sharedIPv6)
+	for _, c := range []struct {
+		name string
+		f    IPv6Facts
+		want bool
+	}{
+		{"address, check passed", IPv6Facts{Global: true, Egress: true}, true},
+		{"address, check failed", IPv6Facts{Global: true, Egress: false}, false},
+		{"no address", IPv6Facts{}, false},
+		{"no address, stray egress", IPv6Facts{Egress: true}, false},
+	} {
+		sharedIPv6 = &IPv6Prober{ttl: time.Minute, now: time.Now, probe: func() IPv6Facts { return c.f }}
+		if got := EffectiveIPv6(); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
 	}
 }

@@ -1,9 +1,12 @@
 package core
 
 import (
+	"context"
 	"net"
+	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -84,19 +87,97 @@ func CanListenIPv6() bool {
 	return true
 }
 
+// IPv6EgressTargetsEnv is the agent env key that names the addresses the
+// egress check dials: a comma list of host:port, an IPv6 literal in brackets
+// ("[2606:4700:4700::1111]:443"). Empty or unset means the default pair.
+const IPv6EgressTargetsEnv = "IPV6_EGRESS_PROBE_TARGETS"
+
+// DefaultIPv6EgressTargets are the Cloudflare and Google public resolvers over
+// IPv6, port 443: two operators, so one being unreachable from a network does
+// not read as "no IPv6".
+var DefaultIPv6EgressTargets = []string{"[2606:4700:4700::1111]:443", "[2001:4860:4860::8888]:443"}
+
+const ipv6EgressTimeout = 3 * time.Second
+
+// IPv6EgressTargets parses the env value; an empty list falls back to the
+// defaults.
+func IPv6EgressTargets(env string) []string {
+	var out []string
+	for _, t := range strings.Split(env, ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			out = append(out, t)
+		}
+	}
+	if len(out) == 0 {
+		return append([]string(nil), DefaultIPv6EgressTargets...)
+	}
+	return out
+}
+
+// dialFunc is net.Dialer.DialContext, swapped in tests.
+type dialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// IPv6EgressWorks: a TCP connection to any one target succeeds over an IPv6
+// socket. "tcp6", never "tcp": a dial that may fall back to IPv4 would report a
+// working IPv6 on a host that has only IPv4. Targets are asked at once, so one
+// dead address costs no more than the timeout.
+func IPv6EgressWorks(targets []string, dial dialFunc, timeout time.Duration) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	ok := make(chan bool, len(targets))
+	for _, t := range targets {
+		go func(addr string) {
+			c, err := dial(ctx, "tcp6", addr)
+			if err == nil {
+				c.Close()
+			}
+			ok <- err == nil
+		}(t)
+	}
+	for range targets {
+		if <-ok {
+			return true
+		}
+	}
+	return false
+}
+
 // IPv6Facts is what the agent reports of the host's IPv6 (the panel's
-// NodeIPv6). Egress is not here yet: the outbound check arrives with its own
-// milestone, and until then the panel reads its absence as "no".
+// NodeIPv6). Egress: an outbound IPv6 connection went through at the last
+// check; false also where there is no global address to try from.
 type IPv6Facts struct {
 	Stack     bool
 	Global    bool
+	Egress    bool
 	Addresses []string
 }
 
-// ProbeIPv6 reads the facts once, without a cache.
+// ProbeIPv6 reads the facts once, without a cache. The egress check runs only
+// from a host that has a global address.
 func ProbeIPv6() IPv6Facts {
 	addrs := HostGlobalIPv6Addrs()
-	return IPv6Facts{Stack: CanListenIPv6(), Global: len(addrs) > 0, Addresses: addrs}
+	f := IPv6Facts{Stack: CanListenIPv6(), Global: len(addrs) > 0, Addresses: addrs}
+	if f.Global {
+		d := net.Dialer{}
+		f.Egress = IPv6EgressWorks(IPv6EgressTargets(os.Getenv(IPv6EgressTargetsEnv)), d.DialContext, ipv6EgressTimeout)
+	}
+	return f
+}
+
+// sharedIPv6 is the one cached probe the agent has: /healthz and every core's
+// render read it, so they cannot disagree.
+var sharedIPv6 = NewIPv6Prober(time.Minute)
+
+// SharedIPv6Prober is what main wires into /healthz.
+func SharedIPv6Prober() *IPv6Prober { return sharedIPv6 }
+
+// EffectiveIPv6 is the one answer to "does this node leave by IPv6": a global
+// address AND an outbound connection that worked. An address on an interface
+// with no route out (half-configured IPv6) is not enough. Every core asks this,
+// none the host directly.
+func EffectiveIPv6() bool {
+	f := sharedIPv6.Facts()
+	return f.Global && f.Egress
 }
 
 // IPv6Prober answers /healthz from a cached probe: the bind is a syscall pair

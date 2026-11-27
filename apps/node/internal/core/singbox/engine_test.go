@@ -84,6 +84,18 @@ func ssKey() string {
 // Every protocol's render, as the adapter draws it for this binary, through
 // the engine's own check.
 func TestEveryProtocolRendersAConfigThePinnedEngineTakes(t *testing.T) {
+	// Both shapes of the direct outbound: the base's bare one and 18.5's
+	// domain_resolver with its dns block.
+	for _, v6 := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ipv4", true: "ipv6"}[v6], func(t *testing.T) {
+			defer func(f func() bool) { nodeHasIPv6 = f }(nodeHasIPv6)
+			nodeHasIPv6 = func() bool { return v6 }
+			everyProtocolRendersAConfigThePinnedEngineTakes(t)
+		})
+	}
+}
+
+func everyProtocolRendersAConfigThePinnedEngineTakes(t *testing.T) {
 	bin := singboxBin(t)
 	dir := t.TempDir()
 	cert, key := selfSigned(t, dir)

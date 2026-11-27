@@ -22,7 +22,7 @@ import {
   isNativeHysteria,
   type HysteriaTlsFacts,
 } from '@/contours/nodes/lib/hysteriaTls';
-import { nodeIpv6Fact } from '@/contours/nodes/lib/nodeAdapterFacts';
+import { nodeIpv6EgressFact, nodeIpv6Fact } from '@/contours/nodes/lib/nodeAdapterFacts';
 import { HysteriaTlsLine } from '@/contours/nodes/components/NodeEdit/HysteriaTlsLine';
 import { agentAwgFact, nodeAwgFact, type AgentAwgFact, type NodeAwgFact } from '@/lib/domain/awg';
 import { coreVersionOf } from '@/lib/domain/coreVersion';
@@ -255,13 +255,27 @@ function Ipv6Line({ cores }: { cores: Node['cores'] }) {
     fact.state === 'unknown'
       ? t('nodeEdit.ipv6.unknown')
       : t(`nodeEdit.ipv6.${fact.state}`, { count: fact.count });
+  // 18.5: the outbound check, only where there is an address to try from.
+  const egress = nodeIpv6EgressFact(cores);
+  const egressTone = egress === 'works' ? MOSS : egress === 'fails' ? AMBER : FAINT;
   return (
-    <Text
-      title={fact.addresses.length > 0 ? fact.addresses.join('\n') : undefined}
-      style={{ fontSize: 12, lineHeight: '17px', color: tone }}
-    >
-      {t('nodeEdit.ipv6.label')}: {text}
-    </Text>
+    <>
+      <Text
+        title={fact.addresses.length > 0 ? fact.addresses.join('\n') : undefined}
+        style={{ fontSize: 12, lineHeight: '17px', color: tone }}
+      >
+        {t('nodeEdit.ipv6.label')}: {text}
+      </Text>
+      {fact.state !== 'none' && (
+        <Text style={{ fontSize: 12, lineHeight: '17px', color: egressTone }}>
+          {t('nodeEdit.ipv6.egressLabel')}: {egress === 'works'
+            ? t('nodeEdit.ipv6.egress.works')
+            : egress === 'fails'
+              ? t('nodeEdit.ipv6.egress.fails')
+              : t('nodeEdit.ipv6.egress.unknown')}
+        </Text>
+      )}
+    </>
   );
 }
 

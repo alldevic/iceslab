@@ -987,8 +987,9 @@ type IPv6Dto struct {
 	Global bool `json:"global"`
 	// Addresses: those global addresses, sorted. Never null.
 	Addresses []string `json:"addresses"`
-	// Egress: an outbound IPv6 connection succeeds. Reserved: nothing fills it
-	// before the egress check lands, and absent reads as "no".
+	// Egress: an outbound IPv6 connection succeeded at the last check (a
+	// cached one, core.IPv6Prober). Absent from an agent older than the check,
+	// which the panel reads as "not reported", not as "no".
 	Egress *bool `json:"egress,omitempty"`
 }
 

@@ -321,6 +321,13 @@ export const nodes = {
       address: 'has an address, cannot listen on ::, addresses: {{count}}',
       none: 'none',
       unknown: 'the agent does not report it',
+      // 18.5: the agent's own outbound IPv6 connection check.
+      egressLabel: 'IPv6 egress',
+      egress: {
+        works: 'the outbound connection works',
+        fails: 'the outbound connection fails, the cores leave by IPv4',
+        unknown: 'the agent does not report it',
+      },
     },
     coresRendersPolicy: 'applies the policy',
     coresNoDns: 'no node DNS',

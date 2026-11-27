@@ -2274,8 +2274,8 @@ export interface HealthcheckResponse {
  * The host's IPv6 facts as the agent reports them. `stack`: a socket on `::`
  * binds and takes IPv4 too. `global`: an interface carries a global address
  * (not link-local, not fc00::/7). `addresses`: those addresses, sorted.
- * `egress`: an outbound IPv6 connection succeeds; nothing fills it before the
- * egress check, and ABSENT reads as "no".
+ * `egress`: an outbound IPv6 connection went through at the agent's last check
+ * (milestone 18.5); ABSENT is an agent older than the check, "not reported".
  */
 export interface NodeIPv6 {
   stack: boolean;

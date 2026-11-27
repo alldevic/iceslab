@@ -104,3 +104,16 @@ export function nodeIpv6Fact(cores: NodeCores | null | undefined): NodeIpv6Fact 
   const state = v.stack && v.global ? 'stack' : v.global ? 'address' : 'none';
   return { state, count: addresses.length, addresses };
 }
+
+/**
+ * The node card's IPv6 egress line (18.5): the agent's own outbound IPv6
+ * connection check. `works` / `fails` as reported; `unknown`: the agent sends no
+ * `egress` (older than the check), which is not `fails` and is not drawn as a
+ * fault.
+ */
+export type NodeIpv6EgressFact = 'works' | 'fails' | 'unknown';
+
+export function nodeIpv6EgressFact(cores: NodeCores | null | undefined): NodeIpv6EgressFact {
+  const e = cores?.ipv6?.egress;
+  return typeof e !== 'boolean' ? 'unknown' : e ? 'works' : 'fails';
+}

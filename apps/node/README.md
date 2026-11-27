@@ -14,7 +14,17 @@ The agent reads the following environment variables.
 | `NODE_HOST` | `0.0.0.0` | Listen address for the panel-facing mTLS HTTPS server. |
 | `NODE_PORT` | `1337` | Listen port for the mTLS HTTPS server. |
 
+### IPv6 egress check
+
+The agent checks whether an outbound IPv6 connection works from this node, and every core that leaves by IPv6 (xray, shadowsocks, sing-box) does so only when the node has a global address AND the check passed. The result is cached for a minute and reported in `/healthz` as `ipv6.egress`. The check runs only on a node that has a global IPv6 address.
+
+| Var | Default | Description |
+|---|---|---|
+| `IPV6_EGRESS_PROBE_TARGETS` | `[2606:4700:4700::1111]:443,[2001:4860:4860::8888]:443` | Comma-separated `host:port` list the agent dials over an IPv6 socket (an IPv6 literal goes in brackets). Defaults: the Cloudflare and Google public resolvers, port 443. Any one connection succeeding is enough. Change it to addresses your network can reach if it blocks these. Empty means the default. |
+
 ### Hysteria
+
+Release note (18.5): the address family of hysteria's outbound is no longer `/etc/gai.conf` for the whole host. The agent writes `outbounds: direct: mode` into hysteria's config: `"64"` (IPv6 first) where the node's IPv6 egress check passed, `"46"` (IPv4 first, what the old line did) otherwise. `bootstrap-hysteria.sh` no longer touches `gai.conf`. On nodes installed earlier, the `precedence ::ffff:0:0/96  100` line it wrote stays: it is not removed automatically because the file is shared by the whole host; delete it by hand if nothing else needs it.
 
 | Var | Default | Description |
 |---|---|---|

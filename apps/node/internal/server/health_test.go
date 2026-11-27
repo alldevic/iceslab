@@ -419,8 +419,16 @@ func TestTheHealthcheckCarriesTheIPv6Block(t *testing.T) {
 		return core.IPv6Facts{Stack: true, Global: true, Addresses: []string{"2001:db8::1"}}
 	}
 	h := healthOf(t, s)
-	if h.IPv6 == nil || !h.IPv6.Stack || !h.IPv6.Global || len(h.IPv6.Addresses) != 1 || h.IPv6.Egress != nil {
+	if h.IPv6 == nil || !h.IPv6.Stack || !h.IPv6.Global || len(h.IPv6.Addresses) != 1 || h.IPv6.Egress == nil || *h.IPv6.Egress {
 		t.Errorf("ipv6 block %+v", h.IPv6)
+	}
+
+	// Milestone 18.5: egress follows the check.
+	s.cfg.IPv6Probe = func() core.IPv6Facts {
+		return core.IPv6Facts{Stack: true, Global: true, Egress: true, Addresses: []string{"2001:db8::1"}}
+	}
+	if h := healthOf(t, s); h.IPv6 == nil || h.IPv6.Egress == nil || !*h.IPv6.Egress {
+		t.Errorf("a passing check must read egress true: %+v", h.IPv6)
 	}
 
 	// A host without IPv6: stack false, and the address list is [] on the wire,
@@ -428,7 +436,7 @@ func TestTheHealthcheckCarriesTheIPv6Block(t *testing.T) {
 	s.cfg.IPv6Probe = func() core.IPv6Facts { return core.IPv6Facts{} }
 	rr := httptest.NewRecorder()
 	s.routes().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/healthz", nil))
-	if !strings.Contains(rr.Body.String(), `"ipv6":{"stack":false,"global":false,"addresses":[]}`) {
+	if !strings.Contains(rr.Body.String(), `"ipv6":{"stack":false,"global":false,"addresses":[],"egress":false}`) {
 		t.Errorf("body %s", rr.Body.String())
 	}
 }

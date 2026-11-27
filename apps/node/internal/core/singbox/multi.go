@@ -126,6 +126,7 @@ func (a *Adapter) renderAllWith(certPath, keyPath, statsListen string, held []he
 	if handoff != nil {
 		// The only outbound, and the route's end: see chain.go.
 		base["outbounds"] = []any{handoff.outbound()}
+		delete(base, "dns") // the direct outbound's resolver, which is gone
 		base["route"] = map[string]any{"final": chainOutboundTag}
 	}
 	if exp, ok := base["experimental"].(map[string]any); ok {

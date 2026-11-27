@@ -10,7 +10,7 @@
 #     config, auth callback port, the unit, and the traffic-stats listener and
 #     secret. The secret is kept across runs: the config on disk carries it;
 #   - sets up the port-hopping redirect (iceslab-hyhop.service) for the UDP
-#     range in HYSTERIA_PORT_RANGE, and prefers IPv4 in gai.conf.
+#     range in HYSTERIA_PORT_RANGE. (The IPv4 preference moved into the agent's hysteria config, 18.5.)
 #
 # E20, stand 2026-09-24: all of the above but the binary used to be done only
 # by install-iceslab-node.sh for --protocol hysteria, so hysteria added to a
@@ -242,21 +242,16 @@ EOF
   log "port-hopping: udp ${PORT_RANGE} -> :${LISTEN_PORT}"
 }
 
-# Hysteria proxies a name the client asked for, and Go's resolver tries IPv6
-# first: on a VPS with half-configured IPv6 every request dies at the v6 hop
-# ("client connected but nothing loads"). Prefer IPv4 in gai.conf; IPv6 still
-# works where it works. (Moved here with the redirect, E34.)
-prefer_ipv4() {
-  if ! grep -q '^precedence ::ffff:0:0/96  100' /etc/gai.conf 2>/dev/null; then
-    echo 'precedence ::ffff:0:0/96  100' >>/etc/gai.conf
-    log "gai.conf: IPv4 preferred for hysteria's outbound resolver"
-  fi
-}
+# Address family of hysteria's outbound (18.5): it was a line in /etc/gai.conf
+# for the WHOLE host written here (E34); it is now `outbounds: direct: mode` in
+# hysteria's own config, drawn by the agent ("64" where the node's IPv6 works,
+# "46" otherwise). This script no longer touches gai.conf. A line a previous run
+# left there is NOT removed: the file is the host's, and the line is harmless
+# beside the config setting. Remove it by hand if no other service wants it.
 
 finish() {
   write_unit
   port_hopping
-  prefer_ipv4
   wire_env
   node_env_done hysteria
 }

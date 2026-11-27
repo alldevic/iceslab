@@ -35,6 +35,12 @@ auth:
     url: http://127.0.0.1:9000/auth/test-path-not-a-secret
 
 ignoreClientBandwidth: true
+
+outbounds:
+  - name: direct
+    type: direct
+    direct:
+      mode: "46"
 `
 	if got != want {
 		t.Errorf("minimal render mismatch\n--- got ---\n%s--- want ---\n%s", got, want)

@@ -164,3 +164,20 @@ func TestHysteriaPortHoppingFollowsItsRange(t *testing.T) {
 		}
 	}
 }
+
+// 18.5: the family preference lives in hysteria's config now; the bootstrap
+// must not write the host's gai.conf again.
+func TestBootstrapHysteriaNoLongerWritesGaiConf(t *testing.T) {
+	b, err := os.ReadFile("scripts/bootstrap-hysteria.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if t := strings.TrimSpace(line); strings.HasPrefix(t, "#") {
+			continue
+		}
+		if strings.Contains(line, "gai.conf") || strings.Contains(line, "prefer_ipv4") {
+			t.Errorf("the script still touches gai.conf: %q", line)
+		}
+	}
+}

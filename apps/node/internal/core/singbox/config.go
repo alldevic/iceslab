@@ -16,6 +16,7 @@ import (
 
 type sbConfig struct {
 	Log          sbLog           `json:"log"`
+	DNS          *sbDNS          `json:"dns,omitempty"`
 	Inbounds     []sbInbound     `json:"inbounds"`
 	Outbounds    []sbOutbound    `json:"outbounds"`
 	Services     []sbService     `json:"services,omitempty"`
@@ -107,8 +108,43 @@ type sbHandshake struct {
 }
 
 type sbOutbound struct {
+	Type           string            `json:"type"`
+	Tag            string            `json:"tag"`
+	DomainResolver *sbDomainResolver `json:"domain_resolver,omitempty"`
+}
+
+// The family a direct outbound dials with (18.5). sing-box 1.12+ takes it as
+// domain_resolver.strategy, the form cascades/dial-family.ts already uses for
+// the chain's legs; domain_strategy on the outbound is deprecated and goes in
+// 1.14. A resolver names a DNS server, so the config carries one local server.
+type sbDomainResolver struct {
+	Server   string `json:"server"`
+	Strategy string `json:"strategy"`
+}
+
+type sbDNS struct {
+	Servers []sbDNSServer `json:"servers"`
+}
+
+type sbDNSServer struct {
 	Type string `json:"type"`
 	Tag  string `json:"tag"`
+}
+
+const egressDNSTag = "egress-dns"
+
+// nodeHasIPv6 is read at every render, a variable so tests pin the answer.
+var nodeHasIPv6 = core.EffectiveIPv6
+
+// directOutbound is the `direct` outbound, and the dns block its resolver
+// needs. On a node that does not leave by IPv6 both are the bare base shape (no
+// field, no dns block); with IPv6 the outbound prefers it.
+func directOutbound() (sbOutbound, *sbDNS) {
+	if !nodeHasIPv6() {
+		return sbOutbound{Type: "direct", Tag: "direct"}, nil
+	}
+	return sbOutbound{Type: "direct", Tag: "direct", DomainResolver: &sbDomainResolver{Server: egressDNSTag, Strategy: "prefer_ipv6"}},
+		&sbDNS{Servers: []sbDNSServer{{Type: "local", Tag: egressDNSTag}}}
 }
 
 // experimental.v2ray_api drives per-user traffic stats. sing-box implements the
@@ -234,8 +270,9 @@ func renderConfig(certPath, keyPath, statsListen string, inbound InboundConfig, 
 				KeyPath:         keyPath,
 			},
 		}},
-		Outbounds: []sbOutbound{{Type: "direct", Tag: "direct"}},
 	}
+	out, dns := directOutbound()
+	cfg.Outbounds, cfg.DNS = []sbOutbound{out}, dns
 
 	if statsListen != "" {
 		cfg.Experimental = &sbExperimental{
@@ -283,8 +320,9 @@ func renderAnytlsConfig(certPath, keyPath, statsListen string, inbound InboundCo
 				KeyPath:         keyPath,
 			},
 		}},
-		Outbounds: []sbOutbound{{Type: "direct", Tag: "direct"}},
 	}
+	out, dns := directOutbound()
+	cfg.Outbounds, cfg.DNS = []sbOutbound{out}, dns
 
 	if statsListen != "" {
 		cfg.Experimental = &sbExperimental{
@@ -359,8 +397,9 @@ func renderXrayFamilyConfig(statsListen string, inbound InboundConfig, users map
 			Users:      sbUsers,
 			TLS:        &tls,
 		}},
-		Outbounds: []sbOutbound{{Type: "direct", Tag: "direct"}},
 	}
+	out, dns := directOutbound()
+	cfg.Outbounds, cfg.DNS = []sbOutbound{out}, dns
 
 	if statsListen != "" {
 		cfg.Experimental = &sbExperimental{
@@ -464,10 +503,11 @@ func renderHysteria2Config(certPath, keyPath, statsListen string, inbound Inboun
 	}
 
 	cfg := sbConfig{
-		Log:       sbLog{Level: "warn", Timestamp: true},
-		Inbounds:  []sbInbound{in},
-		Outbounds: []sbOutbound{{Type: "direct", Tag: "direct"}},
+		Log:      sbLog{Level: "warn", Timestamp: true},
+		Inbounds: []sbInbound{in},
 	}
+	out, dns := directOutbound()
+	cfg.Outbounds, cfg.DNS = []sbOutbound{out}, dns
 
 	if statsListen != "" {
 		cfg.Experimental = &sbExperimental{
@@ -524,10 +564,14 @@ func renderShadowtlsConfig(statsListen string, inbound InboundConfig, users map[
 		},
 	}
 
+	out, dns := directOutbound()
 	doc := map[string]any{
 		"log":       map[string]any{"level": "warn", "timestamp": true},
 		"inbounds":  inbounds,
-		"outbounds": []any{map[string]any{"type": "direct", "tag": "direct"}},
+		"outbounds": []any{out},
+	}
+	if dns != nil {
+		doc["dns"] = dns
 	}
 	if statsListen != "" {
 		doc["experimental"] = map[string]any{
@@ -572,9 +616,10 @@ func renderShadowsocksConfig(statsListen, ssmListen string, inbound InboundConfi
 		Users:      sbUsers,
 	}
 	cfg := sbConfig{
-		Log:       sbLog{Level: "warn", Timestamp: true},
-		Outbounds: []sbOutbound{{Type: "direct", Tag: "direct"}},
+		Log: sbLog{Level: "warn", Timestamp: true},
 	}
+	out, dns := directOutbound()
+	cfg.Outbounds, cfg.DNS = []sbOutbound{out}, dns
 	if ssmListen != "" {
 		host, port, err := net.SplitHostPort(ssmListen)
 		if err != nil {

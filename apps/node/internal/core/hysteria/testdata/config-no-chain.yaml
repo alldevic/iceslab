@@ -28,3 +28,9 @@ bandwidth:
 trafficStats:
   listen: 127.0.0.1:9999
   secret: fixture-stats-secret-not-a-secret
+
+outbounds:
+  - name: direct
+    type: direct
+    direct:
+      mode: "46"

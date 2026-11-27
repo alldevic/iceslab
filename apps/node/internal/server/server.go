@@ -798,7 +798,8 @@ func (s *Server) ipv6() *dto.IPv6Dto {
 	if addrs == nil {
 		addrs = []string{}
 	}
-	return &dto.IPv6Dto{Stack: f.Stack, Global: f.Global, Addresses: addrs}
+	egress := f.Egress
+	return &dto.IPv6Dto{Stack: f.Stack, Global: f.Global, Addresses: addrs, Egress: &egress}
 }
 
 // portHopping is the range the nat table redirects to hysteria, nil when it

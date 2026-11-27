@@ -23,6 +23,10 @@
 #        wireguard                    -> bootstrap-wireguard.sh (wireguard-tools; upstream WireGuard
 #                                        next to AmneziaWG, its own interface and config)
 #        mieru                        -> bootstrap-mieru.sh (enfein/mieru, mita.service)
+#      Optional agent env, not written by default: IPV6_EGRESS_PROBE_TARGETS, the
+#      comma list of host:port ([ipv6]:port) the agent dials over IPv6 to decide
+#      whether the node leaves by IPv6 (default: Cloudflare and Google resolvers,
+#      port 443, any one is enough). Set it in the env file and restart iceslab-node.
 #   6. Drops a systemd unit at /etc/systemd/system/iceslab-node.service
 #   7. Enables + starts the service, waits for it to be active
 #
@@ -1679,6 +1683,9 @@ if [[ -n "$PAYLOAD" || ! -f "$ENV_FILE" ]]; then
 NODE_PAYLOAD=${PAYLOAD}
 NODE_HOST=${NODE_HOST}
 NODE_PORT=${NODE_PORT}
+# The addresses the agent dials over IPv6 to decide whether this node leaves by
+# IPv6 (any one connecting is enough). Uncomment to change the default:
+# IPV6_EGRESS_PROBE_TARGETS=[2606:4700:4700::1111]:443,[2001:4860:4860::8888]:443
 EOF
   # Zashchita (hardening): record realistic-fallback intent for the agent.
   # The agent reads REALISTIC_FALLBACK when generating the REALITY/Caddy

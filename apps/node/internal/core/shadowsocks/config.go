@@ -24,7 +24,7 @@ import (
 
 // nodeHasIPv6 is read at every render. A variable so tests can pin the answer:
 // the goldens would otherwise depend on the machine that runs them.
-var nodeHasIPv6 = core.HostHasGlobalIPv6
+var nodeHasIPv6 = core.EffectiveIPv6
 
 // InboundConfig is the static part of the SS inbound, generated once
 // from admin settings and kept constant across user mutations.

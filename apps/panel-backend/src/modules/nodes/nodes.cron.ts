@@ -458,8 +458,8 @@ function isPortHopping(r: PortHopping): boolean {
  * or a malformed one (an old agent: "no IPv6", see nodeHasIpv6). Addresses are
  * sorted here too, whatever order the agent sent: coresWorthWriting compares by
  * content, and an order that flips between polls would rewrite the row on each.
- * `egress` is kept only as a boolean and only when present: nothing fills it
- * before the egress check, and absent reads as "no".
+ * `egress` is kept only as a boolean and only when present: an agent older than
+ * the egress check (18.5) sends none, and that is "not reported".
  */
 function observedIpv6(r: NodeIPv6 | undefined): NodeIPv6 | undefined {
   if (!r || typeof r.stack !== 'boolean' || typeof r.global !== 'boolean') return undefined;
