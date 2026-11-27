@@ -5,6 +5,7 @@ import {
   mergeNodeDns,
   normalizeDnsName,
   normalizeDnsServer,
+  resolveDnsConflicts,
   type NamedDnsSource,
 } from './routing-presets.dns-merge.js';
 
@@ -104,5 +105,42 @@ describe('mergeNodeDns', () => {
     const names = Array.from({ length: 70 }, (_, i) => `n${i}.example`);
     const out = mergeNodeDns(null, [{ presetId: 'a', rules: [{ match: names.slice(0, 40), server: '10.0.0.1' }, { match: names.slice(40), server: '10.0.0.1' }] }]);
     expect(out?.servers.map((s) => [s.address, s.domains?.length])).toEqual([['10.0.0.1', 64], ['10.0.0.1', 6]]);
+  });
+});
+
+describe('19.11: what is carried when a conflict cannot be refused', () => {
+  it('the source ahead keeps the name, the clashing rule of the later one is left out whole and reported', () => {
+    const out = resolveDnsConflicts([
+      src('a', 'A', [['example.com'], '10.0.0.1']),
+      src('b', 'B', [['domain:example.com', 'b-only.com'], '10.0.0.2'], [['other.com'], '10.0.0.2']),
+    ]);
+    expect(out.kept[0]!.rules).toHaveLength(1);
+    expect(out.kept[1]!.rules).toEqual([{ match: ['other.com'], server: '10.0.0.2' }]);
+    expect(out.dropped).toEqual([{ presetId: 'b', otherPresetId: 'a', domain: 'domain:example.com', server: '10.0.0.2' }]);
+  });
+
+  it('the same server for a name, or a name only one source has, is no conflict; neither is a source repeating itself', () => {
+    const sources = [
+      src('a', 'A', [['x.com'], '10.0.0.1'], [['x.com'], '10.0.0.9']),
+      src('b', 'B', [['x.com'], '10.0.0.1:53'], [['y.com'], '10.0.0.2']),
+    ];
+    const out = resolveDnsConflicts(sources);
+    expect(out.dropped).toEqual([]);
+    expect(out.kept).toEqual(sources);
+  });
+
+  it('a rule that lost does not hide its names from a third source: the third meets the first', () => {
+    const out = resolveDnsConflicts([
+      src('a', 'A', [['x.com'], '10.0.0.1']),
+      src('b', 'B', [['x.com'], '10.0.0.2']),
+      src('c', 'C', [['x.com'], '10.0.0.1']),
+    ]);
+    expect(out.dropped.map((d) => d.presetId)).toEqual(['b']);
+    expect(out.kept[2]!.rules).toHaveLength(1);
+  });
+
+  it('the panel-wide rules, first in the order, win over a preset', () => {
+    const out = resolveDnsConflicts([src(null, 'panel', [['x.com'], '10.0.0.1']), src('a', 'A', [['x.com'], '10.0.0.2'])]);
+    expect(out.dropped).toEqual([{ presetId: 'a', otherPresetId: null, domain: 'x.com', server: '10.0.0.2' }]);
   });
 });

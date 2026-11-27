@@ -179,6 +179,12 @@ model Node {
   // Recomputed whole for a node, never patched; merged into the `dns` of the push
   // (inbounds.queue.ts, mergeNodeDns).
   presetDnsRules Json? @map("preset_dns_rules")
+  // 19.11: what a recompute did NOT carry because two presets on this node named
+  // one name with different servers (or the 16-server limit), when the change
+  // came from a squad or a binding and nobody could be refused:
+  // [{ kind: 'conflict', presetId, otherPresetId, domain, server } | { kind: 'limit', presetId, count }].
+  // Rewritten with preset_dns_rules; NULL = nothing was left out. The screen of 19.12 reads it.
+  presetDnsConflicts Json? @map("preset_dns_conflicts")
 
   // 18.6: what the operator says about this node's IPv6 egress: 'auto' (the
   // agent's own answer: a global address and a connection that went out),

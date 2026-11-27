@@ -22,6 +22,7 @@ import {
 import { awgConfUrl, subscriptionUrl } from '../subscription/subscription.link.js';
 import { endpointId, isLaterDevice } from '../subscription/endpoint-identity.js';
 import { RoutingPresetNotFoundError } from '../routing-presets/routing-presets.assign.js';
+import { dnsAssignRefusal } from '../routing-presets/routing-presets.nodes.js';
 import { audit } from '../audit/audit.hook.js';
 import { userErasedAfter, userTarget } from '../audit/audit.targets.js';
 
@@ -117,6 +118,8 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       if (err instanceof RoutingPresetNotFoundError) {
         return reply.code(400).send({ error: err.code, message: err.message, field: 'customRoutingPresetId' });
       }
+      const dnsRefusal = dnsAssignRefusal(err);
+      if (dnsRefusal) return reply.code(dnsRefusal.status).send(dnsRefusal.body);
       throw err;
     }
   });
@@ -468,6 +471,8 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       if (err instanceof RoutingPresetNotFoundError) {
         return reply.code(400).send({ error: err.code, message: err.message, field: 'customRoutingPresetId' });
       }
+      const dnsRefusal = dnsAssignRefusal(err);
+      if (dnsRefusal) return reply.code(dnsRefusal.status).send(dnsRefusal.body);
       throw err;
     }
   });

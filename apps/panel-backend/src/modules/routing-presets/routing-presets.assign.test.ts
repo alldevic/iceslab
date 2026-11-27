@@ -6,6 +6,8 @@ import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { presetUpdateData } from './routing-presets.assign.js';
+import { makeNode, makeSquad, makeUser } from '../../../tests/helpers/preset-nodes.js';
+import { inboundSyncQueue } from '../inbounds/inbounds.queue.js';
 
 /**
  * A-229 part 1: a user or a squad holds at most one routing preset, a built-in
@@ -210,5 +212,128 @@ describe('the database underneath', () => {
     ).rejects.toThrow(/groups_one_routing_preset/);
     await expect(prisma.routingPreset.delete({ where: { id: own } })).rejects.toThrow();
     expect(await prisma.routingPreset.count()).toBe(1);
+  });
+});
+
+describe('19.11: an assignment moves the carried DNS rules', () => {
+  const rule = (match: string, server: string) => ({ match: [match], server, note: '' });
+  const preset = async (name: string, ...rules: ReturnType<typeof rule>[]) =>
+    (await prisma.routingPreset.create({ data: { name, dnsRules: rules }, select: { id: true } })).id;
+  const carried = async (nodeId: string) => (await prisma.node.findUniqueOrThrow({ where: { id: nodeId }, select: { presetDnsRules: true } })).presetDnsRules;
+  const queued = async (nodeId: string) => !!(await inboundSyncQueue.getJob(`apply-${nodeId}`));
+  const rows = (id: string, match = 'example.com', server = '10.99.0.1') => [{ presetId: id, rules: [{ match: [match], server }] }];
+  const putSquad = (id: string, payload: Record<string, unknown>) =>
+    app.inject({ method: 'PUT', url: `/api/squads/${id}`, headers: auth(), payload });
+  const putUser = (id: string, payload: Record<string, unknown>) =>
+    app.inject({ method: 'PUT', url: `/api/users/${id}`, headers: auth(), payload });
+
+  beforeEach(() => inboundSyncQueue.obliterate({ force: true }));
+  afterEach(() => inboundSyncQueue.obliterate({ force: true }));
+
+  it('a squad given a preset carries its rules to its nodes; another preset replaces them; none takes them off', async () => {
+    const [n1, n2, out] = [await makeNode(), await makeNode(), await makeNode()];
+    const pa = await preset('Alpha', rule('example.com', '10.99.0.1'));
+    const pb = await preset('Beta', rule('other.com', '10.99.0.2'));
+    const squad = await makeSquad([n1.id, n2.id]);
+
+    let res = await putSquad(squad.id, { customRoutingPresetId: pa });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(await carried(n1.id)).toEqual(rows(pa));
+    expect(await carried(n2.id)).toEqual(rows(pa));
+    expect(await carried(out.id)).toBeNull();
+    expect(await queued(n1.id)).toBe(true);
+    expect(await queued(out.id)).toBe(false);
+
+    res = await putSquad(squad.id, { customRoutingPresetId: pb });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(await carried(n1.id)).toEqual(rows(pb, 'other.com', '10.99.0.2'));
+
+    res = await putSquad(squad.id, { routingPreset: 'ru-split' });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(await carried(n1.id)).toBeNull();
+    expect(await carried(n2.id)).toBeNull();
+  });
+
+  it('a squad created with a preset carries its rules to the nodes of its profiles', async () => {
+    const n = await makeNode();
+    const pa = await preset('Alpha', rule('example.com', '10.99.0.1'));
+    const { profileId } = await makeSquad([n.id]);
+    const res = await app.inject({
+      method: 'POST', url: '/api/squads', headers: auth(),
+      payload: { name: 'with-preset', profileIds: [profileId], customRoutingPresetId: pa },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    expect(await carried(n.id)).toEqual(rows(pa));
+    expect(await queued(n.id)).toBe(true);
+  });
+
+  it('a squad assignment that gives one name two servers on a shared node is refused with the field, naming the other preset and the node; nothing is written', async () => {
+    const shared = await makeNode({ name: 'shared-node' });
+    const pa = await preset('Alpha', rule('example.com', '10.99.0.1'));
+    const pb = await preset('Beta', rule('domain:example.com', '10.99.0.2'));
+    await makeSquad([shared.id], { presetId: pa });
+    const other = await makeSquad([shared.id]);
+    await prisma.node.update({ where: { id: shared.id }, data: { presetDnsRules: rows(pa) } });
+    await inboundSyncQueue.obliterate({ force: true });
+
+    const res = await putSquad(other.id, { customRoutingPresetId: pb });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(JSON.parse(res.body)).toMatchObject({
+      error: 'ROUTING_PRESET_DNS_CONFLICT', field: 'customRoutingPresetId', preset: 'Alpha', node: 'shared-node',
+    });
+    expect((await prisma.group.findUniqueOrThrow({ where: { id: other.id } })).customRoutingPresetId).toBeNull();
+    expect(await carried(shared.id)).toEqual(rows(pa));
+    expect(await queued(shared.id)).toBe(false);
+
+    const created = await app.inject({
+      method: 'POST', url: '/api/squads', headers: auth(),
+      payload: { name: 'refused', profileIds: [other.profileId], customRoutingPresetId: pb },
+    });
+    expect(created.statusCode, created.body).toBe(409);
+    expect(await prisma.group.findUnique({ where: { name: 'refused' } })).toBeNull();
+  });
+
+  it('a user given a preset carries it to the nodes of their squads; the same refusal on a conflict, nothing written', async () => {
+    const [n1, shared] = [await makeNode(), await makeNode({ name: 'shared-node' })];
+    const pa = await preset('Alpha', rule('example.com', '10.99.0.1'));
+    const pb = await preset('Beta', rule('example.com', '10.99.0.2'));
+    const pc = await preset('Gamma', rule('example.com', '10.99.0.1'));
+    const squad = await makeSquad([n1.id, shared.id]);
+    const user = await makeUser({ squadId: squad.id });
+    await makeSquad([shared.id], { presetId: pa });
+    await prisma.node.update({ where: { id: shared.id }, data: { presetDnsRules: rows(pa) } });
+    await inboundSyncQueue.obliterate({ force: true });
+
+    let res = await putUser(user.id, { customRoutingPresetId: pb });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(JSON.parse(res.body)).toMatchObject({ error: 'ROUTING_PRESET_DNS_CONFLICT', field: 'customRoutingPresetId', preset: 'Alpha', node: 'shared-node' });
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).customRoutingPresetId).toBeNull();
+    expect(await carried(n1.id)).toBeNull();
+
+    // The same server for the name is no conflict: both presets are carried on the shared node.
+    res = await putUser(user.id, { customRoutingPresetId: pc });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(await carried(n1.id)).toEqual(rows(pc));
+    expect(await carried(shared.id)).toEqual([...rows(pa), ...rows(pc)]);
+    expect(await queued(n1.id)).toBe(true);
+
+    // Taking the preset off takes its rules off both nodes, and leaves the squad's preset on the shared one.
+    res = await putUser(user.id, { customRoutingPresetId: null });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(await carried(n1.id)).toBeNull();
+    expect(await carried(shared.id)).toEqual(rows(pa));
+  });
+
+  it('a user created with a preset carries it to the nodes of their squads', async () => {
+    const n = await makeNode();
+    const pa = await preset('Alpha', rule('example.com', '10.99.0.1'));
+    const squad = await makeSquad([n.id]);
+    const res = await app.inject({
+      method: 'POST', url: '/api/users', headers: auth(),
+      payload: { username: 'carrier', groupIds: [squad.id], customRoutingPresetId: pa },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    expect(await carried(n.id)).toEqual(rows(pa));
+    expect(await queued(n.id)).toBe(true);
   });
 });

@@ -8,6 +8,7 @@ import {
   carriesRule,
   findDnsConflict,
   mergeNodeDns,
+  resolveDnsConflicts,
   type DnsConflict,
   type NamedDnsSource,
   type StoredPresetDns,
@@ -116,65 +117,175 @@ export interface DnsChange {
   rules: readonly { match: string[]; server: string }[];
 }
 
+/** What a recompute left out of a node, stored in nodes.preset_dns_conflicts (19.11). */
+export type StoredDnsConflict =
+  | { kind: 'conflict'; presetId: string | null; otherPresetId: string | null; domain: string; server: string }
+  | { kind: 'limit'; presetId: string | null; count: number };
+
 export interface NodeDnsPlan {
   nodeId: string;
   next: StoredPresetDns[] | null;
+  /** What this plan leaves out of the node (null = nothing). */
+  conflicts: StoredDnsConflict[] | null;
+  /** The carried rules differ from the stored ones: the node needs a push. */
   changed: boolean;
+  /** The record of what was left out differs from the stored one. */
+  conflictsChanged: boolean;
+}
+
+/** Which nodes a recompute looks at and what it refuses. */
+export interface DnsPlanScope {
+  /** A save in flight: this source's rules are the proposed ones, not the stored ones. */
+  change?: DnsChange;
+  /** Refuse a conflict (or the limit) that has this source on one side; undefined = refuse nothing, leave the second out (a change of squads or bindings). */
+  refuse?: { presetId: string | null };
+  /** Presets whose nodes are looked at: those they reach now and those still carrying them. With a `change` of the panel rules, or with neither this nor `nodeIds`, every node. */
+  presets?: readonly string[];
+  /** Exactly these nodes. */
+  nodeIds?: readonly string[];
 }
 
 /**
- * What every node the change touches would carry afterwards, or a refusal. Writes
- * nothing. A conflict is refused only when the saved source is one side of it; the
- * limit when the node's own servers and the carried ones together pass 16.
+ * What every node in scope would carry afterwards, or a refusal. Writes nothing.
+ * The same function for a save (19.10), an assignment, and the events of squads
+ * and bindings (19.11), so a node never carries what a recompute would not.
+ *
+ * Refusal (only with `scope.refuse`): a conflict with the refused source on one
+ * side, the limit when the node's own servers and the carried ones pass 16. Without
+ * it nothing is refused: the sources are taken in order of who was on the node
+ * first (the panel-wide rules, then the presets the node already carried, then the
+ * older preset), a rule that clashes with an earlier source is not carried, and
+ * the node's record says so. The same rules, run again, give the same plan.
  */
-export async function planDnsTransfer(change: DnsChange, db: Db = prisma): Promise<NodeDnsPlan[]> {
+export async function planCarriedDns(scope: DnsPlanScope, db: Db = prisma): Promise<NodeDnsPlan[]> {
+  const { change } = scope;
   const [presetRows, nodes, index, panel] = await Promise.all([
-    db.routingPreset.findMany({ select: { id: true, name: true, dnsRules: true } }),
-    db.node.findMany({ where: { deletedAt: null }, select: { id: true, name: true, dns: true, presetDnsRules: true } }),
+    db.routingPreset.findMany({ select: { id: true, name: true, dnsRules: true, createdAt: true } }),
+    db.node.findMany({
+      where: { deletedAt: null, ...(scope.nodeIds ? { id: { in: [...scope.nodeIds] } } : {}) },
+      select: { id: true, name: true, dns: true, presetDnsRules: true, presetDnsConflicts: true },
+    }),
     presetNodeIndex(db),
-    change.presetId === null ? Promise.resolve(change.rules) : readPanelRules(db),
+    change && change.presetId === null ? Promise.resolve(change.rules) : readPanelRules(db),
   ]);
+  const created = new Map(presetRows.map((p) => [p.id, p.createdAt.getTime()]));
   const presets = presetRows
     .map((p) => ({
       presetId: p.id as string | null,
       name: p.name,
-      rules: p.id === change.presetId ? change.rules : DnsRulesSchema.safeParse(p.dnsRules).data ?? [],
+      rules: change && p.id === change.presetId ? change.rules : DnsRulesSchema.safeParse(p.dnsRules).data ?? [],
     }))
-    .filter((p) => p.rules.length > 0)
-    .sort((a, b) => a.presetId!.localeCompare(b.presetId!));
+    .filter((p) => p.rules.length > 0);
 
+  const watched = scope.presets ?? (change?.presetId ? [change.presetId] : null);
+  const storedIds = (n: { presetDnsRules: unknown }): (string | null)[] =>
+    Array.isArray(n.presetDnsRules) ? (n.presetDnsRules as StoredPresetDns[]).map((s) => s.presetId) : [];
   const touched = (n: { id: string; presetDnsRules: unknown }): boolean =>
-    change.presetId === null ||
-    (index.get(change.presetId)?.has(n.id) ?? false) ||
-    (Array.isArray(n.presetDnsRules) && (n.presetDnsRules as StoredPresetDns[]).some((s) => s.presetId === change.presetId));
+    scope.nodeIds !== undefined ||
+    watched === null ||
+    watched.some((p) => (index.get(p)?.has(n.id) ?? false) || storedIds(n).includes(p));
 
   const plan: NodeDnsPlan[] = [];
   for (const n of nodes.filter(touched)) {
-    const sources: NamedDnsSource[] = presets.filter((p) => index.get(p.presetId!)?.has(n.id));
-    if (panel.length > 0) sources.push({ presetId: null, name: PANEL_DNS_NAME, rules: panel });
-    const conflict = findDnsConflict(sources, { presetId: change.presetId });
-    if (conflict) throw new RoutingPresetDnsConflictError(n.name, conflict, change.presetId);
-    const next = sources
-      .map((s) => ({ presetId: s.presetId, rules: s.rules.filter(carriesRule).map((r) => ({ match: [...r.match], server: r.server })) }))
-      .filter((s) => s.rules.length > 0);
-    const servers = mergeNodeDns(n.dns as DnsCfg | null, next)?.servers.length ?? 0;
-    if (servers > NODE_DNS_MAX_SERVERS) throw new RoutingPresetDnsLimitError(n.name, servers);
-    const current = Array.isArray(n.presetDnsRules) ? n.presetDnsRules : null;
-    plan.push({ nodeId: n.id, next: next.length > 0 ? next : null, changed: !isDeepStrictEqual(current, next.length > 0 ? next : null) });
+    const before = storedIds(n);
+    const rank = (id: string | null): number => (before.includes(id) ? before.indexOf(id) : Infinity);
+    // Who was here first: already carried (in the order it was carried), then the older preset.
+    const reaching = presets
+      .filter((p) => index.get(p.presetId!)?.has(n.id))
+      .sort((a, b) => rank(a.presetId) - rank(b.presetId) || created.get(a.presetId!)! - created.get(b.presetId!)! || a.presetId!.localeCompare(b.presetId!));
+    const panelSource: NamedDnsSource[] = panel.length > 0 ? [{ presetId: null, name: PANEL_DNS_NAME, rules: panel }] : [];
+    if (scope.refuse) {
+      const conflict = findDnsConflict([...reaching, ...panelSource], scope.refuse);
+      if (conflict) throw new RoutingPresetDnsConflictError(n.name, conflict, scope.refuse.presetId);
+    }
+    const resolved = resolveDnsConflicts([...panelSource, ...reaching]);
+    const left: StoredDnsConflict[] = resolved.dropped.map((d) => ({ kind: 'conflict', ...d }));
+    let kept = [...resolved.kept.filter((s) => s.presetId !== null), ...resolved.kept.filter((s) => s.presetId === null)];
+    const carry = (): StoredPresetDns[] =>
+      kept
+        .map((s) => ({ presetId: s.presetId, rules: s.rules.filter(carriesRule).map((r) => ({ match: [...r.match], server: r.server })) }))
+        .filter((s) => s.rules.length > 0);
+    let next = carry();
+    let servers = mergeNodeDns(n.dns as DnsCfg | null, next)?.servers.length ?? 0;
+    if (servers > NODE_DNS_MAX_SERVERS && scope.refuse) throw new RoutingPresetDnsLimitError(n.name, servers);
+    // Nobody to refuse: the preset that came last is the one left out, until the node fits.
+    while (servers > NODE_DNS_MAX_SERVERS && next.some((s) => s.presetId !== null)) {
+      const last = [...kept].reverse().find((s) => s.presetId !== null && next.some((c) => c.presetId === s.presetId))!;
+      left.push({ kind: 'limit', presetId: last.presetId, count: servers });
+      kept = kept.filter((s) => s !== last);
+      next = carry();
+      servers = mergeNodeDns(n.dns as DnsCfg | null, next)?.servers.length ?? 0;
+    }
+    const nextOrNull = next.length > 0 ? next : null;
+    const leftOrNull = left.length > 0 ? left : null;
+    plan.push({
+      nodeId: n.id,
+      next: nextOrNull,
+      conflicts: leftOrNull,
+      changed: !isDeepStrictEqual(Array.isArray(n.presetDnsRules) ? n.presetDnsRules : null, nextOrNull),
+      conflictsChanged: !isDeepStrictEqual(Array.isArray(n.presetDnsConflicts) ? n.presetDnsConflicts : null, leftOrNull),
+    });
   }
   return plan;
 }
 
-/** Writes the plan's changed nodes; the ids to push. Inside the save's transaction. */
+/** A save: the plan of the nodes the changed source touches, refused if the save makes a conflict. */
+export function planDnsTransfer(change: DnsChange, db: Db = prisma): Promise<NodeDnsPlan[]> {
+  return planCarriedDns({ change, refuse: { presetId: change.presetId } }, db);
+}
+
+/** Writes the plan's changed nodes; the ids to push (those whose carried rules changed). Inside the save's transaction. */
 export async function writeDnsPlan(db: Db, plan: readonly NodeDnsPlan[]): Promise<string[]> {
-  const changed = plan.filter((p) => p.changed);
-  for (const p of changed) {
+  for (const p of plan.filter((q) => q.changed || q.conflictsChanged)) {
     await db.node.update({
       where: { id: p.nodeId },
-      data: { presetDnsRules: p.next ? (p.next as unknown as Prisma.InputJsonValue) : Prisma.DbNull },
+      data: {
+        ...(p.changed ? { presetDnsRules: p.next ? (p.next as unknown as Prisma.InputJsonValue) : Prisma.DbNull } : {}),
+        ...(p.conflictsChanged ? { presetDnsConflicts: p.conflicts ? (p.conflicts as unknown as Prisma.InputJsonValue) : Prisma.DbNull } : {}),
+      },
     });
   }
-  return changed.map((p) => p.nodeId);
+  return plan.filter((p) => p.changed).map((p) => p.nodeId);
+}
+
+/** One recompute at a time: a plan is read, then written, and two interleaved would write each other's stale view. Held to the end of the transaction. */
+const DNS_TRANSFER_LOCK = 1911_0001;
+export async function lockDnsTransfer(tx: Prisma.TransactionClient): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${DNS_TRANSFER_LOCK})`;
+}
+
+/**
+ * An assignment or a change of nodes, inside its own transaction: the carried
+ * rules of the presets it touches are recomputed against the state the
+ * transaction has just written, and written with it. With `refuse` a conflict
+ * throws, which rolls the whole change back: nothing is written. Returns the
+ * nodes to push once the transaction has committed (pushDnsNodes).
+ */
+export async function recomputeCarriedDns(tx: Prisma.TransactionClient, scope: DnsPlanScope): Promise<string[]> {
+  await lockDnsTransfer(tx);
+  return writeDnsPlan(tx, await planCarriedDns(scope, tx));
+}
+
+/**
+ * A change that happened already (a squad's profiles, a binding, a deleted squad):
+ * recompute without refusing, in its own transaction, then push the nodes whose
+ * carried rules changed. What was left out is recorded on the node (19.12 shows it).
+ */
+export async function recomputeAfterChange(scope: Omit<DnsPlanScope, 'refuse' | 'change'> = {}): Promise<string[]> {
+  const pushed = await prisma.$transaction((tx) => recomputeCarriedDns(tx, scope));
+  await pushDnsNodes(pushed);
+  return pushed;
+}
+
+/** The refusal of an assignment as an HTTP answer, or null for any other error. The preset field carries it to the form. */
+export function dnsAssignRefusal(err: unknown): { status: number; body: Record<string, unknown> } | null {
+  if (err instanceof RoutingPresetDnsConflictError) {
+    return { status: 409, body: { error: err.code, message: err.message, field: 'customRoutingPresetId', node: err.node, preset: err.other, domain: err.domain } };
+  }
+  if (err instanceof RoutingPresetDnsLimitError) {
+    return { status: 409, body: { error: err.code, message: err.message, field: 'customRoutingPresetId', node: err.node, count: err.count } };
+  }
+  return null;
 }
 
 /** Queues the push to the nodes whose carried rules changed (the queue folds repeats per node). */

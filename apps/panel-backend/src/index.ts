@@ -8,6 +8,7 @@ import { registerUserEventHandlers } from './modules/users/users.events.js';
 import { registerNodeEventHandlers } from './modules/nodes/nodes.events.js';
 import { registerCascadeEventHandlers } from './modules/cascades/cascade.events.js';
 import { registerInboundEventHandlers } from './modules/inbounds/inbounds.events.js';
+import { registerRoutingPresetEventHandlers } from './modules/routing-presets/routing-presets.events.js';
 import { registerWebhookEventHandlers } from './modules/webhooks/webhook.events.js';
 import { registerPoolEventHandlers } from './modules/ext_vptech_pool/pool.service.js';
 import { registerRemnawaveWebhookEmitter } from './modules/remnawave-compat/remnawave.webhook.events.js';
@@ -61,6 +62,7 @@ async function start() {
     registerUserEventHandlers();
     registerNodeEventHandlers();
     registerInboundEventHandlers();
+    registerRoutingPresetEventHandlers();
     registerCascadeEventHandlers();
     registerWebhookEventHandlers();
     // Cold-pool replacement: no-op unless EXT_VPTECH_POOL_ENABLED.

@@ -167,28 +167,34 @@ export async function existsActive(id: string): Promise<boolean> {
 export async function create(
   data: Prisma.UserCreateInput,
   before?: (tx: Prisma.TransactionClient) => Promise<void>,
+  after?: (tx: Prisma.TransactionClient) => Promise<void>,
 ): Promise<UserWithTraffic> {
-  if (!before) {
+  if (!before && !after) {
     return prisma.user.create({ data, include: USER_INCLUDE });
   }
   return prisma.$transaction(async (tx) => {
-    await before(tx);
-    return tx.user.create({ data, include: USER_INCLUDE });
+    await before?.(tx);
+    const row = await tx.user.create({ data, include: USER_INCLUDE });
+    await after?.(tx);
+    return row;
   });
 }
 
-/** `before` as in `create`: run first, in the same transaction. */
+/** `before` as in `create`: run first, in the same transaction; `after` runs last in it, and a throw there undoes the write (19.11: a refused preset). */
 export async function updateById(
   id: string,
   data: Prisma.UserUncheckedUpdateInput,
   before?: (tx: Prisma.TransactionClient) => Promise<void>,
+  after?: (tx: Prisma.TransactionClient) => Promise<void>,
 ): Promise<UserWithTraffic> {
-  if (!before) {
+  if (!before && !after) {
     return prisma.user.update({ where: { id }, data, include: USER_INCLUDE });
   }
   return prisma.$transaction(async (tx) => {
-    await before(tx);
-    return tx.user.update({ where: { id }, data, include: USER_INCLUDE });
+    await before?.(tx);
+    const row = await tx.user.update({ where: { id }, data, include: USER_INCLUDE });
+    await after?.(tx);
+    return row;
   });
 }
 

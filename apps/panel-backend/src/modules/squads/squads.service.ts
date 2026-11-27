@@ -12,6 +12,7 @@ import {
   presetUpdateData,
   rethrowPresetGone,
 } from '../routing-presets/routing-presets.assign.js';
+import { pushDnsNodes, recomputeAfterChange, recomputeCarriedDns } from '../routing-presets/routing-presets.nodes.js';
 
 // ───── Domain errors ─────
 
@@ -182,7 +183,10 @@ export async function createSquad(input: CreateSquadInput): Promise<PublicSquadD
   const exitRows = await exitAclRows('', input.exitAcl);
   await assertCustomPresetExists(input.customRoutingPresetId);
 
-  const row = await prisma.group.create({
+  let dnsPush: string[] = [];
+  // 19.11: an own preset reaches the nodes of the squad's profiles; a conflict there refuses the create, nothing written.
+  const row = await prisma.$transaction(async (tx) => {
+    const created = await tx.group.create({
     data: {
       name: input.name,
       description: input.description ?? null,
@@ -215,11 +219,17 @@ export async function createSquad(input: CreateSquadInput): Promise<PublicSquadD
       },
     },
     include: includeRelations,
+    });
+    if (input.customRoutingPresetId) {
+      dnsPush = await recomputeCarriedDns(tx, { presets: [input.customRoutingPresetId], refuse: { presetId: input.customRoutingPresetId } });
+    }
+    return created;
   }).catch((err: unknown) => {
     // The check above is read-then-insert: a create racing it loses here.
     if (isUniqueViolationOn(err, 'groups_name_key', ['name'])) throw new SquadAlreadyExistsError(input.name);
     return rethrowPresetGone(err, input.customRoutingPresetId);
   });
+  await pushDnsNodes(dnsPush);
   eventBus.emit('squad.changed', { squadId: row.id });
   return mapSquadToPublic(row);
 }
@@ -249,6 +259,11 @@ export async function updateSquad(
 
   // Profile set replacement, done via tx so concurrent updates can't leave
   // half-applied state. Wipe the join rows, write the new ones.
+  // 19.11: a changed own preset moves rules on the squad's nodes, the old one's off and the new one's on,
+  // in the same transaction; a conflict throws and nothing is written.
+  const presetMoved =
+    presetFields.customRoutingPresetId !== undefined && presetFields.customRoutingPresetId !== existing.customRoutingPresetId;
+  let dnsPush: string[] = [];
   const row = await prisma.$transaction(async (tx) => {
     if (input.profileIds !== undefined) {
       await tx.groupProfile.deleteMany({ where: { groupId: id } });
@@ -292,7 +307,7 @@ export async function updateSquad(
         });
       }
     }
-    return tx.group.update({
+    const updated = await tx.group.update({
       where: { id },
       data: {
         ...(input.name !== undefined ? { name: input.name } : {}),
@@ -304,6 +319,13 @@ export async function updateSquad(
       },
       include: includeRelations,
     });
+    if (presetMoved) {
+      dnsPush = await recomputeCarriedDns(tx, {
+        presets: [existing.customRoutingPresetId, presetFields.customRoutingPresetId].filter((p): p is string => !!p),
+        refuse: presetFields.customRoutingPresetId ? { presetId: presetFields.customRoutingPresetId } : undefined,
+      });
+    }
+    return updated;
   }).catch((err: unknown) => {
     // A rename racing the check above (A-257).
     if (input.name !== undefined && isUniqueViolationOn(err, 'groups_name_key', ['name'])) {
@@ -314,6 +336,7 @@ export async function updateSquad(
 
   // A squad edit changes what its members are handed, and the binding cache is
   // keyed by squad SET rather than by contents, so nothing else would notice.
+  await pushDnsNodes(dnsPush);
   eventBus.emit('squad.changed', { squadId: id });
   return mapSquadToPublic(row);
 }
@@ -358,4 +381,6 @@ export async function deleteSquad(id: string): Promise<void> {
       });
     }
   });
+  // 19.11: the squad's preset and its members' places are gone or moved; the nodes carry what is left.
+  await recomputeAfterChange();
 }

@@ -23,6 +23,7 @@ import {
   presetUpdateData,
   rethrowPresetGone,
 } from '../routing-presets/routing-presets.assign.js';
+import { pushDnsNodes, recomputeCarriedDns } from '../routing-presets/routing-presets.nodes.js';
 
 // ───── Domain errors ─────
 
@@ -180,6 +181,7 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
   const creds = generateUserCredentials();
 
   let user;
+  let dnsPush: string[] = [];
   try {
     // A user with no squad picked lands in the system "All" squad, and on a
     // database that lost that row (dev, 2026-09-23) the membership failed on a
@@ -238,7 +240,13 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
           (groupId) => ({ groupId }),
         ),
       },
-    }, intoAll ? ensureAllSquad : undefined);
+    }, intoAll ? ensureAllSquad : undefined,
+    // 19.11: an own preset reaches the nodes of the user's squads; a conflict there refuses the create, nothing written.
+    input.customRoutingPresetId
+      ? async (tx) => {
+          dnsPush = await recomputeCarriedDns(tx, { presets: [input.customRoutingPresetId!], refuse: { presetId: input.customRoutingPresetId! } });
+        }
+      : undefined);
   } catch (err) {
     // Map a DB-level UNIQUE violation on the partial index
     // (users_username_active_key, WHERE deleted_at IS NULL) back to the
@@ -265,6 +273,7 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
     rethrowPresetGone(err, input.customRoutingPresetId);
   }
 
+  await pushDnsNodes(dnsPush);
   eventBus.emit('user.created', {
     userId: user.id,
     username: user.username,
@@ -418,9 +427,26 @@ export async function updateUser(
   // The same repair as on create: falling back to "All" on a database that
   // lost the row would fail on the foreign key.
   const intoAll = input.groupIds !== undefined && input.groupIds.length === 0;
+  // 19.11: a changed own preset moves rules on the nodes of the user's squads, the old one's off and
+  // the new one's on, in the same transaction; a conflict throws and nothing is written.
+  const presetMoved =
+    preset.customRoutingPresetId !== undefined && preset.customRoutingPresetId !== existing.customRoutingPresetId;
+  let dnsPush: string[] = [];
   const write = () =>
     repo
-      .updateById(id, data, intoAll ? ensureAllSquad : undefined)
+      .updateById(
+        id,
+        data,
+        intoAll ? ensureAllSquad : undefined,
+        presetMoved
+          ? async (tx) => {
+              dnsPush = await recomputeCarriedDns(tx, {
+                presets: [existing.customRoutingPresetId, preset.customRoutingPresetId].filter((p): p is string => !!p),
+                refuse: preset.customRoutingPresetId ? { presetId: preset.customRoutingPresetId } : undefined,
+              });
+            }
+          : undefined,
+      )
       .catch((err: unknown) => rethrowPresetGone(err, preset.customRoutingPresetId));
   // A groupIds rewrite is `deleteMany + create`. Two concurrent rewrites for the
   // same user interleave as delete/delete/create/create and the second hits the
@@ -433,6 +459,7 @@ export async function updateUser(
     return write();
   });
 
+  await pushDnsNodes(dnsPush);
   if (changedFields.length > 0) {
     eventBus.emit('user.updated', {
       userId: id,

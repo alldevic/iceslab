@@ -7,6 +7,7 @@ import {
 } from './squads.schemas.js';
 import * as squadsService from './squads.service.js';
 import { RoutingPresetNotFoundError } from '../routing-presets/routing-presets.assign.js';
+import { dnsAssignRefusal } from '../routing-presets/routing-presets.nodes.js';
 
 export async function squadsRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/squads', { onRequest: [requireAuth] }, async (_req, reply) => {
@@ -40,6 +41,8 @@ export async function squadsRoutes(app: FastifyInstance): Promise<void> {
       if (err instanceof RoutingPresetNotFoundError) {
         return reply.code(400).send({ error: err.code, message: err.message, field: 'customRoutingPresetId' });
       }
+      const dnsRefusal = dnsAssignRefusal(err);
+      if (dnsRefusal) return reply.code(dnsRefusal.status).send(dnsRefusal.body);
       throw err;
     }
   });
@@ -65,6 +68,8 @@ export async function squadsRoutes(app: FastifyInstance): Promise<void> {
       if (err instanceof RoutingPresetNotFoundError) {
         return reply.code(400).send({ error: err.code, message: err.message, field: 'customRoutingPresetId' });
       }
+      const dnsRefusal = dnsAssignRefusal(err);
+      if (dnsRefusal) return reply.code(dnsRefusal.status).send(dnsRefusal.body);
       throw err;
     }
   });

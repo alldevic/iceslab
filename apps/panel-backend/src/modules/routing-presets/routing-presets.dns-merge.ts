@@ -96,6 +96,57 @@ export function findDnsConflict(sources: readonly NamedDnsSource[], focus?: { pr
   return null;
 }
 
+/** A rule not carried because a source ahead of it names the same name with another server (19.11). */
+export interface DroppedDnsRule {
+  presetId: string | null;
+  /** The source that keeps the name: a preset id, null for the panel-wide rules. */
+  otherPresetId: string | null;
+  domain: string;
+  server: string;
+}
+
+/**
+ * What a node carries when two sources disagree and nobody can be refused (the
+ * disagreement came from a change of squads or bindings, not from a save). The
+ * sources come in priority order, the one that was on the node first at the
+ * head; a rule that names a name an earlier source gave another server is not
+ * carried, whole, and is reported. A source repeating itself is no conflict.
+ * Pure: same sources, same answer, so a recompute that changes nothing is silent.
+ */
+export function resolveDnsConflicts(sources: readonly NamedDnsSource[]): { kept: NamedDnsSource[]; dropped: DroppedDnsRule[] } {
+  const seen = new Map<string, { presetId: string | null; server: string }[]>();
+  const dropped: DroppedDnsRule[] = [];
+  const kept = sources.map((source) => {
+    const rules: CarriedRule[] = [];
+    for (const rule of source.rules) {
+      if (!carriesRule(rule)) {
+        rules.push(rule);
+        continue;
+      }
+      const server = normalizeDnsServer(rule.server);
+      let clash: { domain: string; with: string | null } | null = null;
+      for (const written of rule.match) {
+        const other = (seen.get(normalizeDnsName(written)) ?? []).find((e) => e.presetId !== source.presetId && e.server !== server);
+        if (other) {
+          clash = { domain: written, with: other.presetId };
+          break;
+        }
+      }
+      if (clash) {
+        dropped.push({ presetId: source.presetId, otherPresetId: clash.with, domain: clash.domain, server: rule.server });
+        continue;
+      }
+      for (const written of rule.match) {
+        const key = normalizeDnsName(written);
+        seen.set(key, [...(seen.get(key) ?? []), { presetId: source.presetId, server }]);
+      }
+      rules.push(rule);
+    }
+    return { ...source, rules };
+  });
+  return { kept, dropped };
+}
+
 /**
  * The node's `dns` for a push: the manual one first (its servers keep their
  * place, so a manual server wins over a carried one for the same name), then
