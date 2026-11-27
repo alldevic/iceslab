@@ -33,6 +33,7 @@ import (
 	"github.com/icecompany-tech/iceslab/apps/node/internal/atomicfile"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/subprocess"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/dto"
 )
 
 // Name matches dto.ProtocolName. The engine is sing-box; the protocol is TUIC.
@@ -96,6 +97,10 @@ type Adapter struct {
 	// chain: the hand-off to the chain process (chain.go), nil when this
 	// instance is not a cascade entry. Under mu.
 	chain *ChainHandoff
+
+	// dns: the node's resolver as the panel pushed it (ApplyDns, dns.go), nil
+	// when it named none. Under mu.
+	dns *dto.DnsCfg
 
 	// restartMu serializes regenerateAndRestart so concurrent user/inbound
 	// changes can't race the subprocess swap. Never held together with mu
@@ -718,6 +723,14 @@ func (a *Adapter) parseInbound(port int, rawCfg json.RawMessage) (InboundConfig,
 // The v2ray_api block only when the binary carries it (countsUsers), and for
 // shadowsocks the ssm-api service in its place when SSMListen is set.
 func (a *Adapter) render(certPath, keyPath, statsListen string, inbound InboundConfig, users map[string]userEntry) ([]byte, error) {
+	blob, err := a.renderOwn(certPath, keyPath, statsListen, inbound, users)
+	if err != nil {
+		return nil, err
+	}
+	return a.withNodeDNS(blob)
+}
+
+func (a *Adapter) renderOwn(certPath, keyPath, statsListen string, inbound InboundConfig, users map[string]userEntry) ([]byte, error) {
 	if !a.countsUsers() {
 		statsListen = ""
 	}
@@ -735,6 +748,60 @@ func (a *Adapter) render(certPath, keyPath, statsListen string, inbound InboundC
 	default:
 		return renderConfig(certPath, keyPath, statsListen, inbound, users)
 	}
+}
+
+// ApplyDns implements core.DnsReceiver: keep the node's resolver and re-render
+// if it changed. Reporting this is what turns the panel's "the core does not
+// run it" mark off for this engine, so it has to be true for every protocol the
+// adapter serves: they all go through render.
+//
+// Compared by its wire form, so a push repeating the setting does not restart
+// the core and drop every live connection. Absent is a state, not "no news": it
+// is how a resolver is taken off. A dead core or a stale IPv6 answer makes an
+// identical push worth a render, as for the inbounds.
+func (a *Adapter) ApplyDns(raw json.RawMessage) error {
+	var parsed *dto.DnsCfg
+	if len(raw) > 0 && string(raw) != "null" {
+		var decoded dto.DnsCfg
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return fmt.Errorf("singbox ApplyDns: %w", err)
+		}
+		if len(decoded.Servers) == 0 {
+			return errors.New("singbox ApplyDns: a dns section with no servers")
+		}
+		parsed = &decoded
+	}
+
+	a.mu.Lock()
+	if sameDns(a.dns, parsed) && !a.coreDownLocked() && !a.familyStaleLocked() {
+		a.mu.Unlock()
+		return nil
+	}
+	prev := a.dns
+	a.dns = parsed
+	a.mu.Unlock()
+
+	if parsed != nil {
+		section, notes := nodeDNS(parsed, nodeHasIPv6())
+		for _, n := range notes {
+			a.logger.Warn("singbox ApplyDns: "+n, "protocol", a.protocol)
+		}
+		if section == nil {
+			a.logger.Warn("singbox ApplyDns: nothing of the resolver can be executed, the node keeps the host's resolver", "protocol", a.protocol)
+		}
+	}
+	a.logger.Info("singbox ApplyDns: resolver changed, regenerating", "protocol", a.protocol, "named", parsed != nil)
+	err := a.regenerateAndRestart()
+	var refused *refusedError
+	if errors.As(err, &refused) {
+		// What the engine refused is not kept (as an inbound it refused).
+		a.mu.Lock()
+		if a.dns == parsed {
+			a.dns = prev
+		}
+		a.mu.Unlock()
+	}
+	return err
 }
 
 // regenerateAndRestart re-renders the sing-box config from current state and

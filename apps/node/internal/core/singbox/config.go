@@ -119,16 +119,29 @@ type sbOutbound struct {
 // 1.14. A resolver names a DNS server, so the config carries one local server.
 type sbDomainResolver struct {
 	Server   string `json:"server"`
-	Strategy string `json:"strategy"`
+	Strategy string `json:"strategy,omitempty"`
 }
 
 type sbDNS struct {
 	Servers []sbDNSServer `json:"servers"`
+	// The rest is the node's own resolver (dns.go); the egress block above
+	// leaves it all out.
+	Rules        []sbDNSRule `json:"rules,omitempty"`
+	Final        string      `json:"final,omitempty"`
+	Strategy     string      `json:"strategy,omitempty"`
+	DisableCache bool        `json:"disable_cache,omitempty"`
 }
 
 type sbDNSServer struct {
 	Type string `json:"type"`
 	Tag  string `json:"tag"`
+	// Set for the node's own servers only (dns.go).
+	Server         string            `json:"server,omitempty"`
+	ServerPort     int               `json:"server_port,omitempty"`
+	Path           string            `json:"path,omitempty"`
+	DomainResolver *sbDomainResolver `json:"domain_resolver,omitempty"`
+
+	needsBootstrap bool // the server is a name: its own lookup goes to the local resolver
 }
 
 const egressDNSTag = "egress-dns"

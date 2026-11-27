@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core/singbox"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/dto"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/payload"
 )
@@ -187,6 +188,31 @@ func TestEachCoreReportsWhetherItRendersThePolicy(t *testing.T) {
 	}
 	if e := byName["xray"].Engine; e != "xray" {
 		t.Errorf("engine = %q, want xray", e)
+	}
+}
+
+// 19.13: the real sing-box adapter, not a stand-in, reports that it renders the
+// node's resolver, for every protocol it serves; the panel's "the core does not
+// run it" mark goes by this field alone. Hysteria's own binary still does not.
+func TestSingboxCoresReportThatTheyRenderTheResolver(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	var adapters []core.CoreAdapter
+	for _, p := range []string{"tuic", "anytls", "xray", "hysteria", "shadowsocks", "shadowtls"} {
+		adapters = append(adapters, singbox.New(singbox.Config{Protocol: p}, log))
+	}
+	adapters = append(adapters, &fakeCore{name: "hysteria", engine: "hysteria", running: true})
+	got := health(t, adapters...)
+	sb := 0
+	for _, c := range got.Cores {
+		if c.Engine == "singbox" {
+			sb++
+			if c.RendersDns == nil || !*c.RendersDns {
+				t.Errorf("%s on sing-box does not report the resolver", c.Name)
+			}
+		}
+	}
+	if sb == 0 {
+		t.Fatal("no sing-box core in the report")
 	}
 }
 
