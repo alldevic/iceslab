@@ -67,19 +67,31 @@ func globalIPv6From(addrs []net.Addr) []string {
 	return out
 }
 
-// CanListenIPv6 is the "stack" fact: a socket on `::` can be bound here AND
-// takes IPv4 as well. Both, because a host with net.ipv6.conf.all.disable_ipv6=1
-// refuses the bind, and one with bindv6only=1 binds but leaves IPv4 out, and a
-// core listening on `::` there would lose its IPv4 clients. The probe binds a
-// throwaway port and dials it over 127.0.0.1.
-func CanListenIPv6() bool {
-	ln, err := net.Listen("tcp", "[::]:0")
+// CanListenIPv6 is the "stack" fact: a socket on `::` can be bound here, is a
+// real IPv6 socket, AND takes IPv4 as well. Three conditions: a host with
+// bindv6only=1 binds `::` but leaves IPv4 out, and a core listening on `::`
+// there would lose its IPv4 clients; with the kernel booted with ipv6.disable=1
+// Go does not fail the bind but silently falls back to an IPv4 socket on
+// 0.0.0.0, which the listener's address gives away. The sysctl
+// net.ipv6.conf.all.disable_ipv6=1 is NOT one of the refusals: measured on the
+// stand, a bind on `::` still succeeds there (only addresses are removed), so
+// this fact stays true on such a host. The probe binds a throwaway port and
+// dials it over 127.0.0.1.
+func CanListenIPv6() bool { return probeDualStack(net.Listen) }
+
+// probeDualStack is CanListenIPv6 with the listen call injected.
+func probeDualStack(listen func(network, address string) (net.Listener, error)) bool {
+	ln, err := listen("tcp", "[::]:0")
 	if err != nil {
 		return false
 	}
 	defer ln.Close()
-	port := ln.Addr().(*net.TCPAddr).Port
-	c, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), time.Second)
+	ta, ok := ln.Addr().(*net.TCPAddr)
+	if !ok || ta.IP.To4() != nil {
+		// 0.0.0.0 (or v4-mapped): the IPv4 fallback, not an IPv6 socket.
+		return false
+	}
+	c, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(ta.Port)), time.Second)
 	if err != nil {
 		return false
 	}

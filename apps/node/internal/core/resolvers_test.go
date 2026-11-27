@@ -191,3 +191,23 @@ func TestIPv6RenderIsStaleOnlyAfterADrawUnderTheOtherAnswer(t *testing.T) {
 		t.Error("drawn with IPv6: stale only against no IPv6")
 	}
 }
+
+// With kernel ipv6.disable=1 Go answers a listen on `::` with an IPv4 socket on
+// 0.0.0.0; the probe must not read that as an IPv6 stack. Both answers are
+// pinned through the injected listen call.
+func TestProbeDualStackTellsARealIPv6SocketFromTheFallback(t *testing.T) {
+	listenOn := func(addr string) func(string, string) (net.Listener, error) {
+		return func(string, string) (net.Listener, error) { return net.Listen("tcp", addr) }
+	}
+	if !probeDualStack(net.Listen) {
+		t.Log("no dual-stack here, only the negative cases are exercised")
+	} else if !probeDualStack(listenOn("[::]:0")) {
+		t.Error("a real `::` socket that takes IPv4 was not recognised")
+	}
+	if probeDualStack(listenOn("127.0.0.1:0")) {
+		t.Error("the IPv4 fallback (an IPv4-addressed listener) was taken for an IPv6 stack")
+	}
+	if probeDualStack(func(string, string) (net.Listener, error) { return nil, errors.New("refused") }) {
+		t.Error("a refused bind was taken for an IPv6 stack")
+	}
+}

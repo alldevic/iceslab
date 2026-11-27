@@ -187,7 +187,13 @@ func TestEngineRefusesWhatItShouldRefuse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	broken := forEngine(t, blob) + "\noutbounds:\n  - name: chain\n    type: socks6\n"
+	// Edit the outbounds block the render already has: a second `outbounds:` key
+	// would make the engine refuse for a duplicate key, not for the type.
+	good := forEngine(t, blob)
+	if strings.Count(good, "\noutbounds:\n") != 1 || !strings.Contains(good, "    type: direct\n") {
+		t.Fatalf("the render's outbounds block is not what this test breaks:\n%s", good)
+	}
+	broken := strings.Replace(good, "    type: direct\n", "    type: socks6\n", 1)
 	up, log := verdict(t, broken)
 	if up {
 		t.Fatalf("the engine accepted an outbound type it does not have, so this harness cannot tell yes from no:\n%s", log)
