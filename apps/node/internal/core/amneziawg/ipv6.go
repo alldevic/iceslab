@@ -51,6 +51,17 @@ func (p *ipv6Probe) hostNAT6(now time.Time, check func() bool) bool {
 	return p.ok
 }
 
+// invalidate drops the cached answer: the next ask runs the check again. Nil
+// receiver (an adapter built without probes) is a no-op.
+func (p *ipv6Probe) invalidate() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.checked = false
+	p.mu.Unlock()
+}
+
 // hostCanNAT6 asks (or recalls) whether this host can NAT IPv6.
 func (a *Adapter) hostCanNAT6() bool {
 	bin := a.cfg.Ip6tablesBin

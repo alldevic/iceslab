@@ -363,3 +363,29 @@ apt_update() {
     sleep "$pause"
   done
 }
+
+# ra_keep_default_route CONF: with net.ipv6.conf.all.forwarding=1 the kernel
+# stops taking router advertisements on an interface whose accept_ra is 1, and
+# the node loses its IPv6 default route (stand, m18.10: accept_ra=2 learns it).
+# For the interface(s) carrying the host's default route (IPv4 or IPv6) whose
+# accept_ra is exactly 1 (the kernel/distro default) write accept_ra=2 to CONF
+# and apply it. A host with accept_ra=0 (addressing configured statically) or
+# already 2 is not touched, and neither is any interface off the default route.
+# Idempotent: a line already in CONF is not repeated. Persisted in CONF, so
+# --remove keeps it like the forwarding lines.
+ra_keep_default_route() {
+  local conf=$1 conf_dir=${ICESLAB_IPV6_CONF_DIR:-/proc/sys/net/ipv6/conf} dev cur key
+  local -a devs=()
+  while read -r dev; do
+    [[ -n "$dev" ]] && devs+=("$dev")
+  done < <({ ip -4 route show default 2>/dev/null; ip -6 route show default 2>/dev/null; } |
+    awk '{for (i = 1; i < NF; i++) if ($i == "dev") print $(i + 1)}' | sort -u)
+  for dev in "${devs[@]}"; do
+    cur=$(cat "$conf_dir/$dev/accept_ra" 2>/dev/null || true)
+    [[ "$cur" == 1 ]] || continue
+    # sysctl keys write a dot in an interface name as a slash.
+    key="net.ipv6.conf.${dev//./\/}.accept_ra"
+    grep -qxF "$key=2" "$conf" 2>/dev/null || echo "$key=2" >> "$conf"
+    log "IPv6 forwarding is on: accept_ra=2 on $dev to keep its router-advertised default route"
+  done
+}

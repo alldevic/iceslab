@@ -65,7 +65,7 @@ unwire_env() {
 # agent keeps beside each one (awg0.state.json, awg3.state.json: the server
 # key and the peers). A state file left behind would bring the old key and
 # peers back up on the next install instead of what the panel sends. Kept: IP forwarding
-# (99-awg.conf) and ufw's FORWARD policy, which other traffic on the node may
+# and accept_ra=2 (99-awg.conf) and ufw's FORWARD policy, which other traffic on the node may
 # rely on.
 #
 # Running = any AmneziaWG interface up, the users' awg0 and a cascade leg's
@@ -369,6 +369,10 @@ if [[ ! -f "$SYSCTL_CONF" ]]; then
   echo "net.ipv6.conf.all.forwarding=1" >> "$SYSCTL_CONF"
   sysctl --system >/dev/null
 fi
+# Outside the guard: a node installed before this still needs it. accept_ra=2
+# on the default-route interface only when it is 1 (see ra_keep_default_route).
+ra_keep_default_route "$SYSCTL_CONF"
+sysctl --system >/dev/null 2>&1 || true
 
 # ───── 7. Agent env ─────
 wire_env

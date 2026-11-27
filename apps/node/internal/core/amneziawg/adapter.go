@@ -1242,7 +1242,40 @@ func (a *Adapter) restartInterfaceFrom(parent context.Context, inbound InboundCo
 		}
 	}
 	if out, err := a.cfg.runCmd(ctx, a.cfg.AwgQuickBin, "up", inbound.Interface); err != nil {
-		return fmt.Errorf("awg-quick up %s: %w (%s)", inbound.Interface, err, strings.TrimSpace(string(out)))
+		if inbound.Address6 == "" {
+			return fmt.Errorf("awg-quick up %s: %w (%s)", inbound.Interface, err, strings.TrimSpace(string(out)))
+		}
+		// IPv6 hooks failed the up, typically ip6tables gone inside the probe's
+		// TTL (exit 127): the cached "NAT66 works" is stale. Take back what the
+		// PostUp lines that did run left (awg-quick's failure trap deletes the
+		// interface without running PostDown), and come up on IPv4 at once; no
+		// retry would follow until the next push otherwise.
+		a.logger.Warn(a.Name()+": awg-quick up failed with IPv6 hooks, retrying on IPv4 alone",
+			"iface", inbound.Interface, "err", err, "out", strings.TrimSpace(string(out)))
+		a.cfg.ip6.invalidate()
+		a.cfg.tp6.invalidate()
+		if serr := a.sweepLines(ctx, inbound.Interface, inbound.withDefaults().PostDown); serr != nil {
+			return fmt.Errorf("awg-quick up %s: %w (%s); cleanup: %v", inbound.Interface, err, strings.TrimSpace(string(out)), serr)
+		}
+		inbound.Address6, inbound.NoNAT6 = "", false
+		if blob, err = renderConfig(inbound, peers); err != nil {
+			return fmt.Errorf("render %s config: %w", a.Name(), err)
+		}
+		if err := writeConfig(a.cfg.ConfigPath, blob); err != nil {
+			return err
+		}
+		a.mu.Lock()
+		a.cfg.Inbound.Address6, a.cfg.Inbound.NoNAT6 = "", false
+		a.mu.Unlock()
+		a.saveState()
+		for _, t := range []*ChainTProxy{also, inbound.Chain} {
+			if err := a.sweepChain(ctx, inbound.Interface, t); err != nil {
+				return err
+			}
+		}
+		if out, err := a.cfg.runCmd(ctx, a.cfg.AwgQuickBin, "up", inbound.Interface); err != nil {
+			return fmt.Errorf("awg-quick up %s (IPv4 alone): %w (%s)", inbound.Interface, err, strings.TrimSpace(string(out)))
+		}
 	}
 	a.logChain(ctx, inbound.Interface, inbound.Chain)
 	// Mark started so Healthy() returns true and main.go's heartbeat sees

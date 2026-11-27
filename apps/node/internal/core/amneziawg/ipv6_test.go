@@ -705,3 +705,134 @@ func TestChangingToARealPrefixWithLivePeersRestartsTheInterfaceAndKeepsThem(t *t
 }
 
 var _ core.AwgNoNat6Reporter = (*Adapter)(nil)
+
+// m18.10 follow-up: ip6tables disappears inside the probe's TTL, a push with
+// subnet6 lands in that window, and awg-quick up dies on the first ip6tables
+// line (exit 127) after the IPv4 lines already ran. The agent drops the cached
+// answer, takes back what PostUp did, and brings the interface up on IPv4 in the
+// same apply: no leftover rules, no duplicates on the pushes after it.
+func TestIpv6HooksFailingTheUpFallBackToIpv4InTheSameApply(t *testing.T) {
+	var (
+		cfgPath string
+		gone    bool
+		rules   = map[string]int{}
+		ups     int
+		downs   []string
+	)
+	// exec models iptables/ip6tables over a rule multiset: -I/-A add, -D takes
+	// one away and fails when none is there, ip6tables is a 127 once gone.
+	exec := func(name string, args []string) error {
+		if name == "ip6tables" && gone {
+			return errors.New("exit status 127")
+		}
+		op, key := "", []string{name}
+		for _, a := range args {
+			switch {
+			case a == "-I" || a == "-A" || a == "-D":
+				op = a
+			case a == "-S":
+				return nil
+			case a == "1" || a == "2" || a == "3":
+			default:
+				key = append(key, a)
+			}
+		}
+		k := strings.Join(key, " ")
+		if op == "-D" {
+			if rules[k] == 0 {
+				return errors.New("exit status 1")
+			}
+			rules[k]--
+			return nil
+		}
+		rules[k]++
+		return nil
+	}
+	hooks := func(prefix string) []string {
+		b, _ := os.ReadFile(cfgPath)
+		var out []string
+		for _, l := range strings.Split(string(b), "\n") {
+			if rest, ok := strings.CutPrefix(l, prefix); ok {
+				out = append(out, strings.ReplaceAll(rest, "%i", "awg0"))
+			}
+		}
+		return out
+	}
+	fake := &fakeCLI{handler: func(name string, args []string) ([]byte, error) {
+		if name == "awg-quick" && len(args) > 0 {
+			switch args[0] {
+			case "up":
+				ups++
+				for _, l := range hooks("PostUp = ") {
+					f := strings.Fields(l)
+					if err := exec(f[0], f[1:]); err != nil {
+						return []byte("awg-quick: line failed"), err
+					}
+				}
+			case "down":
+				downs = append(downs, "down")
+				for _, l := range hooks("PostDown = ") {
+					f := strings.Fields(l)
+					_ = exec(f[0], f[1:])
+				}
+			}
+			return nil, nil
+		}
+		return nil, exec(name, args)
+	}}
+	a, p := managed6Adapter(t, fake)
+	cfgPath = p
+	if !a.AwgIpv6() {
+		t.Fatal("the probe should have said yes while ip6tables was there")
+	}
+	gone = true // inside the TTL: the cached answer still says yes
+
+	if err := a.ApplyInbound(51820, wire6(t, nil)); err != nil {
+		t.Fatalf("the apply should have come up on IPv4: %v", err)
+	}
+	if ups != 2 {
+		t.Errorf("awg-quick up ran %d times, want the failed one and the IPv4 retry", ups)
+	}
+	blob, _ := os.ReadFile(cfgPath)
+	if strings.Contains(string(blob), "ip6tables") || strings.Contains(string(blob), "fd5a") {
+		t.Errorf("the config kept IPv6:\n%s", blob)
+	}
+	if a.cfg.ip6.checked {
+		t.Error("the NAT66 answer was not invalidated")
+	}
+	want := map[string]int{
+		"iptables FORWARD -i awg0 -j ACCEPT":                                 1,
+		"iptables FORWARD -o awg0 -j ACCEPT":                                 1,
+		"iptables -t nat POSTROUTING -s 10.0.0.0/24 ! -o awg0 -j MASQUERADE": 1,
+	}
+	check := func(when string) {
+		t.Helper()
+		for k, n := range rules {
+			if n != want[k] {
+				t.Errorf("%s: rule %q x%d, want %d", when, k, n, want[k])
+			}
+		}
+		for k, n := range want {
+			if rules[k] != n {
+				t.Errorf("%s: rule %q x%d, want %d", when, k, rules[k], n)
+			}
+		}
+	}
+	check("after the fallback")
+
+	// The same push again: the probe is asked afresh, says no, nothing changes.
+	if err := a.ApplyInbound(51820, wire6(t, nil)); err != nil {
+		t.Fatal(err)
+	}
+	check("after the same push")
+	// A restart of the IPv4 interface leaves no duplicates either.
+	if err := a.ApplyInbound(51821, wire6(t, func(m map[string]any) { m["listenPort"] = 51821 })); err != nil {
+		t.Fatal(err)
+	}
+	check("after a restart")
+	for _, c := range fake.sequence() {
+		if strings.HasPrefix(c, "ip6tables -t nat -A") {
+			t.Errorf("an ip6tables rule was added: %s", c)
+		}
+	}
+}

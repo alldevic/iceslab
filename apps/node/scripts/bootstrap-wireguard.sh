@@ -139,6 +139,10 @@ if [[ ! -f "$SYSCTL_CONF" ]]; then
     warn "sysctl not found; ip_forward is written but applies only after a reboot"
   fi
 fi
+# Outside the guard: a node installed before this still needs it (see
+# ra_keep_default_route in node-env.sh).
+ra_keep_default_route "$SYSCTL_CONF"
+if command -v sysctl >/dev/null 2>&1; then sysctl --system >/dev/null 2>&1 || true; fi
 
 # ───── 6. Agent env ─────
 wire_env
