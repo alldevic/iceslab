@@ -20,6 +20,7 @@ import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { getSubscriptionSettings, invalidateSubscriptionSettingsCache } from './settings.service.js';
+import { makeNode, makeSquad } from '../../../tests/helpers/preset-nodes.js';
 
 let app: FastifyInstance;
 let token: string;
@@ -288,5 +289,38 @@ describe('the wg config settings (9.8)', () => {
     const settings = await getSubscriptionSettings();
     expect(settings.wgDns).toEqual(['1.1.1.1', '8.8.8.8']);
     expect(settings.wgDropIpv6).toBe(false);
+  });
+});
+
+describe('19.10: the panel-wide DNS rules go to the nodes', () => {
+  const rule = (name: string, server: string) => ({ match: [name], server, note: '' });
+  const put = (payload: Record<string, unknown>) => app.inject({ method: 'PUT', url: '/api/settings', headers: auth(), payload });
+  const carried = async (id: string) => (await prisma.node.findUniqueOrThrow({ where: { id }, select: { presetDnsRules: true } })).presetDnsRules;
+
+  it('are written to every node, and refused when a preset on any node gives a name another server', async () => {
+    const on = await makeNode();
+    const idle = await makeNode({ name: 'idle-node' });
+    const preset = await prisma.routingPreset.create({
+      data: { name: 'Beta', dnsRules: [rule('example.com', '10.99.0.2')] },
+      select: { id: true },
+    });
+    await makeSquad([on.id], { presetId: preset.id });
+    const ok = await put({ subscriptionDnsRules: [rule('other.com', '10.99.0.9')] });
+    expect(ok.statusCode, ok.body).toBe(200);
+    const panel = { presetId: null, rules: [{ match: ['other.com'], server: '10.99.0.9' }] };
+    expect(await carried(idle.id)).toEqual([panel]);
+    // The node a preset reaches carries the preset's rule and the panel-wide one.
+    expect(((await carried(on.id)) as unknown[]).length).toBe(2);
+
+    const bad = await put({ subscriptionDnsRules: [rule('example.com', '10.99.0.1')] });
+    expect(bad.statusCode, bad.body).toBe(409);
+    expect(JSON.parse(bad.body)).toMatchObject({ error: 'ROUTING_PRESET_DNS_CONFLICT', preset: 'Beta', node: on.name });
+    // Nothing was written: the stored rules and the nodes are as they were.
+    expect((await prisma.appSetting.findUniqueOrThrow({ where: { key: 'subscriptionDnsRules' } })).value).toEqual([rule('other.com', '10.99.0.9')]);
+    expect(await carried(idle.id)).toEqual([panel]);
+
+    const cleared = await put({ subscriptionDnsRules: null });
+    expect(cleared.statusCode, cleared.body).toBe(200);
+    expect(await carried(idle.id)).toBeNull();
   });
 });

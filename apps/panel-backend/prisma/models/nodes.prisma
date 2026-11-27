@@ -171,6 +171,15 @@ model Node {
   // queries inside it and the shape grows with the cores we render to.
   dns Json?
 
+  // 19.10: the DNS rules of routing presets (and the panel-wide rules) carried to
+  // this node, kept apart from the manual `dns` above so a save of either never
+  // overwrites the other. NULL = none, which is every node until a preset with
+  // DNS rules reaches it. Shape: [{ presetId: uuid | null (null = the panel-wide
+  // rules), rules: [{ match, server }] }], only the rules this node's core runs.
+  // Recomputed whole for a node, never patched; merged into the `dns` of the push
+  // (inbounds.queue.ts, mergeNodeDns).
+  presetDnsRules Json? @map("preset_dns_rules")
+
   // 18.6: what the operator says about this node's IPv6 egress: 'auto' (the
   // agent's own answer: a global address and a connection that went out),
   // 'on', 'off'. A string with a CHECK in the migration, like `status`. 'auto'

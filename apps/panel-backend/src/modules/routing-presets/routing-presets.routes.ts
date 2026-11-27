@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../auth/auth.hook.js';
 import { DeviceRouteRuleSchema, MAX_PRESET_RULES, RoutingPresetRulesError } from './routing-presets.rules.js';
 import { DnsRulesSchema } from './routing-presets.dns.js';
+import { RoutingPresetDnsConflictError, RoutingPresetDnsLimitError } from './routing-presets.nodes.js';
 import * as service from './routing-presets.service.js';
 
 /**
@@ -31,6 +32,12 @@ function refusal(reply: FastifyReply, err: unknown): FastifyReply | null {
   }
   if (err instanceof service.RoutingPresetInUseError) {
     return reply.code(409).send({ error: err.code, message: err.message, ...err.use });
+  }
+  if (err instanceof RoutingPresetDnsConflictError) {
+    return reply.code(409).send({ error: err.code, message: err.message, node: err.node, preset: err.other, domain: err.domain });
+  }
+  if (err instanceof RoutingPresetDnsLimitError) {
+    return reply.code(409).send({ error: err.code, message: err.message, node: err.node, count: err.count });
   }
   if (err instanceof RoutingPresetRulesError) {
     return reply.code(400).send({ error: err.code, message: err.message, entries: err.entries });

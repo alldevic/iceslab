@@ -152,3 +152,38 @@ describe('the push tells the node about it', () => {
     expect(req && 'dns' in req).toBe(false);
   });
 });
+
+describe('19.10: the rules carried from presets ride in the same dns', () => {
+  const CARRIED = [{ presetId: null, rules: [{ match: ['example.com'], server: '10.99.0.1' }] }];
+
+  it('puts the carried servers after the manual ones and leaves the manual setting as it was', async () => {
+    const node = await makeNode(YANDEX);
+    await prisma.node.update({ where: { id: node.id }, data: { presetDnsRules: CARRIED } });
+    const req = await applyInboundsRequestForNode(node.id);
+    expect(req?.dns).toEqual({
+      ...stored(YANDEX),
+      servers: [...stored(YANDEX).servers, { address: '10.99.0.1', domains: ['domain:example.com'], skipFallback: true }],
+    });
+    expect((await prisma.node.findUniqueOrThrow({ where: { id: node.id } })).dns).toEqual(stored(YANDEX));
+  });
+
+  it('a node with only carried rules gets them alone, one with none the request it always got', async () => {
+    const carried = await makeNode();
+    await prisma.node.update({ where: { id: carried.id }, data: { presetDnsRules: CARRIED } });
+    expect((await applyInboundsRequestForNode(carried.id))?.dns).toEqual({
+      servers: [{ address: '10.99.0.1', domains: ['domain:example.com'], skipFallback: true }],
+    });
+    const plain = await makeNode(YANDEX);
+    expect((await applyInboundsRequestForNode(plain.id))?.dns).toEqual(stored(YANDEX));
+    const bare = await makeNode();
+    const req = await applyInboundsRequestForNode(bare.id);
+    expect(req && 'dns' in req).toBe(false);
+  });
+
+  it('a rule the core does not run is not sent', async () => {
+    const node = await makeNode();
+    await prisma.node.update({ where: { id: node.id }, data: { presetDnsRules: [{ presetId: null, rules: [{ match: ['x.com'], server: 'tls://dns.example' }] }] } });
+    const req = await applyInboundsRequestForNode(node.id);
+    expect(req && 'dns' in req).toBe(false);
+  });
+});

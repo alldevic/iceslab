@@ -1,6 +1,8 @@
+import { isDeepStrictEqual } from 'node:util';
 import { ROUTING_PRESET_IDS, isRoutingPresetId, type DnsRule } from '@iceslab/shared';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
+import { planDnsTransfer, pushDnsNodes, writeDnsPlan } from './routing-presets.nodes.js';
 import { BUILTIN_PRESET_RULES, checkDnsRules, checkRules, type DeviceRouteRule } from './routing-presets.rules.js';
 
 /**
@@ -143,21 +145,29 @@ export function refuseBuiltIn(id: string): void {
 }
 
 export async function updateRoutingPreset(id: string, input: RoutingPresetInput): Promise<PublicRoutingPreset> {
-  const existing = await prisma.routingPreset.findUnique({ where: { id }, select: { id: true } });
+  const existing = await prisma.routingPreset.findUnique({ where: { id }, select: { id: true, dnsRules: true } });
   if (!existing) throw new RoutingPresetMissingError(id);
   // An absent key is not an edit: a name-only save keeps the rules.
   if (input.name !== undefined) await nameFree(input.name, id);
   if (input.rules !== undefined) await checkRules(input.rules);
   if (input.dnsRules !== undefined) await checkDnsRules(input.dnsRules);
+  // 19.10: the DNS rules also go to the nodes that serve this preset's users.
+  // Checked before anything is written: a conflict refuses the whole save.
+  const dnsChanged = input.dnsRules !== undefined && !isDeepStrictEqual(dnsRulesOf(existing.dnsRules), dnsRulesOf(input.dnsRules));
+  const plan = dnsChanged ? await planDnsTransfer({ presetId: id, rules: input.dnsRules! }) : [];
   try {
-    const row = await prisma.routingPreset.update({
-      where: { id },
-      data: {
-        ...(input.name !== undefined ? { name: input.name } : {}),
-        ...(input.rules !== undefined ? { rules: stored(input.rules) } : {}),
-        ...(input.dnsRules !== undefined ? { dnsRules: storedDns(input.dnsRules) } : {}),
-      },
+    const { row, push } = await prisma.$transaction(async (tx) => {
+      const row = await tx.routingPreset.update({
+        where: { id },
+        data: {
+          ...(input.name !== undefined ? { name: input.name } : {}),
+          ...(input.rules !== undefined ? { rules: stored(input.rules) } : {}),
+          ...(input.dnsRules !== undefined ? { dnsRules: storedDns(input.dnsRules) } : {}),
+        },
+      });
+      return { row, push: await writeDnsPlan(tx, plan) };
     });
+    await pushDnsNodes(push);
     return toDto(row);
   } catch (err) {
     if (isUniqueViolation(err) && input.name !== undefined) throw new RoutingPresetNameTakenError(input.name);
@@ -189,14 +199,20 @@ export async function deleteRoutingPreset(id: string): Promise<void> {
   if (!existing) throw new RoutingPresetMissingError(id);
   const use = await presetUse(id);
   if (use.userCount > 0 || use.squadCount > 0) throw new RoutingPresetInUseError(use);
+  // 19.10: nobody holds it, but a node can still carry its rules from before
+  // the last change of assignment (19.11 recomputes on that); they go with it.
+  const plan = await planDnsTransfer({ presetId: id, rules: [] });
+  let push: string[] = [];
   try {
     await prisma.$transaction(async (tx) => {
+      push = await writeDnsPlan(tx, plan);
       await tx.user.updateMany({
         where: { customRoutingPresetId: id, deletedAt: { not: null } },
         data: { customRoutingPresetId: null },
       });
       await tx.routingPreset.delete({ where: { id } });
     });
+    await pushDnsNodes(push);
   } catch (err) {
     // Assigned between the check above and the delete: RESTRICT refuses, and
     // that is the same fact the check would have found. Said the same way,

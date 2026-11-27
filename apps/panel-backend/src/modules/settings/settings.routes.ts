@@ -14,6 +14,7 @@ import {
 } from './settings.service.js';
 import { UpdateSettingsSchema } from './settings.schemas.js';
 import { readCapped, subscriptionProbeAnswered } from './settings.probe.js';
+import { planDnsTransfer, pushDnsNodes, RoutingPresetDnsConflictError, RoutingPresetDnsLimitError, writeDnsPlan, type NodeDnsPlan } from '../routing-presets/routing-presets.nodes.js';
 import { checkDnsRules, RoutingPresetRulesError } from '../routing-presets/routing-presets.rules.js';
 import { audit } from '../audit/audit.hook.js';
 
@@ -195,6 +196,26 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
           throw err;
         }
       }
+      // 19.10: the panel-wide DNS rules go to every node, so they must not
+      // disagree with the rules of any preset on any node. Checked before
+      // anything is written; the nodes are written and pushed after the save.
+      let dnsPlan: NodeDnsPlan[] = [];
+      if (input.subscriptionDnsRules !== undefined) {
+        const row = await prisma.appSetting.findUnique({ where: { key: 'subscriptionDnsRules' }, select: { value: true } });
+        if (stableJson(row?.value ?? []) !== stableJson(input.subscriptionDnsRules ?? [])) {
+          try {
+            dnsPlan = await planDnsTransfer({ presetId: null, rules: input.subscriptionDnsRules ?? [] });
+          } catch (err) {
+            if (err instanceof RoutingPresetDnsConflictError) {
+              return reply.code(409).send({ error: err.code, message: err.message, node: err.node, preset: err.other, domain: err.domain });
+            }
+            if (err instanceof RoutingPresetDnsLimitError) {
+              return reply.code(409).send({ error: err.code, message: err.message, node: err.node, count: err.count });
+            }
+            throw err;
+          }
+        }
+      }
       // The audit log keeps which settings changed, never their values (the
       // announce template, the support URL and the routing rules are the
       // operator's own text). The screen sends every key on each save, so a
@@ -228,6 +249,7 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
           update: { value: jsonValue, isPublic: PUBLIC_KEYS.has(key) },
         });
       }
+      if (dnsPlan.length > 0) await pushDnsNodes(await prisma.$transaction((tx) => writeDnsPlan(tx, dnsPlan)));
       // B5 - bust the /sub settings cache so admin changes take effect now.
       invalidateSubscriptionSettingsCache();
       return reply.send({ ok: true, updated: entries.map(([k]) => k) });

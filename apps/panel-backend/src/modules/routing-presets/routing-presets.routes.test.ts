@@ -6,6 +6,8 @@ import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { matcherKind } from './routing-presets.rules.js';
+import { makeNode, makeSquad } from '../../../tests/helpers/preset-nodes.js';
+import { inboundSyncQueue } from '../inbounds/inbounds.queue.js';
 
 /**
  * A-229 part 2: /api/routing-presets. Built-ins listed and read-only on the
@@ -307,5 +309,97 @@ describe('writes', () => {
       vi.restoreAllMocks();
     }
     expect(await prisma.routingPreset.count()).toBe(1);
+  });
+});
+
+describe('19.10: the DNS rules go to the nodes of the preset', () => {
+  const dns = (...rules: [string[], string][]) => rules.map(([match, server]) => ({ match, server, note: '' }));
+  const carried = async (nodeId: string) => (await prisma.node.findUniqueOrThrow({ where: { id: nodeId }, select: { presetDnsRules: true } })).presetDnsRules;
+  const put = (id: string, payload: Record<string, unknown>) =>
+    app.inject({ method: 'PUT', url: `/api/routing-presets/${id}`, headers: auth(), payload });
+
+  /** Two squads, a preset each, one node shared and one apiece. */
+  async function twoSquads() {
+    const [a, shared, b] = [await makeNode(), await makeNode({ name: 'shared-node' }), await makeNode()];
+    const pa = JSON.parse((await create({ name: 'Alpha', rules: [] })).body).id as string;
+    const pb = JSON.parse((await create({ name: 'Beta', rules: [] })).body).id as string;
+    await makeSquad([a.id, shared.id], { presetId: pa });
+    await makeSquad([shared.id, b.id], { presetId: pb });
+    return { a, shared, b, pa, pb };
+  }
+
+  it('saving the rules writes them to the nodes that serve the preset and queues a push to those only', async () => {
+    const { a, shared, b, pa } = await twoSquads();
+    await inboundSyncQueue.obliterate({ force: true });
+    const res = await put(pa, { dnsRules: dns([['example.com'], '10.99.0.1']) });
+    expect(res.statusCode, res.body).toBe(200);
+    const expected = [{ presetId: pa, rules: [{ match: ['example.com'], server: '10.99.0.1' }] }];
+    expect(await carried(a.id)).toEqual(expected);
+    expect(await carried(shared.id)).toEqual(expected);
+    expect(await carried(b.id)).toBeNull();
+    expect(await inboundSyncQueue.getJob(`apply-${a.id}`)).toBeTruthy();
+    expect(await inboundSyncQueue.getJob(`apply-${shared.id}`)).toBeTruthy();
+    expect(await inboundSyncQueue.getJob(`apply-${b.id}`)).toBeUndefined();
+    await inboundSyncQueue.obliterate({ force: true });
+  });
+
+  it('a DoT rule is saved on the preset but not carried to the node', async () => {
+    const { a, pa } = await twoSquads();
+    const res = await put(pa, { dnsRules: dns([['example.com'], 'tls://dns.example'], [['other.com'], '10.99.0.1']) });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(JSON.parse(res.body).dnsRules).toHaveLength(2);
+    expect(await carried(a.id)).toEqual([{ presetId: pa, rules: [{ match: ['other.com'], server: '10.99.0.1' }] }]);
+  });
+
+  it('another server for the same name on the shared node is refused, naming the other preset and the node, and nothing is written', async () => {
+    const { a, shared, b, pa, pb } = await twoSquads();
+    expect((await put(pa, { dnsRules: dns([['example.com'], '10.99.0.1']) })).statusCode).toBe(200);
+    const before = await carried(shared.id);
+    await inboundSyncQueue.obliterate({ force: true });
+    const res = await put(pb, { name: 'Beta2', dnsRules: dns([['domain:example.com'], '10.99.0.2']) });
+    expect(res.statusCode, res.body).toBe(409);
+    const body = JSON.parse(res.body);
+    expect(body).toMatchObject({ error: 'ROUTING_PRESET_DNS_CONFLICT', preset: 'Alpha', node: 'shared-node', domain: expect.stringMatching(/example\.com$/) });
+    expect(body.message).toContain('"Alpha"');
+    expect(body.message).toContain('"shared-node"');
+    const row = await prisma.routingPreset.findUniqueOrThrow({ where: { id: pb } });
+    expect(row.name).toBe('Beta');
+    expect(row.dnsRules).toEqual([]);
+    expect(await carried(shared.id)).toEqual(before);
+    expect(await carried(a.id)).toEqual(before);
+    expect(await carried(b.id)).toBeNull();
+    expect(await inboundSyncQueue.getJob(`apply-${b.id}`)).toBeUndefined();
+    // The same server for the same name is no conflict, and a name on a node the other preset does not reach is none either.
+    expect((await put(pb, { dnsRules: dns([['example.com'], '10.99.0.1'], [['other.com'], '10.99.0.2']) })).statusCode).toBe(200);
+    await inboundSyncQueue.obliterate({ force: true });
+  });
+
+  it('removing a rule takes it off the nodes, and deleting the preset takes its rules off a node that still carries them', async () => {
+    const { a, shared, pa, pb } = await twoSquads();
+    await put(pa, { dnsRules: dns([['one.com'], '10.99.0.1'], [['two.com'], '10.99.0.1']) });
+    await put(pb, { dnsRules: dns([['three.com'], '10.99.0.3']) });
+    expect(((await carried(shared.id)) as unknown[]).length).toBe(2);
+    expect((await put(pa, { dnsRules: dns([['one.com'], '10.99.0.1']) })).statusCode).toBe(200);
+    expect(await carried(a.id)).toEqual([{ presetId: pa, rules: [{ match: ['one.com'], server: '10.99.0.1' }] }]);
+    expect((await put(pa, { dnsRules: [] })).statusCode).toBe(200);
+    expect(await carried(a.id)).toBeNull();
+    expect(await carried(shared.id)).toEqual([{ presetId: pb, rules: [{ match: ['three.com'], server: '10.99.0.3' }] }]);
+
+    // Delete: the squad let go of the preset (19.11 will recompute on that), the node still has the rules.
+    await prisma.group.updateMany({ where: { customRoutingPresetId: pb }, data: { customRoutingPresetId: null } });
+    expect(await carried(shared.id)).not.toBeNull();
+    const del = await app.inject({ method: 'DELETE', url: `/api/routing-presets/${pb}`, headers: auth() });
+    expect(del.statusCode, del.body).toBe(204);
+    expect(await carried(shared.id)).toBeNull();
+  });
+
+  it('refuses a save that would put more than 16 servers on a node, naming the node', async () => {
+    const node = await makeNode({ name: 'full-node', dns: { servers: Array.from({ length: 15 }, (_, i) => ({ address: `10.1.0.${i + 1}`, domains: [], expectIps: [], skipFallback: false })) } });
+    const p = JSON.parse((await create({ name: 'Many', rules: [] })).body).id as string;
+    await makeSquad([node.id], { presetId: p });
+    const res = await put(p, { dnsRules: dns([['a.com'], '10.2.0.1'], [['b.com'], '10.2.0.2'], [['c.com'], '10.2.0.3']) });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(JSON.parse(res.body)).toMatchObject({ error: 'ROUTING_PRESET_DNS_NODE_LIMIT', node: 'full-node', count: 18 });
+    expect(await carried(node.id)).toBeNull();
   });
 });
