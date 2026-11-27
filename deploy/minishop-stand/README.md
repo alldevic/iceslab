@@ -84,7 +84,7 @@ All from this directory, with `MINISHOP_DIR` set.
 | `./stand.sh churn-probe [N]` | **Probe.** N users (default 40) are seeded, one is deleted inside the shop's paged walk of `/users/stream`, and the shop's "Panel records checked" is compared with the panel's count. Needs `CHURN_PAGING=1 ./stand.sh up-iceslab`. Exit 0 nobody lost, 1 someone lost, **2** the run proved nothing |
 | `./stand.sh webhook-probe` | **Probe.** Signed webhook bodies to the shop directly and through a TLS nginx. Exit 0 or 1 |
 | `./stand.sh premium-probe [LOG]` | **Probe.** A premium purchase, the shop's usage snapshot, then a demotion through the bulk route and a connection drop. About 13 minutes. `HIDE_NODES_USAGE=1 ./stand.sh up-iceslab` first for the fallback route. Exit 0, 1, or **2** (the run proved nothing) |
-| `./stand.sh full DIR` | `differential`, then every probe above (the churn probe once refused and once passing, `premium-probe` twice); about an hour and a half |
+| `./stand.sh full DIR` | `differential`, then every probe above (the churn probe once refused and once passing, `premium-probe` twice); about an hour and a half. Every stage runs; a per-stage table (stage, exit, meaning) ends the run. Exit 0 all clear; **1** the only non-zero is the differential's reported divergence (not a refusal); otherwise the failing code (a differential refusal 2, a probe's 1 or 2) |
 | `./stand.sh subpage TOKEN...` | the install document the facade serves for a subscription token, through the shop's own validator, plus seven deliberate breakages that must all be rejected. No docker |
 | `./buy.sh [email]` | the purchase: email code (QA auth), QA payment, signed webhook. `STAND_ENV` picks the env file |
 

@@ -1130,8 +1130,16 @@ nothing, so this is a refusal, not a pass."
     "$0" trace "$trace_file" "$ppmark"
     if [[ "$want_source" == multi_node_top_users ]]; then
       # Both halves of the fallback: the hidden route was asked and refused, and
-      # the route next to it was asked and answered.
-      grep -q '^POST /bandwidth-stats/nodes 404' "$trace_file" \
+      # the route next to it was asked and answered. The halves have different
+      # windows. The shop asks the hidden route ONCE per worker process, at its
+      # capability probe before the purchase (the same one-shot as the
+      # `Observed ... multi-node-usage=False` line below), so the 404 is looked
+      # for from the worker's own start; only the answered fallback is bound to
+      # the purchase window. A 404 required inside the window would fail a shop
+      # that did exactly what it should.
+      boot_trace="$trace_file.boot"
+      "$0" trace "$boot_trace" >/dev/null
+      grep -q '^POST /bandwidth-stats/nodes 404' "$boot_trace" \
         || die "the shop never asked the hidden route (POST /bandwidth-stats/nodes/usage, answered 404)"
       grep -q '^POST /bandwidth-stats/nodes 200' "$trace_file" \
         || die "the shop never got an answer from POST /bandwidth-stats/nodes/users, the fallback."
@@ -1461,7 +1469,30 @@ in 60 s. The run proved nothing."
     shift
     outdir="${1:?usage: stand.sh full <outdir>}"
     mkdir -p "$outdir"
-    "$0" differential "$outdir"
+    # Every stage runs and is tabled at the end. `differential` exiting 1 is a
+    # REPORTED divergence (on this stand a known one: our purchase trace has more
+    # calls than the reference's, see the README), not a refusal, so it does not
+    # stop the run; exit 2 from it, or any failing probe, still fails the run.
+    stages=()
+    fail=0
+    stage() { # name expected-rc command...  (any other rc fails the run)
+      local name="$1" want="$2" rc=0; shift 2
+      "$@" || rc=$?
+      if [[ $rc -eq $want ]]; then
+        if [[ $want -ne 0 ]]; then stages+=("$name|0|ok (refused, as it must)"); else stages+=("$name|0|ok"); fi
+      else
+        [[ $rc -ne 0 ]] || rc=1
+        stages+=("$name|$rc|failed")
+        (( fail )) || fail=$rc
+      fi
+    }
+
+    drc=0; "$0" differential "$outdir" || drc=$?
+    case $drc in
+      0) stages+=("differential|0|identical") ;;
+      1) stages+=("differential|1|divergence (reported, does not stop the run)") ;;
+      *) stages+=("differential|$drc|refusal or failure"); fail=$drc ;;
+    esac
 
     bring_up() { # label env...
       local label="$1"; shift
@@ -1472,30 +1503,38 @@ in 60 s. The run proved nothing."
 
     echo; echo "===== the churn probe refuses a walk of one page ====="
     bring_up plain
-    rc=0; "$0" churn-probe || rc=$?
-    [[ $rc -eq 2 ]] || die "the churn probe answered $rc on a stand with no paging; it must refuse (2), or it can pass on nothing"
-    echo "stand: refused, as it must"
+    # It must refuse (2), or it can pass on nothing.
+    stage "churn-probe (no paging)" 2 "$0" churn-probe
 
     echo; echo "===== signed webhook through a real TLS proxy ====="
-    "$0" webhook-probe
+    stage "webhook-probe" 0 "$0" webhook-probe
 
     # Same stand: the premium probe cleans up after itself on both sides, and the
     # webhook probe leaves nothing behind, so another bring-up here would cost
     # minutes to prove nothing.
     echo; echo "===== premium accounting and demotion (three capability routes) ====="
-    STAND_TRACE="$outdir/premium.trace" "$0" premium-probe "$outdir/premium-buy.log"
+    stage "premium-probe" 0 env STAND_TRACE="$outdir/premium.trace" "$0" premium-probe "$outdir/premium-buy.log"
 
     echo; echo "===== the churn probe, with the walk paged ====="
     bring_up paging CHURN_PAGING=1
-    "$0" churn-probe
+    stage "churn-probe (paging)" 0 "$0" churn-probe
 
     # A bring-up of its own: the shim is in the PATH to the panel, so it has to be
     # there before the shop's containers are created, and every other probe must
     # NOT be talking through it.
     echo; echo "===== the fallback route, with /nodes/usage hidden ====="
     bring_up shim HIDE_NODES_USAGE=1
-    STAND_TRACE="$outdir/premium-fallback.trace" "$0" premium-probe "$outdir/premium-fallback-buy.log"
-    echo; echo "stand: full run passed; run './stand.sh differential <dir>' again to check the probes left nothing behind"
+    stage "premium-probe (fallback)" 0 env STAND_TRACE="$outdir/premium-fallback.trace" "$0" premium-probe "$outdir/premium-fallback-buy.log"
+
+    # Exit: 0 all clear; 1 when the only non-zero is the differential's
+    # divergence; otherwise the failing code (the first one, in stage order).
+    echo; printf '%-28s %-5s %s\n' stage exit meaning
+    for row in "${stages[@]}"; do
+      IFS='|' read -r n c m <<<"$row"; printf '%-28s %-5s %s\n' "$n" "$c" "$m"
+    done
+    if (( fail )); then echo "stand: full run FAILED (exit $fail)"; exit "$fail"; fi
+    if (( drc == 1 )); then echo "stand: full run finished; only the differential diverged (exit 1)"; exit 1; fi
+    echo "stand: full run passed; run './stand.sh differential <dir>' again to check the probes left nothing behind"
     ;;
 
   mark)   date -u +%Y-%m-%dT%H:%M:%SZ ;;
