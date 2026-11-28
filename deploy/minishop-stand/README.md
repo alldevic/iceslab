@@ -72,10 +72,10 @@ All from this directory, with `MINISHOP_DIR` set.
 | `./stand.sh check iceslab\|ref` | what `up-*` asserts, on a stand that is up: admin seeded, the worker has a panel key |
 | `./stand.sh seed-tariffs` | the catalogue step alone |
 | `./stand.sh half iceslab\|ref DIR` | one half from dropped volumes: up, node traffic, purchase, admin walk; writes `<half>-buy.*` and `<half>-admin.{log,jsonl,trace}` into `DIR` |
-| `./stand.sh differential DIR` | both halves, then `verdict`. **Exit 0** the halves agree, **1** they differ, **2** a comparison refused (an empty or missing input: the run proved nothing) |
+| `./stand.sh differential DIR` | both halves, then `verdict`. **Exit 0** nothing outside the registry of accepted differences (identical, or every divergence is a registered one), **1** a divergence outside the registry, **2** a comparison refused (an empty or missing input: the run proved nothing) |
 | `./stand.sh verdict DIR` | the three comparisons on the files a differential left. No docker |
 | `./stand.sh compare-admin REF.jsonl CAND.jsonl` | what the admin pages rendered, two walks |
-| `./stand.sh selftest` | the admin comparator, the churn verdict and the missing-route predicate against known answers. No docker, no shop checkout, no panel |
+| `./stand.sh selftest` | the admin and trace comparators, the churn verdict, the missing-route predicate, `verdict`'s exit codes (registered only 0, one unexpected 1, empty or incomplete input 2) and the failed-probe log keeping (stubbed `docker`) against known answers. No docker, no shop checkout, no panel |
 | `./stand.sh down` / `reset` | stop both halves / and drop their volumes |
 | `./stand.sh status`, `logs [n]` | what runs; the shop's backend and worker logs |
 | `./stand.sh mark` | a timestamp for `trace` |
@@ -83,8 +83,8 @@ All from this directory, with `MINISHOP_DIR` set.
 | `./stand.sh compare REF CAND` | multiset diff, statuses judged by the registry's `success_statuses` |
 | `./stand.sh churn-probe [N]` | **Probe.** N users (default 40) are seeded, one is deleted inside the shop's paged walk of `/users/stream`, and the shop's "Panel records checked" is compared with the panel's count. Needs `CHURN_PAGING=1 ./stand.sh up-iceslab`. Exit 0 nobody lost, 1 someone lost, **2** the run proved nothing |
 | `./stand.sh webhook-probe` | **Probe.** Signed webhook bodies to the shop directly and through a TLS nginx. Exit 0 or 1 |
-| `./stand.sh premium-probe [LOG]` | **Probe.** A premium purchase, the shop's usage snapshot, then a demotion through the bulk route and a connection drop. About 13 minutes. `HIDE_NODES_USAGE=1 ./stand.sh up-iceslab` first for the fallback route. Exit 0, 1, or **2** (the run proved nothing) |
-| `./stand.sh full DIR` | `differential`, then every probe above (the churn probe once refused and once passing, `premium-probe` twice); about an hour and a half. Every stage runs; a per-stage table (stage, exit, meaning) ends the run. Exit 0 all clear; **1** the only non-zero is the differential's reported divergence (not a refusal); otherwise the failing code (a differential refusal 2, a probe's 1 or 2) |
+| `./stand.sh premium-probe [LOG]` | **Probe.** A premium purchase, the shop's usage snapshot, then a demotion through the bulk route and a connection drop. About 13 minutes. `HIDE_NODES_USAGE=1 ./stand.sh up-iceslab` first for the fallback route. Exit 0, 1, or **2** (the run proved nothing). When it fails, the shop's worker and backend logs are saved next to the buy log (`<LOG minus .log>.worker.log`, `.backend.log`) before cleanup, so the next stage of `full` cannot take them with it |
+| `./stand.sh full DIR` | `differential`, then every probe above (the churn probe once refused and once passing, `premium-probe` twice); about an hour and a half. Every stage runs; a per-stage table (stage, exit, meaning) ends the run. Exit 0 all clear; **1** the only non-zero is the differential's divergence outside the registry (not a refusal); otherwise the failing code (a differential refusal 2, a probe's 1 or 2) |
 | `./stand.sh subpage TOKEN...` | the install document the facade serves for a subscription token, through the shop's own validator, plus seven deliberate breakages that must all be rejected. No docker |
 | `./buy.sh [email]` | the purchase: email code (QA auth), QA payment, signed webhook. `STAND_ENV` picks the env file |
 
@@ -93,10 +93,21 @@ two full halves with their volumes recreated, tens of minutes.
 Run it twice in a row: the second run must give the same picture as the first
 (that is the check on the panel cleanup).
 
-Exit code 0 means identical, or only differences the shop's registry accepts
-and the `ACCEPTED_DIVERGENCE` table in `compare_admin.py` names. Any other
-difference is either a facade defect or a property of the stand; write down
-which, with the lines. `ACCEPTED_DIVERGENCE` entries each carry a reason; the
+Exit code 0 means nothing outside the registry of accepted differences:
+identical, or only differences the shop's own contract registry accepts (a
+status inside `success_statuses`), the `ACCEPTED_DIVERGENCE` table in
+`compare_admin.py` names, or the `ACCEPTED_TRACE_DIFFERENCES` table in
+`compare_traces.py` names. The latter covers the purchase trace having more
+calls on our half than on the reference (about 29 against 12-17: the
+reference's SQL seeds the `runes_*` users the shop has to create itself on our
+half - extra `by-username` 404, `POST /users`, `PATCH /users`, `users/stream`;
+accepted in milestones 15.1-15.3) and only in that direction: fewer calls or a
+missing operation on our half stay unexpected. The "reported, not failed" value
+differences never affect the code. Exit 1 means something outside the registry;
+`/internal-squads` (shop cache, 300 s) is registered for one call more or less
+either way; `/system/metadata`, cached the same way, is not. Any unexpected difference is either a facade
+defect or a property of the stand; write down which, with the lines, and add it
+to the table with its reason if it is the latter. `ACCEPTED_DIVERGENCE` entries each carry a reason; the
 comparator reports an entry that matched nothing as stale, and a divergence
 that matches no entry as new.
 

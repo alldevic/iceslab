@@ -60,6 +60,20 @@ die() { echo "stand: $*" >&2; exit 1; }
 # "we did not wait long enough" must not read like "the shop did not call it".
 refuse() { echo "stand: $*" >&2; exit 2; }
 
+# The shop's container logs, kept: `docker logs` of a container goes with the
+# container, and the next stage of `full` recreates the stand. <prefix>.worker.log
+# and <prefix>.backend.log; a container that is not there is said, not fatal (this
+# runs on the way out of a failed probe and must not hide its exit code).
+save_shop_logs() {
+  local prefix="$1" name
+  mkdir -p "$(dirname "$prefix")" 2>/dev/null || true
+  for name in worker backend; do
+    docker logs --timestamps "remnawave-minishop-$name" > "$prefix.$name.log" 2>&1 \
+      || echo "stand: could not read the $name log (kept what there was in $prefix.$name.log)" >&2
+  done
+  echo "stand: the shop's worker and backend logs are in $prefix.{worker,backend}.log" >&2
+}
+
 # The commands that need no shop checkout (and, but for mint-token, no panel).
 offline() {
   case "${1:-}" in
@@ -963,8 +977,11 @@ case "${1:-}" in
 
   verdict)
     # The three comparisons on the files a differential left in <outdir>; needs
-    # no stand and no docker. Exit 0: they agree. 1: a comparison found a
-    # divergence. 2: a comparison refused (empty or unusable input) or a file is
+    # no stand and no docker. Exit 0: nothing outside the registry of accepted
+    # differences (identical, or every divergence is a registered one - see
+    # ACCEPTED_DIVERGENCE in compare_admin.py and ACCEPTED_TRACE_DIFFERENCES in
+    # compare_traces.py). 1: a comparison found a divergence OUTSIDE the
+    # registry. 2: a comparison refused (empty or unusable input) or a file is
     # missing - the run proved nothing, and that is not a finding.
     shift
     outdir="${1:?usage: stand.sh verdict <outdir>}"
@@ -997,10 +1014,10 @@ case "${1:-}" in
     echo
     [[ $invalid -eq 0 ]] || refuse "a comparison refused to run - the differential proved nothing"
     if [[ $diverged -ne 0 ]]; then
-      echo "stand: the halves differ (exit 1)"
+      echo "stand: a divergence outside the registry of accepted differences (exit 1)"
       exit 1
     fi
-    echo "stand: the halves agree (exit 0)"
+    echo "stand: nothing outside the registry of accepted differences (exit 0)"
     ;;
 
   differential)
@@ -1032,6 +1049,56 @@ case "${1:-}" in
     python3 -I "$HERE/compare_admin.py" --selftest || failed=1
     python3 -I "$HERE/churn_verdict.py" --selftest || failed=1
     python3 -I "$HERE/reads_as_missing_route.py" --selftest || failed=1
+    python3 -I "$HERE/compare_traces.py" --selftest || failed=1
+    # `verdict` on files whose answer is known, and the log-keeping of a failed
+    # probe against a stubbed docker.
+    st="$(mktemp -d)"; mkdir -p "$st/bin"
+    cat > "$st/bin/docker" <<'STUB'
+#!/usr/bin/env bash
+# only `docker logs --timestamps <container>`; STUB_DOCKER_MISSING names a container that is gone
+[[ "$1" == logs ]] || exit 99
+c="${@: -1}"
+[[ "$c" != "${STUB_DOCKER_MISSING:-}" ]] || { echo "Error: No such container: $c" >&2; exit 1; }
+echo "log line of $c"
+STUB
+    chmod +x "$st/bin/docker"
+    chk() { # name, wanted, got
+      if [[ "$2" == "$3" ]]; then echo "ok   stand: $1 (exit $3)"; else echo "FAIL stand: $1 (exit $3, wanted $2)"; failed=1; fi
+    }
+    mk() { # dir ref-buy cand-buy
+      mkdir -p "$1"
+      printf '%b' "$2" > "$1/ref-buy.trace"; printf '%b' "$3" > "$1/iceslab-buy.trace"
+      printf 'GET /users 200\n' > "$1/ref-admin.trace"; cp "$1/ref-admin.trace" "$1/iceslab-admin.trace"
+      printf '{"step":"s","status":200,"body":{"a":1}}\n' > "$1/ref-admin.jsonl"; cp "$1/ref-admin.jsonl" "$1/iceslab-admin.jsonl"
+    }
+    rb='POST /users 201\nGET /users 200\n'
+    mk "$st/ok" "$rb" "$rb"'POST /users 201\nPATCH /users 200\nGET /users/stream 200\n'
+    rc=0; "$0" verdict "$st/ok" >/dev/null 2>&1 || rc=$?
+    chk "verdict with only registered divergences" 0 "$rc"
+    mk "$st/bad" "$rb" "$rb"'DELETE /nodes 200\n'
+    rc=0; "$0" verdict "$st/bad" >/dev/null 2>&1 || rc=$?
+    chk "verdict with one divergence outside the registry" 1 "$rc"
+    mk "$st/empty" "$rb" "$rb"; : > "$st/empty/ref-buy.trace"
+    rc=0; "$0" verdict "$st/empty" >/dev/null 2>&1 || rc=$?
+    chk "verdict with an empty trace refuses" 2 "$rc"
+    mk "$st/incomplete" "$rb" "$rb"; rm "$st/incomplete/iceslab-admin.jsonl"
+    rc=0; "$0" verdict "$st/incomplete" >/dev/null 2>&1 || rc=$?
+    chk "verdict with a missing file refuses" 2 "$rc"
+    # A failed probe leaves the logs; one whose container is gone still leaves
+    # the file for the other one.
+    rc=0; PATH="$st/bin:$PATH" save_shop_logs "$st/probe/premium-buy" >/dev/null 2>&1 || rc=$?
+    [[ $rc -eq 0 && -s "$st/probe/premium-buy.worker.log" && -s "$st/probe/premium-buy.backend.log" ]] \
+      && echo "ok   stand: a failed probe keeps the worker and backend logs" \
+      || { echo "FAIL stand: a failed probe keeps the worker and backend logs"; failed=1; }
+    rc=0; PATH="$st/bin:$PATH" STUB_DOCKER_MISSING=remnawave-minishop-backend \
+      save_shop_logs "$st/gone/premium-buy" >/dev/null 2>&1 || rc=$?
+    [[ $rc -eq 0 && -s "$st/gone/premium-buy.worker.log" ]] \
+      && echo "ok   stand: a missing backend container does not lose the worker log" \
+      || { echo "FAIL stand: a missing backend container does not lose the worker log"; failed=1; }
+    grep -q '(( rc == 0 )) || save_shop_logs' "$HERE/stand.sh" \
+      && echo "ok   stand: premium-probe's exit path saves the logs" \
+      || { echo "FAIL stand: premium-probe's exit path saves the logs"; failed=1; }
+    rm -rf "$st"
     exit $failed
     ;;
 
@@ -1092,6 +1159,11 @@ case "${1:-}" in
     premium_exit() {
       local rc=$?
       trap - EXIT
+      # A failed probe keeps the shop's logs BEFORE the cleanup and before any
+      # later stage recreates the containers: the first failure of this probe in
+      # a `full` run was never explained because the next bring-up took the
+      # worker's log with it.
+      (( rc == 0 )) || save_shop_logs "${buylog%.log}"
       premium_cleanup || { (( rc )) || rc=1; }
       exit $rc
     }
@@ -1470,9 +1542,9 @@ in 60 s. The run proved nothing."
     outdir="${1:?usage: stand.sh full <outdir>}"
     mkdir -p "$outdir"
     # Every stage runs and is tabled at the end. `differential` exiting 1 is a
-    # REPORTED divergence (on this stand a known one: our purchase trace has more
-    # calls than the reference's, see the README), not a refusal, so it does not
-    # stop the run; exit 2 from it, or any failing probe, still fails the run.
+    # REPORTED divergence outside the registry of accepted differences (our
+    # purchase trace having more calls than the reference's is a registered one
+    # and exits 0, see the README), not a refusal, so it does not stop the run; exit 2 from it, or any failing probe, still fails the run.
     stages=()
     fail=0
     stage() { # name expected-rc command...  (any other rc fails the run)
@@ -1489,8 +1561,8 @@ in 60 s. The run proved nothing."
 
     drc=0; "$0" differential "$outdir" || drc=$?
     case $drc in
-      0) stages+=("differential|0|identical") ;;
-      1) stages+=("differential|1|divergence (reported, does not stop the run)") ;;
+      0) stages+=("differential|0|nothing outside the registry of accepted differences") ;;
+      1) stages+=("differential|1|divergence outside the registry (reported, does not stop the run)") ;;
       *) stages+=("differential|$drc|refusal or failure"); fail=$drc ;;
     esac
 
@@ -1617,7 +1689,8 @@ usage: $(basename "$0") <command>
                one half end to end: reset, up, node traffic, buy, admin walk;
                writes <half>-buy.{log,trace} and <half>-admin.{log,jsonl,trace}
   differential <outdir>
-               both halves, then verdict. Exit 0 agree, 1 differ, 2 refused
+               both halves, then verdict. Exit 0 nothing outside the registry of
+               accepted differences, 1 a divergence outside it, 2 refused
   verdict <outdir>
                the three comparisons on a differential's files (no docker)
   compare-admin a b
