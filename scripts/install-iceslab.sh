@@ -65,7 +65,8 @@ elapsed_step() {
 
 STEP_N=0
 # 1 Prereqs, 2 Firewall, 3 Docker, 4 Source, 5 Config, 6 Pre-pull, 7 Build,
-# 8 Migrate, 9 Launch. +1 Caddy if PANEL_DOMAIN set (set further below).
+# 8 Migrate, 9 Launch. +2 (Caddy, fail2ban) in domain mode; the total is
+# fixed once PANEL_DOMAIN is known, just before the first step.
 STEP_TOTAL=9
 step() {
   # Print the previous step's duration before moving on (skipped on the first
@@ -297,7 +298,6 @@ if [[ -z "$PANEL_DOMAIN" && -r /dev/tty ]]; then
     PANEL_DOMAIN="${PANEL_DOMAIN#http://}"
     PANEL_DOMAIN="${PANEL_DOMAIN#https://}"
     PANEL_DOMAIN="${PANEL_DOMAIN%/}"
-    STEP_TOTAL=11
 
     # Quick sanity-check on the value before we commit to it. Catches
     # the typo case where the admin types a single word without a dot.
@@ -366,6 +366,12 @@ if [[ -n "$ACME_DEFAULT_EMAIL" ]]; then
     exit 1
   fi
   log "Email для ACME: ${ACME_DEFAULT_EMAIL}"
+fi
+
+# PANEL_DOMAIN is final here, whether it came from the env or the prompt. The
+# two steps below the launch run only in domain mode.
+if [[ -n "$PANEL_DOMAIN" ]]; then
+  STEP_TOTAL=11
 fi
 
 step "Prerequisites"

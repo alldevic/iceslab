@@ -177,6 +177,11 @@
 #     # and 1234/udp (a rule that names a source address is left alone), but
 #     # not /etc/fail2ban/jail.local, which is the operator's. ufw's forward
 #     # policy, which an AmneziaWG install sets, is not restored.
+#     # Left on the machine: the packages the installer took from the
+#     # distribution (git, curl, ufw, unzip, wireguard-tools, fail2ban and the
+#     # AmneziaWG build tools), Go in /usr/local/go with its links in
+#     # /usr/local/bin, ufw itself (still enabled) with its SSH rule, so access
+#     # is not lost, and any rule of yours.
 #     # Ends with "Removed: agent, ...; kept: ...".
 #     # Add --keep-cores to leave the cores on the machine (the old behaviour);
 #     # their protocol rules stay too then.

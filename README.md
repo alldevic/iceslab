@@ -104,7 +104,7 @@ The flags a panel's command uses, for reading or adjusting it:
 | `--ssh-port <port>` | The port sshd listens on, default `22`: every SSH firewall rule and the fail2ban jail use it. The port of the current session is allowed too. |
 | `--realistic-fallback` | A real-looking fallback for probes. |
 | `--reset` | Wipe a previous install on this VPS first. |
-| `--uninstall` | Remove the agent, its cores and the firewall rules it opened (`--keep-cores` leaves the cores, and their rules). Your own `/etc/fail2ban/jail.local` stays; so does ufw's forward policy, which an AmneziaWG install set to ACCEPT. |
+| `--uninstall` | Remove the agent, its cores and the firewall rules it opened (`--keep-cores` leaves the cores, and their rules). Your own `/etc/fail2ban/jail.local` stays; so does ufw's forward policy, which an AmneziaWG install set to ACCEPT. Packages and tools the installer added stay too (`wireguard-tools`, `fail2ban`, git, curl, unzip, the AmneziaWG build tools, Go in `/usr/local/go`), and so do ufw, still enabled, and its SSH rule, so you keep access. |
 | `--help` | Print the flags and leave: no root needed, nothing is touched. |
 
 `--payload-file <path>` (or `--payload`) installs from the node's payload instead of a bootstrap token, for example a file copied over with scp. The panel shows the payload once, when the node is created: download it then. A panel whose `PUBLIC_URL` is not https prints this command instead of the bootstrap one, since the installer redeems a token over https only.

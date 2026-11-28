@@ -298,3 +298,23 @@ describe('the Docker apt repo follows the distribution', () => {
     expect(src).toMatch(/https:\/\/download\.docker\.com\/linux\/%s %s stable/);
   });
 });
+
+// 20.2: in domain mode the stand printed [10/9] and [11/9]: the total was set to
+// 11 only inside the interactive prompt, so PANEL_DOMAIN from the env kept 9.
+describe('the step counter total matches the steps that run', () => {
+  it('counts the steps of each mode and fixes the total once the domain is known', () => {
+    const src = installerSource();
+    const always = [...src.matchAll(/^step "/gm)].length;
+    const domainOnly = [...src.matchAll(/^ {2}step "/gm)].length;
+    expect(always, 'no top-level step calls found').toBeGreaterThan(5);
+    expect(domainOnly, 'the Caddy and fail2ban steps are expected inside the domain block').toBe(2);
+
+    const base = src.match(/^STEP_TOTAL=(\d+)$/m);
+    expect(Number(base?.[1]), 'the default total is the bare-IP step count').toBe(always);
+
+    const domain = src.match(/^if \[\[ -n "\$PANEL_DOMAIN" \]\]; then\n {2}STEP_TOTAL=(\d+)\nfi\n\nstep "Prerequisites"/m);
+    expect(domain, 'the domain total must be set after the prompt, right before the first step').not.toBeNull();
+    expect(Number(domain![1])).toBe(always + domainOnly);
+    expect([...src.matchAll(/STEP_TOTAL=\d+/g)].length, 'STEP_TOTAL is assigned in two places only').toBe(2);
+  });
+});
