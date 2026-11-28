@@ -479,12 +479,14 @@ if ! command -v docker >/dev/null; then
   "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y ca-certificates curl gnupg
   install -m 0755 -d /etc/apt/keyrings
   if [[ ! -s /etc/apt/keyrings/docker.gpg ]]; then
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+    # Docker's repo is per distribution: the ubuntu one has no Debian codenames
+    # (trixie answers 404), so the path follows the ID checked above.
+    curl -fsSL "https://download.docker.com/linux/${ID}/gpg" \
       | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
     chmod a+r /etc/apt/keyrings/docker.gpg
   fi
-  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu %s stable\n' \
-    "$(dpkg --print-architecture)" \
+  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/%s %s stable\n' \
+    "$(dpkg --print-architecture)" "$ID" \
     "$(. /etc/os-release && echo "$VERSION_CODENAME")" \
     > /etc/apt/sources.list.d/docker.list
   "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" update -y

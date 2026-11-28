@@ -287,3 +287,14 @@ describe('the installer writes no key nobody reads', () => {
     ).toEqual([]);
   });
 });
+
+// 20.2: on Debian 13 the installer stopped at step 3 because the Docker repo was
+// always the ubuntu one, which has no trixie. The path follows /etc/os-release.
+describe('the Docker apt repo follows the distribution', () => {
+  it('names neither ubuntu nor debian literally in the repo path', () => {
+    const src = installerSource();
+    expect(src).not.toMatch(/download\.docker\.com\/linux\/(ubuntu|debian)/);
+    expect(src).toContain('https://download.docker.com/linux/${ID}/gpg');
+    expect(src).toMatch(/https:\/\/download\.docker\.com\/linux\/%s %s stable/);
+  });
+});
