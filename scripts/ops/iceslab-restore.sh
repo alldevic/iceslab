@@ -4,7 +4,8 @@
 # Restore a tarball produced by iceslab-backup.sh:
 #   1. Decrypt (if `--password` given) and unpack the archive.
 #   2. Read manifest.json, print a summary, ask the user to confirm.
-#   3. Stop the panel services so nothing writes during restore.
+#   3. Stop the panel services so nothing writes during restore, and bring
+#      postgres and redis up (a full `compose down` leaves none).
 #   4. Drop + recreate the postgres database, then `psql` the dump.
 #   5. Stop redis, replace dump.rdb on its volume, restart redis.
 #   6. Replace the host .env.production (only if the archive's was preserved).
@@ -188,6 +189,11 @@ for svc in backend frontend; do
         exit 1
     fi
 done
+# The restore goes INTO the postgres and redis containers, and after a full
+# `compose down` there are none: step 3 failed on "No such container" (m20.4
+# stand). They are brought up from the compose file and waited for until
+# healthy; when they already run this changes nothing.
+"${DC[@]}" up -d --wait postgres redis
 step_done
 
 # ───── Step 3: postgres restore ─────

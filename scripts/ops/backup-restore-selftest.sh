@@ -90,12 +90,23 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - pg:/var/lib/postgresql/data
+    # As in docker-compose.prod.yml: the restore waits for these (up --wait).
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
   redis:
     image: redis:7-alpine
     container_name: iceslab-prod-redis
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - rd:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
   # The scripts stop and start these by SERVICE name. They stand in for the
   # panel: what matters is that the names exist and that the restore can bring
   # them back up.
@@ -264,6 +275,32 @@ if grep -q '^POSTGRES_PASSWORD=selftest-password$' env; then
 else
     bad "the env file was overwritten by the archive's copy"
 fi
+
+# ───── 3a. Restore after a full `compose down` ─────
+# m20.4 stand: with no containers left (volumes kept), the restore failed on
+# "No such container iceslab-prod-postgres" before it changed anything. It has
+# to bring postgres and redis up itself, restore into them, and start the panel.
+note "restore after a full compose down"
+psql -q -c "INSERT INTO subscribers (name, bytes) VALUES ('after-backup', 1);" >/dev/null
+"${DC[@]}" down >/dev/null 2>&1
+if ICESLAB_RESTORE_ENV_DIR="${WORK}/restore-env" \
+    "${SCRIPT_DIR}/iceslab-restore.sh" "$ARCHIVE" --compose-file compose.yml --env-file env --yes >/dev/null 2>&1; then
+    ok "restore succeeds with no containers left"
+else
+    bad "restore failed with no containers left"
+fi
+if [[ "$(psql -tAc "SELECT count(*) FROM subscribers;" 2>/dev/null || echo MISSING)" == "$SEEDED_COUNT" ]]; then
+    ok "and the rows are the archive's (the later insert is gone)"
+else
+    bad "rows after the restore from nothing: $(psql -tAc "SELECT count(*) FROM subscribers;" 2>/dev/null || echo MISSING), seeded $SEEDED_COUNT"
+fi
+for svc in backend frontend; do
+    if [[ "$(docker inspect -f '{{.State.Running}}' "iceslab-prod-${svc}" 2>/dev/null || echo false)" == "true" ]]; then
+        ok "$svc is running after the restore from nothing"
+    else
+        bad "$svc was not brought up after the restore from nothing"
+    fi
+done
 
 # ───── 4. Encrypted archive ─────
 note "backup + restore (AES-256)"

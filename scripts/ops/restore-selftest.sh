@@ -5,6 +5,8 @@
 # real stack, checked against a stub `docker` (the real round trip is
 # backup-restore-selftest.sh):
 #
+#   * restore brings postgres and redis up before it drops the database (after
+#     a full `compose down` there are no containers to restore into);
 #   * restore step 5 calls `compose up -d backend frontend`, never `start` of
 #     them (a left-over container of a newer build must not come back over an
 #     older database, and with no containers `start` fails on `migrate`);
@@ -109,6 +111,11 @@ if run "$PLAIN" "${SCRIPT_DIR}/iceslab-restore.sh" "${WORK}/old.tar.gz" --yes; t
 if grep -q 'compose .*up -d backend frontend' "$LOG"; then ok "step 5 runs 'up -d backend frontend'"; else bad "no 'up -d backend frontend' in: $(grep compose "$LOG" | tr '\n' ';')"; fi
 if grep -qE 'compose .* start .*(backend|frontend)' "$LOG"; then bad "step 5 still calls 'start' for the panel services"; else ok "and never 'start' for them"; fi
 if grep -q 'NEWER' "${WORK}/out"; then bad "an old archive got the newer-than-code warning"; else ok "an old archive gets no warning"; fi
+# After a full `compose down` there is no postgres or redis container to restore
+# into: they are brought up (and waited for) before the database is dropped.
+up_at="$(grep -n 'compose .*up -d --wait postgres redis' "$LOG" | head -1 | cut -d: -f1)"
+drop_at="$(grep -n 'DROP SCHEMA' "$LOG" | head -1 | cut -d: -f1)"
+if [[ -n "$up_at" && -n "$drop_at" ]] && (( up_at < drop_at )); then ok "postgres and redis are brought up before the database is dropped"; else bad "no 'up -d --wait postgres redis' before DROP (up at ${up_at:-none}, drop at ${drop_at:-none})"; fi
 
 if run "$PLAIN" "${SCRIPT_DIR}/iceslab-restore.sh" "${WORK}/same.tar.gz" --yes; then ok "restore of a matching archive succeeds"; else bad "matching archive: $(tail -5 "${WORK}/out")"; fi
 if grep -q 'archive database: 2 migrations, the last is 20260102000000_b' "${WORK}/out"; then ok "restore prints the archive's migrations"; else bad "not printed: $(cat "${WORK}/out")"; fi
