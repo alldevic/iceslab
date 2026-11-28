@@ -62,38 +62,61 @@ export interface DnsConflict {
   b: { presetId: string | null; name: string; server: string };
 }
 
+/** A conflict with the identity 19.15 compares by: the name and the two sources each with its server, order-free. */
+export interface KeyedDnsConflict extends DnsConflict {
+  key: string;
+}
+
 /**
- * The first name two different sources give different servers, or null. A
- * source repeating itself is not a conflict (the first rule of a preset wins,
+ * Every name two different sources give different servers, in the order found.
+ * A source repeating itself is not a conflict (the first rule of a preset wins,
  * as in the subscription). `domain:x` and a bare `x` are one name; `geosite:`
  * meets only the same tag, never a single name inside it. With `focus`, only a
  * pair that has the source `focus` in it counts: a save is refused for what it
  * adds, not for a disagreement it did not make. `undefined` = any pair.
  */
-export function findDnsConflict(sources: readonly NamedDnsSource[], focus?: { presetId: string | null }): DnsConflict | null {
+export function allDnsConflicts(sources: readonly NamedDnsSource[], focus?: { presetId: string | null }): KeyedDnsConflict[] {
+  const out: KeyedDnsConflict[] = [];
   const seen = new Map<string, { source: NamedDnsSource; server: string; raw: string; written: string }[]>();
   for (const source of sources) {
     for (const rule of source.rules) {
       if (!carriesRule(rule)) continue;
       const server = normalizeDnsServer(rule.server);
       for (const written of rule.match) {
-        const key = normalizeDnsName(written);
-        const earlier = seen.get(key) ?? [];
+        const name = normalizeDnsName(written);
+        const earlier = seen.get(name) ?? [];
         for (const e of earlier) {
           if (e.source.presetId === source.presetId || e.server === server) continue;
           if (focus && focus.presetId !== source.presetId && focus.presetId !== e.source.presetId) continue;
-          return {
+          out.push({
             domain: e.written,
             a: { presetId: e.source.presetId, name: e.source.name, server: e.raw },
             b: { presetId: source.presetId, name: source.name, server: rule.server },
-          };
+            key: [name, ...[`${e.source.presetId ?? ''}=${e.server}`, `${source.presetId ?? ''}=${server}`].sort()].join('\u0000'),
+          });
         }
         earlier.push({ source, server, raw: rule.server, written });
-        seen.set(key, earlier);
+        seen.set(name, earlier);
       }
     }
   }
-  return null;
+  return out;
+}
+
+/**
+ * The first conflict `allDnsConflicts` finds, or null. `known` (19.15) are the
+ * keys of the conflicts that were there before the change being checked: a save
+ * is refused for a disagreement it makes, not for one that is already written
+ * on the node (it stays a warning on the screen, 19.12).
+ */
+export function findDnsConflict(
+  sources: readonly NamedDnsSource[],
+  focus?: { presetId: string | null },
+  known?: ReadonlySet<string>,
+): DnsConflict | null {
+  const found = allDnsConflicts(sources, focus).find((c) => !known?.has(c.key));
+  if (!found) return null;
+  return { domain: found.domain, a: found.a, b: found.b };
 }
 
 /** A rule not carried because a source ahead of it names the same name with another server (19.11). */

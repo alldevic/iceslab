@@ -7,6 +7,7 @@ import {
 } from '../routing-presets/routing-presets.resolve.js';
 import { prisma } from '../../prisma.js';
 import { getSubscriptionSettings } from '../settings/settings.service.js';
+import { loadDefaultPreset } from '../routing-presets/routing-presets.default.js';
 import { matchRuleForUserAgent } from '../srr/srr.service.js';
 
 /**
@@ -115,7 +116,8 @@ export async function getUserDelivery(userId: string): Promise<UserDeliveryDto |
   // so the card cannot say one thing while the client is handed another.
   const { preset: squadPreset, conflict } = resolveSquadPreset(user.groupMembers.map((m) => m.group));
   const userPreset = presetOf(user);
-  const effectivePreset: ResolvedPreset = userPreset ?? squadPreset ?? { kind: 'builtin', id: settings.routingPreset };
+  const defaultPreset = userPreset || squadPreset ? null : await loadDefaultPreset(settings.defaultPresetId);
+  const effectivePreset: ResolvedPreset = userPreset ?? squadPreset ?? defaultPreset ?? { kind: 'builtin', id: settings.routingPreset };
   const source: RoutingSource = userPreset ? 'user' : squadPreset ? 'squad' : 'global';
   const builtinKey = (p: ResolvedPreset | null): RoutingPresetId | null => (p?.kind === 'builtin' ? p.id : null);
   const own = builtinKey(userPreset);

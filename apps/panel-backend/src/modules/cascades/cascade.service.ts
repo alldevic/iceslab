@@ -1192,19 +1192,62 @@ export async function getExitNodeIdsByEntryNode(entryNodeIds: string[]): Promise
     },
   });
   for (const c of cascades) {
-    const exits =
-      c.directions.length > 0
-        ? c.directions.flatMap((d) => d.nodes.map((n) => n.node.id))
-        : c.hops.length > 0
-          ? [c.hops[c.hops.length - 1]!.nodeId]
-          : [];
-    const entries = [...(c.positions[0]?.nodes.map((n) => n.nodeId) ?? []), ...(c.hops[0] ? [c.hops[0].nodeId] : [])];
+    const exits = exitsOfCascade(c);
+    const entries = entriesOfCascade(c);
     for (const entry of entries) {
       if (!entryNodeIds.includes(entry)) continue;
       const set = out.get(entry) ?? new Set<string>();
       for (const x of exits) set.add(x);
       out.set(entry, set);
     }
+  }
+  return out;
+}
+
+/** The nodes a cascade's clients leave by: the directions' nodes (v4), or the last hop (legacy). */
+function exitsOfCascade(c: {
+  hops: { nodeId: string }[];
+  directions: { nodes: { node: { id: string } }[] }[];
+}): string[] {
+  return c.directions.length > 0
+    ? c.directions.flatMap((d) => d.nodes.map((n) => n.node.id))
+    : c.hops.length > 0
+      ? [c.hops[c.hops.length - 1]!.nodeId]
+      : [];
+}
+
+/** The nodes a cascade's clients enter by: position 0 (v4) and the first hop (legacy). */
+function entriesOfCascade(c: { hops: { nodeId: string }[]; positions: { nodes: { nodeId: string }[] }[] }): string[] {
+  return [...(c.positions[0]?.nodes.map((n) => n.nodeId) ?? []), ...(c.hops[0] ? [c.hops[0].nodeId] : [])];
+}
+
+/**
+ * 19.15: the other way round, the entry nodes whose cascade can leave by any of
+ * the given exit nodes. The same cascades as above (enabled, not dead): what
+ * a node's IPv6 facts change is what an entry draws for those, and nothing else.
+ */
+export async function getEntryNodeIdsByExitNode(exitNodeIds: string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (exitNodeIds.length === 0) return out;
+  const cascades = await prisma.cascade.findMany({
+    where: {
+      enabled: true,
+      id: { notIn: [...(await deadCascadeIds())] },
+      OR: [
+        { hops: { some: { nodeId: { in: exitNodeIds } } } },
+        { directions: { some: { nodes: { some: { nodeId: { in: exitNodeIds } } } } } },
+      ],
+    },
+    select: {
+      hops: { orderBy: { position: 'asc' }, select: { nodeId: true } },
+      positions: { where: { position: 0 }, select: { nodes: { select: { nodeId: true } } } },
+      directions: { select: { nodes: { select: { node: { select: { id: true } } } } } },
+    },
+  });
+  for (const c of cascades) {
+    // An exit by the hop shape is the LAST hop only; the query matched any hop.
+    if (!exitsOfCascade(c).some((x) => exitNodeIds.includes(x))) continue;
+    for (const entry of entriesOfCascade(c)) out.add(entry);
   }
   return out;
 }

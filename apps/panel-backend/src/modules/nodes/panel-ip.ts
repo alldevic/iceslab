@@ -1,3 +1,4 @@
+import { canonicalIpv6 } from '@iceslab/shared';
 import { config } from '../../config.js';
 
 // Slice S7: auto-detected outbound IP of the panel, used to inject the
@@ -9,6 +10,7 @@ import { config } from '../../config.js';
 //   2. Cached probe result (in-memory, refreshed every 30 min)
 //   3. Probe https://api.ipify.org / https://icanhazip.com (first to win)
 //   4. null  → renderBootstrapCommand emits a YOUR_PANEL_PUBLIC_IP token
+// getPanelPublicIps() adds the IPv6 of PANEL_PUBLIC_IP6 (key only, no probe).
 //
 // Why outbound probe instead of DNS-resolving PUBLIC_URL: when the panel
 // is behind Cloudflare Proxied (orange cloud), the DNS lookup returns a
@@ -86,4 +88,20 @@ export async function getPanelPublicIp(): Promise<string | null> {
     return ip;
   })();
   return inflight;
+}
+
+/**
+ * The panel's addresses for `--panel-ip`: the IPv4 above as it is, then the
+ * IPv6 from PANEL_PUBLIC_IP6 when the operator set it. Empty when neither is
+ * known. The IPv6 is never probed, only the key (a panel in docker often has no
+ * IPv6 outward, and the probe would answer with its IPv4 or nothing); one
+ * address the probe already reported as that same IPv6 is not named twice.
+ */
+export async function getPanelPublicIps(): Promise<string[]> {
+  const v4 = await getPanelPublicIp();
+  const v6 = config.PANEL_PUBLIC_IP6;
+  const out: string[] = [];
+  if (v4) out.push(v4);
+  if (v6 && (!v4 || (canonicalIpv6(v4) ?? v4) !== v6)) out.push(v6);
+  return out;
 }

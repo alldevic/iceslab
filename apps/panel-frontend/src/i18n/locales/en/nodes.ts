@@ -407,6 +407,10 @@ export const nodes = {
     dnsCarriedIntro: 'These rules came to the node from presets and the panel-wide rules and are not edited here. They act for all clients of the node; open the preset to change them.',
     dnsCarriedPanel: 'Panel-wide rules',
     dnsCarriedPresetUnknown: 'preset',
+    dnsDeferredTitle: 'Did not reach the node',
+    dnsDeferredIntro: 'These rules are saved in their presets but the node does not carry them. Open the preset to resolve it.',
+    dnsDeferredConflict: 'Conflict with {{other}} over the name {{domain}}: that source gives it another server, and it came to the node first. The server {{server}} of this rule is not carried.',
+    dnsDeferredLimit: 'The 16-server limit: with this preset the node would have {{count}} servers. The preset is left out whole.',
     dnsCarriedOverridden: 'The names {{names}} are also in the node\'s manual DNS: it answers first, this server is not asked for them.',
     dnsReachNone:
       'No core of this node executes DNS: {{cores}}. The setting is saved, but it does not affect client lookups.',
@@ -537,6 +541,7 @@ export const nodes = {
     exposure: 'Probe exposure',
     exposureCheck: 'Check open ports',
     saved: 'Node saved',
+    savedWithWarnings: 'Saved, with a warning',
     warpError: 'Could not switch WARP',
     exposureSkipped: 'The check is unavailable: {{note}}.',
     exposureClean: 'No unexpected open ports.',

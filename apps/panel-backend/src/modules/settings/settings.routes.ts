@@ -14,7 +14,9 @@ import {
 } from './settings.service.js';
 import { UpdateSettingsSchema } from './settings.schemas.js';
 import { readCapped, subscriptionProbeAnswered } from './settings.probe.js';
-import { planDnsTransfer, pushDnsNodes, RoutingPresetDnsConflictError, RoutingPresetDnsLimitError, writeDnsPlan, type NodeDnsPlan } from '../routing-presets/routing-presets.nodes.js';
+import { dnsAssignRefusal, planDnsTransfer, pushDnsNodes, recomputeCarriedDns, RoutingPresetDnsConflictError, RoutingPresetDnsLimitError, writeDnsPlan, type NodeDnsPlan } from '../routing-presets/routing-presets.nodes.js';
+import { assertCustomPresetExists, RoutingPresetNotFoundError } from '../routing-presets/routing-presets.assign.js';
+import { DEFAULT_PRESET_KEY, readDefaultPresetId } from '../routing-presets/routing-presets.default.js';
 import { checkDnsRules, RoutingPresetRulesError } from '../routing-presets/routing-presets.rules.js';
 import { audit } from '../audit/audit.hook.js';
 
@@ -91,6 +93,10 @@ async function peerCertificateExpiry(url: string): Promise<string | null> {
  *                                                   clash/singbox/xrayjson:
  *                                                   'proxy-all' (default) |
  *                                                   'ru-split' | 'cn-split'
+ *   - `subscriptionDefaultPresetId` (uuid | null, 19.15) - an own routing preset as the
+ *                                                   panel default, stronger than the key
+ *                                                   above when set; its DNS rules go to the
+ *                                                   nodes of squads without a preset.
  *   - `subscriptionTlsFragment` (boolean)         - when true, the Xray JSON
  *                                                   format splits the client's
  *                                                   outgoing ClientHello via a
@@ -196,6 +202,42 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
           throw err;
         }
       }
+      // 19.15: an own preset as the panel default counts as held by every squad
+      // without a preset of its own, so its DNS rules go to their nodes: the
+      // setting and the recompute are one transaction, and a new conflict (19.11,
+      // 19.15) refuses the save with nothing written. Before the panel-wide plan
+      // below, which must see the new default.
+      let defaultChanged = false;
+      let defaultPush: string[] = [];
+      if (input.subscriptionDefaultPresetId !== undefined) {
+        const next = input.subscriptionDefaultPresetId;
+        const prev = await readDefaultPresetId();
+        if (next !== prev) {
+          try {
+            await assertCustomPresetExists(next);
+            defaultPush = await prisma.$transaction(async (tx) => {
+              await tx.appSetting.upsert({
+                where: { key: DEFAULT_PRESET_KEY },
+                create: { key: DEFAULT_PRESET_KEY, value: next as unknown as object, isPublic: PUBLIC_KEYS.has(DEFAULT_PRESET_KEY) },
+                update: { value: next as unknown as object, isPublic: PUBLIC_KEYS.has(DEFAULT_PRESET_KEY) },
+              });
+              return recomputeCarriedDns(tx, {
+                presets: [prev, next].filter((p): p is string => !!p),
+                defaultPresetId: next,
+                refuse: next ? { presetId: next } : undefined,
+              });
+            });
+            defaultChanged = true;
+          } catch (err) {
+            if (err instanceof RoutingPresetNotFoundError) {
+              return reply.code(400).send({ error: err.code, message: err.message, field: DEFAULT_PRESET_KEY });
+            }
+            const refusal = dnsAssignRefusal(err);
+            if (refusal) return reply.code(refusal.status).send({ ...refusal.body, field: DEFAULT_PRESET_KEY });
+            throw err;
+          }
+        }
+      }
       // 19.10: the panel-wide DNS rules go to every node, so they must not
       // disagree with the rules of any preset on any node. Checked before
       // anything is written; the nodes are written and pushed after the save.
@@ -227,6 +269,7 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
         ),
       );
       const changed = entries.filter(([k, v]) => stored.get(k) !== stableJson(v)).map(([k]) => k);
+      if (defaultChanged && !changed.includes(DEFAULT_PRESET_KEY)) changed.push(DEFAULT_PRESET_KEY);
       if (changed.length > 0) {
         audit(req, {
           action: 'settings.update',
@@ -249,6 +292,7 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
           update: { value: jsonValue, isPublic: PUBLIC_KEYS.has(key) },
         });
       }
+      await pushDnsNodes(defaultPush);
       if (dnsPlan.length > 0) await pushDnsNodes(await prisma.$transaction((tx) => writeDnsPlan(tx, dnsPlan)));
       // B5 - bust the /sub settings cache so admin changes take effect now.
       invalidateSubscriptionSettingsCache();

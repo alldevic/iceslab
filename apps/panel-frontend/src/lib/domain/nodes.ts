@@ -132,6 +132,8 @@ export interface Node {
   /** 19.12: the DNS rules the node carries from presets (presetId) and from the panel-wide rules (null), apart from the manual
    *  `dns`; `overridden` = names the manual `dns` also names (it answers first). Absent = a server older than the field. */
   carriedDns?: CarriedDnsSource[];
+  /** 19.15: what the node left out of the rules above (a clash with another source, or the 16-server limit). Absent = a server older than the field. */
+  deferredDns?: DeferredDnsEntry[];
   /** 18.6: the operator's IPv6 setting, auto | on | off. Absent = a server older than the field (reads as auto). */
   ipv6Mode?: Ipv6Mode;
   /** 18.11: the real IPv6 prefix routed to the node for the tunnel, null = none. Absent = a server older than the field. */
@@ -262,6 +264,15 @@ export type NodeCore = NodeCoreInfo;
 export function coreLabel(c: NodeCore): string {
   return c.engine && c.engine !== c.name ? `${c.name} (${c.engine})` : c.name;
 }
+
+/**
+ * 19.15: a DNS rule the node does NOT carry although a preset (or the panel-wide rules) names it: the last recompute
+ * left it out (nodes.deferredDns). `presetId` null = the panel-wide rules; `otherPresetId` is the source that kept the
+ * name, null = the panel-wide rules. `limit`: the preset was left out whole, the node would have had `count` servers.
+ */
+export type DeferredDnsEntry =
+  | { kind: 'conflict'; presetId: string | null; otherPresetId: string | null; domain: string; server: string }
+  | { kind: 'limit'; presetId: string | null; count: number };
 
 export interface CarriedDnsSource {
   presetId: string | null;
@@ -566,8 +577,11 @@ export async function createNode(input: CreateNodeInput): Promise<NodeWithPayloa
   return data;
 }
 
-export async function updateNode(id: string, input: UpdateNodeInput): Promise<Node> {
-  const { data } = await api.put<Node>(`/api/nodes/${id}`, input);
+/** PUT /api/nodes/:id: the node; `warnings` only when the save went through with a caveat (19.15). */
+export type UpdatedNode = Node & { warnings?: string[] };
+
+export async function updateNode(id: string, input: UpdateNodeInput): Promise<UpdatedNode> {
+  const { data } = await api.put<UpdatedNode>(`/api/nodes/${id}`, input);
   return data;
 }
 

@@ -43,6 +43,7 @@ import {
 import { endpointId, isLaterDevice, ofDevice, pickServer } from './endpoint-identity.js';
 import { matchRuleForUserAgent } from '../srr/srr.service.js';
 import type { ResolvedPreset } from '../routing-presets/routing-presets.resolve.js';
+import { loadDefaultPreset } from '../routing-presets/routing-presets.default.js';
 import { frameFor, templateTypeForFormat } from '../subscription-templates/templates.service.js';
 import { frameIncludesHidden, type Frame } from './subscription.frames.js';
 import type { DeviceRouteRule } from '../routing-presets/routing-presets.builtins.js';
@@ -897,6 +898,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           (query.routing ? { kind: 'builtin', id: query.routing } : null) ??
           result.userPreset ??
           result.squadPreset ??
+          (await loadDefaultPreset(settings.defaultPresetId)) ??
           { kind: 'builtin', id: settings.routingPreset };
         routingPreset = preset.kind === 'builtin' ? preset.id : 'proxy-all';
         ownPresetRules = preset.kind === 'custom' ? preset.rules : undefined;

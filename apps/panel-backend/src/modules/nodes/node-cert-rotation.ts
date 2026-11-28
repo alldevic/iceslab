@@ -48,6 +48,13 @@ export class NodeCertRotationError extends Error {
 export interface RotateNodeCertOptions {
   /** Lifetime of the new pair; a year by default. Tests pass a short one. */
   lifetimeMs?: number;
+  /**
+   * An address the node does not have yet (19.15): its name goes into the new
+   * pair beside the old ones, while the node is still dialled at its stored
+   * address. A node moved to an address its certificate does not name cannot be
+   * reached at all, so the pair has to be issued before the address is.
+   */
+  extraAddress?: string;
 }
 
 export interface RotatedNodeCert {
@@ -79,13 +86,14 @@ export async function rotateNodeCert(nodeId: string, opts: RotateNodeCertOptions
   try {
     presented = await transport.presentedCert();
   } catch (err) {
-    throw new NodeCertRotationError(`node ${node.name} is not reachable: ${errorText(err)}`, 'UNREACHABLE');
+    throw new NodeCertRotationError(`node ${node.name} is not reachable: ${reachText(err)}`, 'UNREACHABLE');
   }
-  const want = nodeSanOf(node.address);
   const sans = sansOf(presented.subjectAltName);
   // Node prints an IPv6 SAN expanded and upper-case (`IP Address:2001:DB8:0:0:0:0:0:1`),
   // so the two sides are compared in one spelling, or the name would be added twice.
-  if (!sans.some((s) => sameName(s.value, want.value))) sans.push(want);
+  for (const want of [nodeSanOf(node.address), ...(opts.extraAddress ? [nodeSanOf(opts.extraAddress)] : [])]) {
+    if (!sans.some((s) => sameName(s.value, want.value))) sans.push(want);
+  }
 
   const pair = await generateNodeCert(await bootstrapCa(), {
     commonName: node.name,
@@ -168,4 +176,23 @@ export async function renewExpiringNodeCerts(now = new Date()): Promise<{ renewe
 
 function errorText(err: unknown): string {
   return (err instanceof Error ? err.message : String(err)).slice(0, 300);
+}
+
+/**
+ * Why a dial failed, in words. undici reports every network failure as
+ * "fetch failed" and keeps the reason in `cause`; a refused name check was
+ * indistinguishable from a timeout (19.15, the 502 after a node moved to an
+ * address its certificate does not name), and the two have different cures.
+ */
+export function reachText(err: unknown): string {
+  const cause = err instanceof Error ? (err.cause as { code?: string; message?: string } | undefined) : undefined;
+  if (cause?.code === 'ERR_TLS_CERT_ALTNAME_INVALID') {
+    return (
+      `the certificate it serves does not name the address the panel dials (${cause.message ?? 'name mismatch'}); ` +
+      'give the node its old address back, or reinstall the agent from the new one'
+    );
+  }
+  if (cause?.code && cause.message) return `${errorText(err)} (${cause.code}: ${cause.message})`.slice(0, 300);
+  if (cause?.code) return `${errorText(err)} (${cause.code})`;
+  return errorText(err);
 }

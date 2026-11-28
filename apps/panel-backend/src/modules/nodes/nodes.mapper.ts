@@ -16,6 +16,7 @@ import { readCoreVersions } from './node-core-versions.js';
 import { reportedAwgProtocol } from './node-core-gate.js';
 import type { CascadeEngineNeed } from './node-cascade-needs.js';
 import { overriddenNames, type StoredPresetDns } from '../routing-presets/routing-presets.dns-merge.js';
+import type { StoredDnsConflict } from '../routing-presets/routing-presets.nodes.js';
 import { publicHysteriaTls, type PublicHysteriaTls } from './hysteria-tls-shape.js';
 
 // G (Zashchita / hardening) - public shape of the nodes.hardening jsonb blob.
@@ -146,6 +147,10 @@ export interface PublicNodeDto {
    *  manual `dns`. presetId null = the panel-wide rules; the screen names the preset from its list. `overridden` = the names
    *  of the rule the node's own DNS also names, which it answers first. Empty = nothing carried. */
   carriedDns: { presetId: string | null; rules: { match: string[]; server: string; overridden: string[] }[] }[];
+  /** 19.15: what the last recompute left OUT of the node (nodes.preset_dns_conflicts, 19.11): a rule of `presetId` that
+   *  clashed with `otherPresetId` (null = the panel-wide rules) over `domain`, or a preset left out whole because the node
+   *  would pass 16 servers (`count`). The screen names the presets from its list. Empty = nothing was left out. */
+  deferredDns: DeferredDns[];
   /** 18.6: the operator's IPv6 setting, auto | on | off (IPV6_MODES in shared). A row
    *  the column does not hold reads as auto. */
   ipv6Mode: Ipv6Mode;
@@ -238,6 +243,11 @@ export interface PublicNodeDto {
   updatedAt: string;
 }
 
+/** One entry of `PublicNodeDto.deferredDns`; `presetId` null = the panel-wide rules. */
+export type DeferredDns =
+  | { kind: 'conflict'; presetId: string | null; otherPresetId: string | null; domain: string; server: string }
+  | { kind: 'limit'; presetId: string | null; count: number };
+
 /**
  * The keys of the node DTO a screen cannot take for granted, named by the
  * server that renders them. Served as `fields` beside the list (GET
@@ -262,6 +272,7 @@ export const NODE_DTO_FIELDS = [
   'coreVersions',
   'engines',
   'carriedDns',
+  'deferredDns',
   'hiddenByCascade',
   'cascadeNeedsEngines',
   'cores[].reason',
@@ -278,6 +289,15 @@ function publicCarriedDns(node: Node): PublicNodeDto['carriedDns'] {
     presetId: s.presetId,
     rules: s.rules.map((r) => ({ match: [...r.match], server: r.server, overridden: overriddenNames(manual, r) })),
   }));
+}
+
+function publicDeferredDns(node: Node): DeferredDns[] {
+  const stored = Array.isArray(node.presetDnsConflicts) ? (node.presetDnsConflicts as unknown as StoredDnsConflict[]) : [];
+  return stored.map((c) =>
+    c.kind === 'conflict'
+      ? { kind: 'conflict', presetId: c.presetId, otherPresetId: c.otherPresetId, domain: c.domain, server: c.server }
+      : { kind: 'limit', presetId: c.presetId, count: c.count },
+  );
 }
 
 /**
@@ -316,6 +336,7 @@ export function mapNodeToPublic(node: Node): PublicNodeDto {
     policyId: node.policyId,
     dns: (node.dns as DnsCfg | null) ?? null,
     carriedDns: publicCarriedDns(node),
+    deferredDns: publicDeferredDns(node),
     ipv6Mode: readIpv6Mode(node.ipv6Mode),
     tunnelIpv6Prefix: node.tunnelIpv6Prefix ?? null,
     cores: (node.cores as NodeCores | null) ?? null,

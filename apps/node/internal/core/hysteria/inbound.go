@@ -176,6 +176,11 @@ type ChainHandoff struct {
 	Port     int
 	Username string
 	Password string
+	// Closed is no hand-off at all but its refusal, 19.15: an entry whose
+	// hand-off was not accepted and which holds none. It is drawn closed (every
+	// connection rejected), never with a `direct` way out. Why is the reason.
+	Closed bool
+	Why    string
 }
 
 // chainHandoffWire mirrors NodeChain.userCore.socks in shared/transport.ts.
@@ -373,7 +378,12 @@ func renderConfigDns(adapterCfg Config, inbound InboundConfig, handoff *ChainHan
 		fmt.Fprintf(&b, "  secret: %s\n", adapterCfg.TrafficStatsSecret)
 	}
 
-	if handoff != nil {
+	if handoff != nil && handoff.Closed {
+		// 19.15: no hand-off the entry could take. The listener stays and the
+		// handshake passes; `reject(all)` closes every proxied request, and no
+		// outbound is drawn for one to leave by.
+		b.WriteString("\nacl:\n  inline:\n    - reject(all)\n")
+	} else if handoff != nil {
 		// No resolver for a hand-off: the only outbound is the chain's socks5,
 		// which gets the name as it came and the chain resolves it.
 		if err := writeChainOutbound(&b, handoff); err != nil {
@@ -408,6 +418,28 @@ func writeDirectOutbound(b *bytes.Buffer) {
 	fmt.Fprintf(b, "      mode: \"%s\"\n", mode)
 }
 
+// validate says whether the hand-off can be drawn: a port, credentials that
+// cannot close their YAML scalar.
+func (h *ChainHandoff) validate() error {
+	if h.Port < 1 || h.Port > 65535 {
+		return fmt.Errorf("hysteria chain hand-off: port %d is not a port", h.Port)
+	}
+	if h.Username == "" || h.Password == "" {
+		// The chain's socks listeners are authenticated even on loopback (a VPS
+		// has other users, and an open proxy on 127.0.0.1 is an open relay for
+		// anyone with a shell), so a hand-off without credentials would be
+		// refused by the listener on every connection.
+		return fmt.Errorf("hysteria chain hand-off: username and password are required")
+	}
+	if err := validateInboundYAMLSafe("chain username", h.Username); err != nil {
+		return err
+	}
+	if err := validateInboundYAMLSafe("chain password", h.Password); err != nil {
+		return err
+	}
+	return nil
+}
+
 // writeChainOutbound appends the hand-off to the chain: ONE socks5 outbound,
 // and nothing beside it.
 //
@@ -433,20 +465,7 @@ func writeDirectOutbound(b *bytes.Buffer) {
 // have no connection, which is loud, instead of leaving through the entry,
 // which is silent. The same fail-closed rule as the xray entry (К4).
 func writeChainOutbound(b *bytes.Buffer, h *ChainHandoff) error {
-	if h.Port < 1 || h.Port > 65535 {
-		return fmt.Errorf("hysteria chain hand-off: port %d is not a port", h.Port)
-	}
-	if h.Username == "" || h.Password == "" {
-		// The chain's socks listeners are authenticated even on loopback (a VPS
-		// has other users, and an open proxy on 127.0.0.1 is an open relay for
-		// anyone with a shell), so a hand-off without credentials would be
-		// refused by the listener on every connection.
-		return fmt.Errorf("hysteria chain hand-off: username and password are required")
-	}
-	if err := validateInboundYAMLSafe("chain username", h.Username); err != nil {
-		return err
-	}
-	if err := validateInboundYAMLSafe("chain password", h.Password); err != nil {
+	if err := h.validate(); err != nil {
 		return err
 	}
 	b.WriteString("\noutbounds:\n")

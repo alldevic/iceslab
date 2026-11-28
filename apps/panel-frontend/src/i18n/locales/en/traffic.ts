@@ -172,6 +172,7 @@ export const traffic = {
     presetHeldSquads_one: '{{count}} squad ({{names}})',
     presetHeldSquads_other: '{{count}} squads ({{names}})',
     presetHeldMore: '{{names}} and {{count}} more',
+    presetHeldDefault: 'the panel\'s default preset',
     // Stands where the delete button stands on the two neighbouring tabs. An
     // empty corner reads as a button somebody forgot, so the absence is said.
     presetNoDelete: 'built in, cannot be deleted',

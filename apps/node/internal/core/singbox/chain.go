@@ -32,6 +32,11 @@ type ChainHandoff struct {
 	Port     int
 	Username string
 	Password string
+	// Closed is no hand-off at all but its refusal, 19.15: an entry whose
+	// hand-off was not accepted and which holds none. It is drawn closed (every
+	// connection rejected), never with a `direct` way out. Why is the reason.
+	Closed bool
+	Why    string
 }
 
 // chainHandoffWire mirrors NodeChain.userCore.socks in shared/transport.ts.
@@ -58,11 +63,11 @@ func (a *Adapter) ApplyCascade(raw json.RawMessage) error {
 	if len(raw) > 0 && string(raw) != "null" {
 		var wire chainHandoffWire
 		if err := json.Unmarshal(raw, &wire); err != nil {
-			return fmt.Errorf("singbox ApplyCascade: %w", err)
+			return a.refuseHandoff(fmt.Errorf("singbox ApplyCascade: %w", err))
 		}
 		handoff = &ChainHandoff{Port: wire.Port, Username: wire.Username, Password: wire.Password}
 		if err := handoff.validate(); err != nil {
-			return err
+			return a.refuseHandoff(err)
 		}
 	}
 
@@ -88,12 +93,57 @@ func (a *Adapter) ApplyCascade(raw json.RawMessage) error {
 			a.chain = prev
 		}
 		a.mu.Unlock()
+		// The hand-off was the push's; a refusal that leaves no hand-off must not
+		// leave a `direct` one.
+		return a.refuseHandoff(err)
 	}
 	if err == nil {
 		a.logger.Info("singbox ApplyCascade: hand-off to the chain changed",
 			"protocol", a.protocol, "chain", handoff != nil)
 	}
 	return err
+}
+
+var _ core.CascadeCloser = (*Adapter)(nil)
+
+// CloseCascade implements core.CascadeCloser.
+func (a *Adapter) CloseCascade(reason string) error {
+	return a.refuseHandoff(errors.New(reason))
+}
+
+// CascadeClosed implements core.CascadeCloser.
+func (a *Adapter) CascadeClosed() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.chain != nil && a.chain.Closed {
+		return a.chain.Why
+	}
+	return ""
+}
+
+// refuseHandoff is the answer to a hand-off this instance cannot take (19.15):
+// with none held, the core is drawn closed, so its users get nothing instead
+// of leaving through the entry; one already held is kept, as before. The error
+// goes back to the caller either way.
+func (a *Adapter) refuseHandoff(cause error) error {
+	a.mu.Lock()
+	if a.chain != nil {
+		a.mu.Unlock()
+		return cause
+	}
+	a.chain = &ChainHandoff{Closed: true, Why: "cascade entry closed: " + cause.Error()}
+	nothingRuns := len(a.inbounds) == 0
+	a.mu.Unlock()
+	if nothingRuns {
+		return cause
+	}
+	if err := a.regenerateAndRestart(); err != nil {
+		a.logger.Error("singbox: drawing the closed cascade entry failed", "protocol", a.protocol, "err", err)
+	} else {
+		a.logger.Warn("singbox: no hand-off to the chain, the entry rejects every connection",
+			"protocol", a.protocol, "why", cause)
+	}
+	return cause
 }
 
 func (h *ChainHandoff) validate() error {

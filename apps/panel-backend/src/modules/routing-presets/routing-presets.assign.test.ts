@@ -337,3 +337,57 @@ describe('19.11: an assignment moves the carried DNS rules', () => {
     expect(await queued(n.id)).toBe(true);
   });
 });
+
+describe('19.15: the default preset follows a squad taking or leaving a preset of its own', () => {
+  const rule = (match: string, server: string) => ({ match: [match], server, note: '' });
+  const carried = async (nodeId: string) => (await prisma.node.findUniqueOrThrow({ where: { id: nodeId }, select: { presetDnsRules: true } })).presetDnsRules;
+  const queued = async (nodeId: string) => !!(await inboundSyncQueue.getJob(`apply-${nodeId}`));
+  beforeEach(() => inboundSyncQueue.obliterate({ force: true }));
+  afterEach(() => inboundSyncQueue.obliterate({ force: true }));
+
+  it('a squad given a preset of its own loses the default rules on its nodes; one that lets go gets them back; the changed nodes are pushed', async () => {
+    const [n1, n2] = [await makeNode(), await makeNode()];
+    const d = (await prisma.routingPreset.create({ data: { name: 'Default', dnsRules: [rule('d.com', '10.99.0.1')] }, select: { id: true } })).id;
+    const q = (await prisma.routingPreset.create({ data: { name: 'Own', dnsRules: [rule('q.com', '10.99.0.2')] }, select: { id: true } })).id;
+    const s1 = await makeSquad([n1.id]);
+    await makeSquad([n2.id]);
+    let res = await app.inject({ method: 'PUT', url: '/api/settings', headers: auth(), payload: { subscriptionDefaultPresetId: d } });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(await carried(n1.id)).toEqual([{ presetId: d, rules: [{ match: ['d.com'], server: '10.99.0.1' }] }]);
+    expect(await queued(n1.id) && (await queued(n2.id))).toBe(true);
+    await inboundSyncQueue.obliterate({ force: true });
+
+    res = await app.inject({ method: 'PUT', url: `/api/squads/${s1.id}`, headers: auth(), payload: { customRoutingPresetId: q } });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(await carried(n1.id)).toEqual([{ presetId: q, rules: [{ match: ['q.com'], server: '10.99.0.2' }] }]);
+    expect(await carried(n2.id)).toEqual([{ presetId: d, rules: [{ match: ['d.com'], server: '10.99.0.1' }] }]);
+    expect(await queued(n1.id)).toBe(true);
+    expect(await queued(n2.id)).toBe(false);
+
+    res = await app.inject({ method: 'PUT', url: `/api/squads/${s1.id}`, headers: auth(), payload: { customRoutingPresetId: null } });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(await carried(n1.id)).toEqual([{ presetId: d, rules: [{ match: ['d.com'], server: '10.99.0.1' }] }]);
+  });
+
+  it('changing the default recomputes and pushes only the nodes whose rules changed', async () => {
+    const [bare, held] = [await makeNode(), await makeNode()];
+    const [d1, d2] = [
+      (await prisma.routingPreset.create({ data: { name: 'D1', dnsRules: [rule('one.com', '10.99.0.1')] }, select: { id: true } })).id,
+      (await prisma.routingPreset.create({ data: { name: 'D2', dnsRules: [rule('two.com', '10.99.0.2')] }, select: { id: true } })).id,
+    ];
+    const q = (await prisma.routingPreset.create({ data: { name: 'Own' }, select: { id: true } })).id;
+    await makeSquad([bare.id]);
+    await makeSquad([held.id], { presetId: q });
+    const put = (v: string | null) => app.inject({ method: 'PUT', url: '/api/settings', headers: auth(), payload: { subscriptionDefaultPresetId: v } });
+    expect((await put(d1)).statusCode).toBe(200);
+    await inboundSyncQueue.obliterate({ force: true });
+    expect((await put(d2)).statusCode).toBe(200);
+    expect(await carried(bare.id)).toEqual([{ presetId: d2, rules: [{ match: ['two.com'], server: '10.99.0.2' }] }]);
+    expect(await queued(bare.id)).toBe(true);
+    expect(await queued(held.id)).toBe(false);
+    // The same value again changes nothing and pushes nothing.
+    await inboundSyncQueue.obliterate({ force: true });
+    expect((await put(d2)).statusCode).toBe(200);
+    expect(await queued(bare.id)).toBe(false);
+  });
+});

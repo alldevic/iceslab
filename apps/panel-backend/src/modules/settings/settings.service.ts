@@ -26,6 +26,8 @@ export interface SubscriptionSettings {
   announceTemplate: string | null;
   brandName: string | null;
   routingPreset: RoutingPresetId;
+  /** 19.15: an own preset as the panel default, stronger than `routingPreset` when set; null = none. */
+  defaultPresetId: string | null;
   /** TLS-fragment - split the ClientHello via a freedom `fragment` outbound in
    *  the Xray JSON format so SNI-DPI cannot match the handshake. Xray JSON only. */
   tlsFragment: boolean;
@@ -258,6 +260,7 @@ export async function getSubscriptionSettings(): Promise<SubscriptionSettings> {
     announceTemplate: asString('subscriptionAnnounceTemplate'),
     brandName: asString('brandName'),
     routingPreset: isRoutingPresetId(routingRaw) ? routingRaw : 'proxy-all',
+    defaultPresetId: asString('subscriptionDefaultPresetId'),
     tlsFragment,
     customRoutingRules,
     customDomainLists,

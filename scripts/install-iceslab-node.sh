@@ -605,9 +605,17 @@ XR_FLAGS_GIVEN=""
 #
 # do_uninstall [keep_protocol_rules]: with 1 the ufw rules of the protocols stay
 # (--uninstall --keep-cores: the cores stay, and the operator may run them
-# themselves); --reset and a full --uninstall take them off.
+# themselves); --reset and a full --uninstall take them off. The ports the agent
+# opened for its inbounds and the buffer/BBR drop-in follow the same switch.
 do_uninstall() {
-  local keep_protocol_rules="${1:-0}" rule
+  local keep_protocol_rules="${1:-0}" rule agent_rules="" agent_rules_found=0
+  # What the agent opened in ufw for its inbounds' ports (firewall.Allow), one
+  # port/proto per line in the file it keeps beside the stored push. Read before
+  # the env directory goes. An agent from before the record has none.
+  if [[ -r /etc/iceslab-node/firewall-rules ]]; then
+    agent_rules_found=1
+    agent_rules=$(grep -E '^[0-9]{1,5}/(tcp|udp)$' /etc/iceslab-node/firewall-rules || true)
+  fi
   log "Stopping iceslab-node service (if running)"
   systemctl stop iceslab-node 2>/dev/null || true
   systemctl disable iceslab-node 2>/dev/null || true
@@ -640,6 +648,14 @@ do_uninstall() {
 
   log "Removing env directory (/etc/iceslab-node)"
   rm -rf /etc/iceslab-node
+
+  # 99-iceslab.conf (buffers, fq, BBR) is this script's own file. The values
+  # stay in the running kernel until the next boot; nothing here puts back the
+  # ones from before, the install never wrote them down.
+  if [[ "$keep_protocol_rules" != 1 && -e /etc/sysctl.d/99-iceslab.conf ]]; then
+    log "Removing /etc/sysctl.d/99-iceslab.conf"
+    rm -f /etc/sysctl.d/99-iceslab.conf
+  fi
 
   # fail2ban: remove only our jail/filter and leave the package installed, it
   # may protect other services. Not /etc/fail2ban/jail.local: no version of this
@@ -681,6 +697,17 @@ do_uninstall() {
     # `delete allow <port>/<proto>` takes only that rule, never one that names a
     # source address, so an operator's own rule for these ports stays.
     if [[ "$keep_protocol_rules" != 1 ]]; then
+      # The ports the agent opened for its inbounds, by its own record. Never
+      # SSH, whatever the file says; `delete allow N/proto` takes only the open
+      # rule, one that names a source stays.
+      if [[ $agent_rules_found -eq 0 ]]; then
+        log "No record of the ports the agent opened (an older agent): its ufw rules for inbound ports stay"
+      fi
+      for rule in $agent_rules; do
+        [[ "${rule%%/*}" != 22 ]] || continue
+        log "Removing UFW allow rule for ${rule} (opened by the agent)"
+        ufw --force delete allow "$rule" >/dev/null || true
+      done
       for rule in $PROTOCOL_PORTS; do
         if grep -Eq "^${rule}( \(v6\))?[[:space:]]+ALLOW( IN)?[[:space:]]+Anywhere" <<<"$ufw_rules"; then
           log "Removing UFW allow rule for ${rule}"

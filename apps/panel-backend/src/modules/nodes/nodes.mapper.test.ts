@@ -31,3 +31,28 @@ describe('mapNodeToPublic and the hardening blob', () => {
     expect(mapNodeToPublic(row(undefined)).hardening).toBeNull();
   });
 });
+
+describe('mapNodeToPublic and deferredDns (19.15: what the node left out)', () => {
+  const withConflicts = (v: unknown): Node => ({ ...row(null), presetDnsConflicts: v }) as unknown as Node;
+
+  it('is an empty list when nothing was left out, whatever the column holds', () => {
+    expect(mapNodeToPublic(withConflicts(null)).deferredDns).toEqual([]);
+    expect(mapNodeToPublic(withConflicts(undefined)).deferredDns).toEqual([]);
+    expect(mapNodeToPublic(withConflicts({ not: 'a list' })).deferredDns).toEqual([]);
+  });
+
+  it('carries both kinds: a clash with another source and a preset left out by the 16-server limit', () => {
+    const dto = mapNodeToPublic(
+      withConflicts([
+        { kind: 'conflict', presetId: 'b', otherPresetId: 'a', domain: 'example.com', server: '10.0.0.2' },
+        { kind: 'conflict', presetId: 'c', otherPresetId: null, domain: 'geosite:x', server: '10.0.0.3' },
+        { kind: 'limit', presetId: 'd', count: 19 },
+      ]),
+    );
+    expect(dto.deferredDns).toEqual([
+      { kind: 'conflict', presetId: 'b', otherPresetId: 'a', domain: 'example.com', server: '10.0.0.2' },
+      { kind: 'conflict', presetId: 'c', otherPresetId: null, domain: 'geosite:x', server: '10.0.0.3' },
+      { kind: 'limit', presetId: 'd', count: 19 },
+    ]);
+  });
+});

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { canonicalIpv6 } from '@iceslab/shared';
 import { collidingHoneypotPrefix } from './lib/auth/honeypot-paths.js';
 
 /** The panel's own routes on the frontend's nginx; see SUBSCRIPTION_PATH_PREFIX. */
@@ -289,6 +290,27 @@ export const ConfigSchema = z.object({
     .string()
     .optional()
     .transform((v) => (v === '' ? undefined : v)),
+
+  // The panel's IPv6 egress address, for a panel that reaches nodes over IPv6
+  // (a node on an IPv6 address). Set, the install command names both addresses
+  // in `--panel-ip a,b` and the node's ufw opens :1337/tcp from each. Only from
+  // this key: there is no probe, a panel in docker often has no IPv6 outward
+  // and a probe would answer with its IPv4 or nothing. Blank is read as unset
+  // (compose passes `${VAR:-}`); a value that is not an IPv6 literal stops the
+  // boot, so a typo does not become a firewall rule that lets nobody in.
+  PANEL_PUBLIC_IP6: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v.trim() === '' ? undefined : v.trim()))
+    .transform((v, ctx) => {
+      if (v === undefined) return undefined;
+      const canon = canonicalIpv6(v);
+      if (!canon) {
+        ctx.addIssue({ code: 'custom', message: `PANEL_PUBLIC_IP6 must be an IPv6 address, got "${v}"` });
+        return z.NEVER;
+      }
+      return canon;
+    }),
 
   // Slice S7: login bruteforce defence. After this many failed logins
   // for the same username (case-insensitive) within the window, lock the

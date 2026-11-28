@@ -21,6 +21,7 @@ import { apiErrorMessage } from '@/lib/net/client';
 import { loadView } from '@/lib/ui/loadView';
 import { LoadFailed } from '@/ui/LoadFailed';
 import { getSettings, updateSettings, type AdminSettings } from '@/lib/domain/settings';
+import { listRoutingPresets } from '@/lib/domain/routePolicies';
 import { CARD, CYAN, CYAN_HI, DIM, EDGE, FAINT, GROUND, HAIRLINE, MIST, MOSS, SNOW, WELL } from '@/contours/subscription/lib/colors';
 
 /**
@@ -73,6 +74,8 @@ interface Draft {
   supportUrl: string;
   announce: string;
   preset: RoutingPresetId;
+  /** 19.15: an own preset as the default (its id), stronger than `preset`; null = the built-in one above. */
+  defaultPresetId: string | null;
   tlsFragment: boolean;
   /** One field, comma- or space-separated: what an operator pastes. */
   wgDns: string;
@@ -85,6 +88,8 @@ export function SubscriptionMetadataPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const settingsQuery = useQuery({ queryKey: ['settings', 'all'], queryFn: getSettings });
+  const presetsQuery = useQuery({ queryKey: ['routing-presets'], queryFn: listRoutingPresets });
+  const ownPresets = (presetsQuery.data?.presets ?? []).filter((p) => !p.builtIn);
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -113,6 +118,7 @@ export function SubscriptionMetadataPage() {
         subscriptionSupportUrl: draft.supportUrl.trim() || null,
         subscriptionAnnounceTemplate: draft.announce.trim() || null,
         subscriptionRoutingPreset: draft.preset,
+        subscriptionDefaultPresetId: draft.defaultPresetId,
         subscriptionTlsFragment: draft.tlsFragment,
         subscriptionWgDns: wgDnsList(draft.wgDns),
         subscriptionWgDropIpv6: draft.wgDropIpv6,
@@ -383,10 +389,21 @@ export function SubscriptionMetadataPage() {
             {PRESETS.map((p) => (
               <PresetTile
                 key={p.id}
-                selected={draft.preset === p.id}
+                selected={draft.defaultPresetId === null && draft.preset === p.id}
                 title={t(p.title)}
                 hint={t(p.hint)}
-                onClick={() => patch({ preset: p.id })}
+                onClick={() => patch({ preset: p.id, defaultPresetId: null })}
+              />
+            ))}
+            {/* 19.15: an own preset as the default. It is handed to whoever has no
+                preset of their own, and its DNS rules go to their nodes. */}
+            {ownPresets.map((p) => (
+              <PresetTile
+                key={p.id}
+                selected={draft.defaultPresetId === p.id}
+                title={p.name}
+                hint={t('metadata.presetOwnHint')}
+                onClick={() => patch({ defaultPresetId: p.id })}
               />
             ))}
             <UnstyledButton
@@ -485,6 +502,7 @@ function toDraft(s: AdminSettings): Draft {
     supportUrl: s.subscriptionSupportUrl ?? '',
     announce: s.subscriptionAnnounceTemplate ?? '',
     preset: s.subscriptionRoutingPreset ?? 'proxy-all',
+    defaultPresetId: s.subscriptionDefaultPresetId ?? null,
     tlsFragment: s.subscriptionTlsFragment ?? false,
     wgDns: (s.subscriptionWgDns ?? []).join(', '),
     wgDropIpv6: s.subscriptionWgDropIpv6 ?? false,

@@ -249,12 +249,6 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
             message: err.message,
           });
         }
-        if (err instanceof adminService.AdminAlreadyExistsError) {
-          return reply.code(409).send({
-            error: 'CONFLICT',
-            message: err.message,
-          });
-        }
         throw err;
       }
     },

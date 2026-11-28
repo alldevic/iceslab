@@ -18,12 +18,16 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/icecompany-tech/iceslab/apps/node/internal/atomicfile"
 )
 
 // N11 - cache of (port/proto) specs already ensured this process lifetime.
@@ -35,6 +39,58 @@ var (
 	allowedMu    sync.Mutex
 	allowedSpecs = make(map[string]struct{})
 )
+
+// recordPath is the file the agent keeps the port rules it opened in, one
+// "port/proto" per line, beside the stored push. The installer's --uninstall
+// reads it to take those rules out again: ufw cannot tell the agent's rule on
+// 24084/tcp from one the operator added by hand, and the agent is gone by then.
+// Empty (the default) keeps nothing. Guarded by allowedMu.
+var recordPath string
+
+// SetRecordPath names the file Allow writes its rules to and Close takes them
+// out of. Called once at start.
+func SetRecordPath(path string) {
+	allowedMu.Lock()
+	recordPath = path
+	allowedMu.Unlock()
+}
+
+// recordLocked adds (add) or removes the spec in the record. Caller holds
+// allowedMu. A failed write is logged and nothing more: the rule is open
+// either way, and only the uninstall's tidying suffers.
+func recordLocked(logger *slog.Logger, spec string, add bool) {
+	if recordPath == "" {
+		return
+	}
+	have := map[string]struct{}{}
+	if body, err := os.ReadFile(recordPath); err == nil {
+		for _, line := range strings.Split(string(body), "\n") {
+			if line = strings.TrimSpace(line); line != "" {
+				have[line] = struct{}{}
+			}
+		}
+	}
+	if _, in := have[spec]; in == add {
+		return
+	}
+	if add {
+		have[spec] = struct{}{}
+	} else {
+		delete(have, spec)
+	}
+	lines := make([]string, 0, len(have))
+	for l := range have {
+		lines = append(lines, l)
+	}
+	sort.Strings(lines)
+	body := strings.Join(lines, "\n")
+	if body != "" {
+		body += "\n"
+	}
+	if err := atomicfile.Write(recordPath, []byte(body), 0o600); err != nil {
+		logger.Warn("firewall: cannot keep the record of opened ports", "path", recordPath, "err", err)
+	}
+}
 
 // ufwLockRe matches the transient lock-contention message ufw surfaces when the
 // underlying xtables lock is held by another process. ufw shells out to
@@ -107,6 +163,7 @@ func Allow(ctx context.Context, logger *slog.Logger, port int, proto string) {
 	}
 	allowedMu.Lock()
 	allowedSpecs[spec] = struct{}{}
+	recordLocked(logger, spec, true)
 	allowedMu.Unlock()
 	logger.Info("firewall.Allow: rule ensured", "spec", spec)
 }
@@ -122,6 +179,7 @@ func Close(ctx context.Context, logger *slog.Logger, port int, proto string) {
 	spec := fmt.Sprintf("%d/%s", port, proto)
 	allowedMu.Lock()
 	delete(allowedSpecs, spec)
+	recordLocked(logger, spec, false)
 	allowedMu.Unlock()
 	if _, err := exec.LookPath("ufw"); err != nil {
 		logger.Debug("firewall.Close: ufw not installed, skipping", "spec", spec)

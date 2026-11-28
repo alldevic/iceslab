@@ -9,6 +9,7 @@ import type {
 import { prisma } from '../../prisma.js';
 import { redis } from '../../lib/infra/redis.js';
 import { NodeTransport, NodeRequestError } from './nodes.transport.js';
+import { pushEntriesIfExitIpv6Moved } from '../cascades/cascade.exit-ipv6-push.js';
 import { intendedFromReport } from './node-intended-engines.js';
 import { singboxPinFor } from './hysteria-tls-shape.js';
 import { inboundSyncQueue, reconcileNodeRevisions } from '../inbounds/inbounds.queue.js';
@@ -65,6 +66,7 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
       coreVersion: true,
       coreRestarts: true,
       cores: true,
+      ipv6Mode: true,
       chainStatus: true,
       chainSentAt: true,
       geo: true,
@@ -257,6 +259,16 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
               : {}),
           },
         });
+      }
+      // 19.15: the entries of the cascades this node exits are drawn by whether it
+      // leaves by IPv6; when that answer moved they are pushed now, not at their
+      // next push for another reason.
+      if (coresChanged) {
+        await pushEntriesIfExitIpv6Moved(
+          node.id,
+          { cores: storedCores, ipv6Mode: node.ipv6Mode },
+          { cores: result.cores, ipv6Mode: node.ipv6Mode },
+        );
       }
       // Alert on a core that restarted since the previous tick. This is the
       // whole reason the counter exists: a memory-ceiling restart drops live

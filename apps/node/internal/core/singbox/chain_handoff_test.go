@@ -106,9 +106,11 @@ func TestAHandoffTheRendererWouldRefuseIsNotAccepted(t *testing.T) {
 		if err := a.ApplyCascade(json.RawMessage(bad)); err == nil {
 			t.Errorf("%s accepted", bad)
 		}
-		if a.chain != nil {
-			t.Fatalf("%s left a hand-off behind", bad)
+		// Not a hand-off: with none held the entry is drawn closed (19.15).
+		if a.chain == nil || !a.chain.Closed || a.chain.Port != 0 {
+			t.Fatalf("%s left %+v, want the closed entry", bad, a.chain)
 		}
+		a.chain = nil
 	}
 }
 

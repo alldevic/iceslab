@@ -252,7 +252,7 @@ export async function getPresetNodes(id: string): Promise<PresetNodes> {
  *   403 ROUTING_PRESET_BUILT_IN
  *   404 NOT_FOUND (the preset went away)
  *   409 NAME_TAKEN {field: 'name'}
- *   409 ROUTING_PRESET_IN_USE {users, squads, userCount, squadCount}
+ *   409 ROUTING_PRESET_IN_USE {users, squads, userCount, squadCount, isDefault}
  *   409 ROUTING_PRESET_DNS_CONFLICT {node, preset, panel, domain} (19.10: another preset, or the panel-wide
  *       rules (`panel: true`), gives the name another server on that node; `preset` is its name)
  *   409 ROUTING_PRESET_DNS_NODE_LIMIT {node, count} (the node would have more than 16 DNS servers)
@@ -275,6 +275,8 @@ export type RoutingPresetRefusal =
       squads: string[];
       userCount: number;
       squadCount: number;
+      /** 19.15: the preset is the panel's default one; set only when it is. */
+      isDefault?: true;
     };
 
 const PRESET_STATUS: Record<string, number> = {
@@ -328,7 +330,14 @@ export function routingPresetRefusal(err: unknown): RoutingPresetRefusal | null 
     // The counts are the whole truth (the lists are capped); a count missing
     // or below its list is read from the list, never as zero.
     const count = (v: unknown, floor: number) => (typeof v === 'number' && v >= floor ? v : floor);
-    return { code, users, squads, userCount: count(d.userCount, users.length), squadCount: count(d.squadCount, squads.length) };
+    return {
+      code,
+      users,
+      squads,
+      userCount: count(d.userCount, users.length),
+      squadCount: count(d.squadCount, squads.length),
+      ...(d.isDefault === true ? { isDefault: true as const } : {}),
+    };
   }
   return { code: code as 'ROUTING_PRESET_BUILT_IN' | 'NOT_FOUND' | 'NAME_TAKEN' };
 }

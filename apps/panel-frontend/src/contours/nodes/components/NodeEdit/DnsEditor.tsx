@@ -19,7 +19,7 @@ import {
   type DnsQueryStrategy,
   type DnsServerForm,
 } from '@/contours/nodes/lib/nodeDnsForm';
-import type { CarriedDnsSource, NodeCore } from '@/lib/domain/nodes';
+import type { CarriedDnsSource, DeferredDnsEntry, NodeCore } from '@/lib/domain/nodes';
 
 /** Built-in resolvers of a node with no DNS of its own (core.DefaultResolvers in apps/node). */
 const BUILT_IN = DEFAULT_NODE_RESOLVERS.join(', ');
@@ -34,12 +34,15 @@ export function DnsEditor({
   onChange,
   cores,
   carried,
+  deferred,
 }: {
   value: DnsForm;
   onChange: (next: DnsForm) => void;
   cores: NodeCore[] | null | undefined;
   /** What the node carries from presets (19.12), shown apart and read only. */
   carried?: CarriedDnsSource[];
+  /** What did not reach the node (19.15), shown under the carried rules. */
+  deferred?: DeferredDnsEntry[];
 }) {
   const { t } = useTranslation();
   // expectIps, strategy and cache stay folded unless the node already uses them.
@@ -178,7 +181,7 @@ export function DnsEditor({
         </PlainButton>
       </Box>
 
-      <CarriedDns carried={carried} />
+      <CarriedDns carried={carried} deferred={deferred} />
 
       <DnsReach cores={cores} />
     </Stack>

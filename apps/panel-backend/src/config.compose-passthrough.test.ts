@@ -76,3 +76,17 @@ describe('docker-compose.prod.yml passes every panel setting through', () => {
     expect(composeEnvKeys()).toContain('DATABASE_URL');
   });
 });
+
+// 19.15 item 1: PANEL_PUBLIC_IP6 has to reach the container whichever compose
+// file runs the panel, and the operator has to find it in the env example.
+describe('PANEL_PUBLIC_IP6 is passed through and documented', () => {
+  it.each(['docker-compose.prod.yml', 'docker-compose.ghcr.yml'])('%s passes it blank-able', (file) => {
+    const src = readFileSync(resolve(repoRoot, file), 'utf8');
+    expect(src).toMatch(/^\s+PANEL_PUBLIC_IP6: \$\{PANEL_PUBLIC_IP6:-\}\s*$/m);
+  });
+
+  it('.env.production.example lists it', () => {
+    const src = readFileSync(resolve(repoRoot, '.env.production.example'), 'utf8');
+    expect(src).toMatch(/^PANEL_PUBLIC_IP6=$/m);
+  });
+});

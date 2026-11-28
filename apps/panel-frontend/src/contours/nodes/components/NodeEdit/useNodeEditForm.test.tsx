@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { notifications } from '@mantine/notifications';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import type { Node } from '@/lib/domain/nodes';
 import * as nodesApi from '@/lib/domain/nodes';
@@ -125,5 +126,37 @@ describe('useNodeEditForm: WARP', () => {
       result.current?.warpMutation.mutate(true);
     });
     await waitFor(() => expect(findNode).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe('useNodeEditForm: save warnings (19.15)', () => {
+  const update = vi.mocked(nodesApi.updateNode);
+
+  it('a save with warnings shows them after the saved toast', async () => {
+    const show = vi.spyOn(notifications, 'show').mockReturnValue('x');
+    update.mockResolvedValue({ ...node('a', {}), warnings: ['node unreachable, certificate not reissued'] });
+    const { result } = renderInRoute('a');
+    await waitFor(() => expect(result.current?.form.values.name).toBe('node-a'));
+    await act(async () => {
+      result.current?.saveMutation.mutate();
+    });
+    await waitFor(() => expect(show).toHaveBeenCalledTimes(2));
+    expect(show.mock.calls[1][0]).toMatchObject({
+      color: 'yellow',
+      title: 'nodeEdit.savedWithWarnings',
+      message: 'node unreachable, certificate not reissued',
+    });
+  });
+
+  it('a save without warnings shows only the saved toast', async () => {
+    const show = vi.spyOn(notifications, 'show').mockReturnValue('x');
+    update.mockResolvedValue(node('a', {}));
+    const { result } = renderInRoute('a');
+    await waitFor(() => expect(result.current?.form.values.name).toBe('node-a'));
+    await act(async () => {
+      result.current?.saveMutation.mutate();
+    });
+    await waitFor(() => expect(show).toHaveBeenCalledTimes(1));
+    expect(show.mock.calls[0][0]).toMatchObject({ color: 'green' });
   });
 });

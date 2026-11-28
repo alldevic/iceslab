@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -31,6 +32,9 @@ import (
 	"github.com/icecompany-tech/iceslab/apps/node/internal/payload"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/server"
 )
+
+// firewallRecordName is read by install-iceslab-node.sh (--uninstall).
+const firewallRecordName = "firewall-rules"
 
 const (
 	defaultPort                = "1337"
@@ -61,6 +65,10 @@ func main() {
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+	// The ports the agent opens in ufw are written beside the stored push, so
+	// the installer's --uninstall can close them (nothing else knows them).
+	firewall.SetRecordPath(filepath.Join(filepath.Dir(getenv("NODE_INBOUNDS_STORE", defaultInboundsStorePath)), firewallRecordName))
 
 	payloadEnv := os.Getenv("NODE_PAYLOAD")
 	if payloadEnv == "" {

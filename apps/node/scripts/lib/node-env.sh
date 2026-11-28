@@ -372,7 +372,7 @@ apt_update() {
 # and apply it. A host with accept_ra=0 (addressing configured statically) or
 # already 2 is not touched, and neither is any interface off the default route.
 # Idempotent: a line already in CONF is not repeated. Persisted in CONF, so
-# --remove keeps it like the forwarding lines.
+# the core's --remove takes it out with the file (remove_sysctl_conf).
 ra_keep_default_route() {
   local conf=$1 conf_dir=${ICESLAB_IPV6_CONF_DIR:-/proc/sys/net/ipv6/conf} dev cur key
   local -a devs=()
@@ -388,4 +388,19 @@ ra_keep_default_route() {
     grep -qxF "$key=2" "$conf" 2>/dev/null || echo "$key=2" >> "$conf"
     log "IPv6 forwarding is on: accept_ra=2 on $dev to keep its router-advertised default route"
   done
+}
+
+# remove_sysctl_conf CONF: --remove of a core that wrote its own sysctl drop-in
+# (99-wg.conf, 99-awg.conf: forwarding and accept_ra=2) takes the file out. Each
+# core keeps a file of its own, so the other core's file, if it is still there,
+# keeps the same lines in force on the next boot; nothing is shared. The running
+# kernel keeps the values until a reboot, which the installer cannot undo (it
+# never knew the earlier ones); `sysctl --system` re-reads what is left.
+remove_sysctl_conf() {
+  local conf=$1
+  [[ -f "$conf" ]] || return 0
+  rm -f "$conf"
+  log "Removed $conf (the values it set stay in the running kernel until a reboot)"
+  if command -v sysctl >/dev/null 2>&1; then sysctl --system >/dev/null 2>&1 || true; fi
+  return 0
 }

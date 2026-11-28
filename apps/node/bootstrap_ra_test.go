@@ -84,3 +84,47 @@ func TestBootstrapScriptsKeepTheRaDefaultRoute(t *testing.T) {
 		}
 	}
 }
+
+// 19.15 item 10: --remove of WireGuard / AmneziaWG takes the sysctl drop-in it
+// wrote (forwarding, accept_ra=2) out and has sysctl re-read what is left. Each
+// core has a file of its own with the same lines, so the other core's file, if
+// it is still there, keeps them in force: nothing shared is lost.
+func TestRemoveSysctlConfTakesOnlyItsOwnFile(t *testing.T) {
+	dir := t.TempDir()
+	own, other := filepath.Join(dir, "99-wg.conf"), filepath.Join(dir, "99-awg.conf")
+	for _, f := range []string{own, other} {
+		if err := os.WriteFile(f, []byte("net.ipv4.ip_forward=1\nnet.ipv6.conf.eth0.accept_ra=2\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := filepath.Join(dir, "calls")
+	bin := stubs(t, map[string]string{"sysctl": `echo "sysctl $*" >>'` + calls + "'\n"})
+	lib, _ := filepath.Abs(filepath.Join("scripts", "lib", "node-env.sh"))
+	prog := `log() { :; }; . ` + lib + `; remove_sysctl_conf ` + own + `; remove_sysctl_conf ` + own + `; remove_sysctl_conf ` + dir + `/absent.conf`
+	if out, err := runBash(t, bin, prog); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if _, err := os.Stat(own); !os.IsNotExist(err) {
+		t.Errorf("its own file is still there: %v", err)
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Errorf("the other core's file was taken: %v", err)
+	}
+	if b, _ := os.ReadFile(calls); string(b) != "sysctl --system\n" {
+		t.Errorf("sysctl calls %q, want one --system (only when a file went)", b)
+	}
+}
+
+func TestBootstrapRemoveCallsTakeTheirSysctlDropin(t *testing.T) {
+	for script, conf := range map[string]string{
+		"bootstrap-amneziawg.sh": "/etc/sysctl.d/99-awg.conf",
+		"bootstrap-wireguard.sh": "/etc/sysctl.d/99-wg.conf",
+	} {
+		body := readScript(t, script)
+		i := strings.Index(body, "\nremove_core() {")
+		j := strings.Index(body[i:], "\n}\n")
+		if i < 0 || j < 0 || !strings.Contains(body[i:i+j], "remove_sysctl_conf "+conf) {
+			t.Errorf("%s --remove does not take %s out", script, conf)
+		}
+	}
+}

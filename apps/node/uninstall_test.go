@@ -70,6 +70,10 @@ type uninstallOpts struct {
 	present, failCore, legacy string
 	ufw, forwardPolicy        string
 	reset                     bool
+	// record is the agent's firewall-rules file (empty: an agent from before the
+	// record has none); sysctlDropin puts the installer's 99-iceslab.conf there.
+	record       string
+	sysctlDropin bool
 }
 
 func runUninstall(t *testing.T, keepCores bool, present, failCore, legacyCore string) uninstallRun {
@@ -101,6 +105,21 @@ func runUninstallWith(t *testing.T, o uninstallOpts) uninstallRun {
 	} {
 		if err := os.WriteFile(filepath.Join(machine, f), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
+		}
+	}
+	if o.record != "" {
+		if err := os.WriteFile(filepath.Join(machine, "etc/iceslab-node/firewall-rules"), []byte(o.record), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if o.sysctlDropin {
+		if err := os.MkdirAll(filepath.Join(machine, "etc/sysctl.d"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range []string{"99-iceslab.conf", "99-sysctl.conf"} {
+			if err := os.WriteFile(filepath.Join(machine, "etc/sysctl.d", f), []byte("x\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	checkout := filepath.Join(root, "opt", "iceslab-node")
@@ -434,5 +453,81 @@ func TestUninstallSaysItDoesNotRestoreTheForwardPolicy(t *testing.T) {
 	r = runUninstallWith(t, uninstallOpts{forwardPolicy: "DROP"})
 	if r.err != nil || strings.Contains(r.out, "Not restored") {
 		t.Errorf("a policy that was never changed is mentioned: %v\n%s", r.err, r.out)
+	}
+}
+
+// 19.15 item 10: the ports the agent opened for its inbounds are in its own
+// record (firewall-rules, beside the stored push), and --uninstall takes them
+// off: nothing else knows 24084/tcp from a rule the operator added.
+// `delete allow N/proto` is the open rule alone, so a rule that names a source
+// stays, and SSH is never touched whatever the file says. --keep-cores keeps
+// them with the protocols' rules; an agent from before the record has no file,
+// the uninstall says so and takes off what it always did.
+func TestUninstallTakesOffThePortsTheAgentOpened(t *testing.T) {
+	status := ufwBusy + "24084/tcp                 ALLOW       Anywhere\n8443/udp                  ALLOW       Anywhere\n"
+	record := "22/tcp\n24084/tcp\n8443/udp\nnot a rule\n443/tcp\n"
+	all := "9443/tcp 24084/tcp 8443/udp 443/tcp 443/udp 80/tcp 1234/udp"
+
+	r := runUninstallWith(t, uninstallOpts{ufw: status, record: record})
+	if r.err != nil {
+		t.Fatalf("%v\n%s", r.err, r.out)
+	}
+	// 443/tcp is in the record and in the protocols: the second delete finds
+	// nothing, which ufw takes as success.
+	want := "9443/tcp 24084/tcp 8443/udp 443/tcp 443/tcp 443/udp 80/tcp 1234/udp"
+	if got := strings.Join(ufwDeletes(r.calls), " "); got != want {
+		t.Errorf("full uninstall: ufw deleted %q, want %q (all: %s)\n%s", got, want, all, r.calls)
+	}
+	if strings.Contains(r.calls, "22/tcp") || strings.Contains(r.calls, "203.0.113.4") || strings.Contains(r.calls, "not a rule") {
+		t.Errorf("a rule that is not the agent's was touched:\n%s", r.calls)
+	}
+	if strings.Contains(r.out, "No record of the ports") {
+		t.Errorf("says there is no record when there is one:\n%s", r.out)
+	}
+
+	r = runUninstallWith(t, uninstallOpts{ufw: status, record: record, keepCores: true})
+	if got := strings.Join(ufwDeletes(r.calls), " "); r.err != nil || got != "9443/tcp" {
+		t.Errorf("--keep-cores: %v, ufw deleted %q, want the agent's own port only", r.err, got)
+	}
+
+	r = runUninstallWith(t, uninstallOpts{ufw: status})
+	if r.err != nil || !strings.Contains(r.out, "No record of the ports the agent opened") {
+		t.Errorf("an agent without a record: %v\n%s", r.err, r.out)
+	}
+	if got := strings.Join(ufwDeletes(r.calls), " "); got != "9443/tcp 443/tcp 443/udp 80/tcp 1234/udp" {
+		t.Errorf("an agent without a record: ufw deleted %q", got)
+	}
+
+	// An empty record is a record: the agent ran and had opened nothing.
+	r = runUninstallWith(t, uninstallOpts{ufw: status, record: "\n"})
+	if r.err != nil || strings.Contains(r.out, "No record of the ports") {
+		t.Errorf("an empty record: %v\n%s", r.err, r.out)
+	}
+}
+
+// The installer's own sysctl drop-in (buffers, fq, BBR) goes with a full
+// --uninstall and --reset (a reinstall writes it again); --keep-cores keeps it.
+// Another drop-in of the machine is never touched.
+func TestUninstallTakesOffTheSysctlDropin(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		o    uninstallOpts
+		gone bool
+	}{
+		{"full uninstall", uninstallOpts{sysctlDropin: true}, true},
+		{"--reset", uninstallOpts{sysctlDropin: true, reset: true}, true},
+		{"--keep-cores", uninstallOpts{sysctlDropin: true, keepCores: true}, false},
+	} {
+		r := runUninstallWith(t, c.o)
+		if r.err != nil {
+			t.Fatalf("%s: %v\n%s", c.name, r.err, r.out)
+		}
+		_, err := os.Stat(filepath.Join(r.root, "etc/sysctl.d/99-iceslab.conf"))
+		if gone := os.IsNotExist(err); gone != c.gone {
+			t.Errorf("%s: 99-iceslab.conf gone=%v, want %v", c.name, gone, c.gone)
+		}
+		if _, err := os.Stat(filepath.Join(r.root, "etc/sysctl.d/99-sysctl.conf")); err != nil {
+			t.Errorf("%s: the machine's own drop-in is gone: %v", c.name, err)
+		}
 	}
 }

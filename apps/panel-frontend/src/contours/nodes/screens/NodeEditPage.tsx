@@ -345,6 +345,7 @@ export function NodeEditPage() {
                   onChange={(next) => form.setFieldValue('dns', next)}
                   cores={node.cores?.cores}
                   carried={node.carriedDns}
+                  deferred={node.deferredDns}
                 />
               </Box>
             </Box>

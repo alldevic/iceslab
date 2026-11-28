@@ -366,6 +366,7 @@ export const common = {
     presetTitle: 'Default preset',
     presetHint:
       'Served to anyone whose squad has not assigned one. What a preset contains is edited in Routes, this is only the choice.',
+    presetOwnHint: 'Your own preset: served to anyone with no preset of their own, and its DNS rules go to the nodes of their squads.',
     presetEditLink: 'Edit presets in Routes',
     presetEditWhere: 'the on-device rules',
     presetProxyAll: 'Everything through the tunnel',

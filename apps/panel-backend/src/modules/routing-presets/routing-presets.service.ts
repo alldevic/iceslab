@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { ROUTING_PRESET_IDS, isRoutingPresetId, type DnsRule } from '@iceslab/shared';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
+import { readDefaultPresetId } from './routing-presets.default.js';
 import { planDnsTransfer, pushDnsNodes, writeDnsPlan } from './routing-presets.nodes.js';
 import { BUILTIN_PRESET_RULES, checkDnsRules, checkRules, type DeviceRouteRule } from './routing-presets.rules.js';
 
@@ -39,6 +40,8 @@ export interface PresetUse {
   /** Totals: the lists above are capped, the counts are not. */
   userCount: number;
   squadCount: number;
+  /** 19.15: the preset is the panel's default one (subscriptionDefaultPresetId). */
+  isDefault: boolean;
 }
 
 export class RoutingPresetBuiltInError extends Error {
@@ -73,10 +76,11 @@ export class RoutingPresetInUseError extends Error {
   readonly code = 'ROUTING_PRESET_IN_USE';
   constructor(public readonly use: PresetUse) {
     const parts = [
+      use.isDefault ? 'the panel default preset' : '',
       use.userCount > 0 ? `${use.userCount} user(s)` : '',
       use.squadCount > 0 ? `${use.squadCount} squad(s)` : '',
     ].filter(Boolean);
-    super(`the preset is assigned to ${parts.join(' and ')}: move them to another preset first`);
+    super(`the preset is assigned to ${parts.join(' and ')}: move ${use.isDefault && parts.length === 1 ? 'the default' : 'them'} to another preset first`);
     this.name = 'RoutingPresetInUseError';
   }
 }
@@ -184,7 +188,7 @@ export async function presetUse(id: string): Promise<PresetUse> {
     prisma.group.findMany({ where: { customRoutingPresetId: id }, select: { id: true, name: true }, orderBy: { name: 'asc' }, take: USE_LIST_CAP }),
     prisma.group.count({ where: { customRoutingPresetId: id } }),
   ]);
-  return { users, squads, userCount, squadCount };
+  return { users, squads, userCount, squadCount, isDefault: (await readDefaultPresetId()) === id };
 }
 
 /**
@@ -198,7 +202,7 @@ export async function deleteRoutingPreset(id: string): Promise<void> {
   const existing = await prisma.routingPreset.findUnique({ where: { id }, select: { id: true } });
   if (!existing) throw new RoutingPresetMissingError(id);
   const use = await presetUse(id);
-  if (use.userCount > 0 || use.squadCount > 0) throw new RoutingPresetInUseError(use);
+  if (use.userCount > 0 || use.squadCount > 0 || use.isDefault) throw new RoutingPresetInUseError(use);
   // 19.10: nobody holds it, but a node can still carry its rules from before
   // the last change of assignment (19.11 recomputes on that); they go with it.
   const plan = await planDnsTransfer({ presetId: id, rules: [] });

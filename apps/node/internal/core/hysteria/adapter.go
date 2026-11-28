@@ -845,32 +845,87 @@ func (a *Adapter) ApplyCascade(raw json.RawMessage) error {
 	if len(raw) > 0 && string(raw) != "null" {
 		var wire chainHandoffWire
 		if err := json.Unmarshal(raw, &wire); err != nil {
-			return fmt.Errorf("hysteria ApplyCascade: %w", err)
+			return a.refuseHandoff(fmt.Errorf("hysteria ApplyCascade: %w", err))
 		}
 		handoff = &ChainHandoff{Port: wire.Port, Username: wire.Username, Password: wire.Password}
 	}
 
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	if handoffEqual(a.chain, handoff) && !a.coreDownLocked() && !a.familyStaleLocked() {
+		a.mu.Unlock()
 		return nil
 	}
 	// No inbound yet, or nothing to write to: remember it for the render that
 	// comes. Nothing is on disk to fix, so nothing is restarted.
 	if a.inbound == (InboundConfig{}) || a.cfg.ConfigPath == "" {
+		// Still checked: a hand-off the renderer would refuse must not become
+		// the one the first inbound is drawn against.
+		if handoff != nil {
+			if err := handoff.validate(); err != nil {
+				a.mu.Unlock()
+				return a.refuseHandoff(err)
+			}
+		}
 		a.chain = handoff
+		a.mu.Unlock()
 		return nil
 	}
 	// Rendered BEFORE it is stored: a hand-off the renderer refuses must not
 	// become the state the next ApplyInbound silently renders against.
 	if err := a.rewriteLocked(a.inbound, handoff, "ApplyCascade"); err != nil {
-		return err
+		a.mu.Unlock()
+		return a.refuseHandoff(err)
 	}
 	a.chain = handoff
 	a.logger.Info("hysteria ApplyCascade: hand-off to the chain changed",
 		"chain", handoff != nil, "path", a.cfg.ConfigPath)
-	return a.restartLocked("ApplyCascade")
+	err := a.restartLocked("ApplyCascade")
+	a.mu.Unlock()
+	return err
+}
+
+var _ core.CascadeCloser = (*Adapter)(nil)
+
+// CloseCascade implements core.CascadeCloser.
+func (a *Adapter) CloseCascade(reason string) error {
+	return a.refuseHandoff(errors.New(reason))
+}
+
+// CascadeClosed implements core.CascadeCloser.
+func (a *Adapter) CascadeClosed() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.chain != nil && a.chain.Closed {
+		return a.chain.Why
+	}
+	return ""
+}
+
+// refuseHandoff is the answer to a hand-off this core cannot take (19.15): with
+// none held, the config is written closed (reject(all)), so its users get
+// nothing instead of leaving through the entry; one already held is kept, as
+// before. The error goes back to the caller either way.
+func (a *Adapter) refuseHandoff(cause error) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.chain != nil {
+		return cause
+	}
+	closed := &ChainHandoff{Closed: true, Why: "cascade entry closed: " + cause.Error()}
+	if a.inbound == (InboundConfig{}) || a.cfg.ConfigPath == "" {
+		a.chain = closed
+		return cause
+	}
+	if err := a.rewriteLocked(a.inbound, closed, "ApplyCascade"); err != nil {
+		a.logger.Error("hysteria: drawing the closed cascade entry failed", "err", err)
+		return cause
+	}
+	a.chain = closed
+	a.logger.Warn("hysteria: no hand-off to the chain, the entry rejects every request", "why", cause)
+	if err := a.restartLocked("ApplyCascade"); err != nil {
+		a.logger.Error("hysteria: restarting the closed cascade entry failed", "err", err)
+	}
+	return cause
 }
 
 // rewriteLocked renders and writes the config. Caller holds mu.

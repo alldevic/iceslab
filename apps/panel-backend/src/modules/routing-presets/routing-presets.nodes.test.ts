@@ -50,3 +50,54 @@ describe('nodesOfPreset', () => {
     expect((await presetNodeIndex()).get(p) ?? new Set()).toEqual(new Set());
   });
 });
+
+describe('19.15: an own preset as the panel default', () => {
+  const setDefault = (id: string | null) =>
+    prisma.appSetting.upsert({ where: { key: 'subscriptionDefaultPresetId' }, create: { key: 'subscriptionDefaultPresetId', value: id as unknown as object }, update: { value: id as unknown as object } });
+
+  it('reaches the nodes of every squad without a preset of its own, and of no squad with one', async () => {
+    const [bare, builtin, own, other] = [await makeNode(), await makeNode(), await makeNode(), await makeNode()];
+    const d = await preset('Default');
+    const q = await preset('Other');
+    await makeSquad([bare.id]);
+    const sq = await makeSquad([builtin.id]);
+    await prisma.group.update({ where: { id: sq.id }, data: { routingPreset: 'ru-split' } });
+    await makeSquad([own.id], { presetId: q });
+    await makeSquad([other.id]);
+    await setDefault(d);
+    expect((await nodesOfPreset(d)).sort()).toEqual([bare.id, other.id].sort());
+    expect(await nodesOfPreset(q)).toEqual([own.id]);
+  });
+
+  it('is nothing when no default is set, or it is cleared', async () => {
+    const n = await makeNode();
+    const d = await preset('Default');
+    await makeSquad([n.id]);
+    expect(await nodesOfPreset(d)).toEqual([]);
+    await setDefault(d);
+    expect(await nodesOfPreset(d)).toEqual([n.id]);
+    await setDefault(null);
+    expect(await nodesOfPreset(d)).toEqual([]);
+  });
+
+  it('a user with a preset of their own in a squad without one adds to it: the squad still gets the default', async () => {
+    const n = await makeNode();
+    const d = await preset('Default');
+    const u = await preset('Users');
+    const squad = await makeSquad([n.id]);
+    await makeUser({ squadId: squad.id, presetId: u });
+    await setDefault(d);
+    expect(await nodesOfPreset(d)).toEqual([n.id]);
+    expect(await nodesOfPreset(u)).toEqual([n.id]);
+  });
+
+  it('the index takes the default it is given over the stored one (a save in flight)', async () => {
+    const n = await makeNode();
+    const [d1, d2] = [await preset('D1'), await preset('D2')];
+    await makeSquad([n.id]);
+    await setDefault(d1);
+    const index = await presetNodeIndex(prisma, d2);
+    expect(index.get(d2)).toEqual(new Set([n.id]));
+    expect(index.has(d1)).toBe(false);
+  });
+});

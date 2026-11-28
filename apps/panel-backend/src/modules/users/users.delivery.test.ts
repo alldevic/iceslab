@@ -6,6 +6,7 @@ import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { invalidateSrrCache } from '../srr/srr.service.js';
+import { invalidateSubscriptionSettingsCache } from '../settings/settings.service.js';
 
 /**
  * "What applies to this user", which is not what is written on their row.
@@ -89,6 +90,25 @@ describe('effective routing preset', () => {
     expect(d.routing.effective).toBe(d.routing.global);
     expect(d.routing.user).toBeNull();
     expect(d.routing.squad).toBeNull();
+  });
+
+  it('19.15: an own preset set as the panel default is what a user with no override gets, under the squad and the user', async () => {
+    const own = await prisma.routingPreset.create({ data: { name: 'Own default' } });
+    await prisma.appSetting.create({ data: { key: 'subscriptionDefaultPresetId', value: own.id, isPublic: false } });
+    invalidateSubscriptionSettingsCache();
+    const bare = await delivery(await user([await squad(null)]));
+    expect(bare.routing.source).toBe('global');
+    expect(bare.routing.effectivePreset).toEqual({ builtIn: false, id: own.id, name: 'Own default' });
+    // The built-in default stays what it was, and a squad's choice still wins.
+    expect(bare.routing.global).toBe('proxy-all');
+    const squadWins = await delivery(await user([await squad('ru-split')]));
+    expect(squadWins.routing.effective).toBe('ru-split');
+    expect(squadWins.routing.effectivePreset).toEqual({ builtIn: true, id: 'ru-split', name: 'ru-split' });
+    // A default that was deleted by hand reads as none.
+    await prisma.appSetting.update({ where: { key: 'subscriptionDefaultPresetId' }, data: { value: '7b0d1c1e-0000-4000-8000-000000000000' } });
+    invalidateSubscriptionSettingsCache();
+    const gone = await delivery(await user([await squad(null)]));
+    expect(gone.routing.effectivePreset).toEqual({ builtIn: true, id: 'proxy-all', name: 'proxy-all' });
   });
 
   it('takes the squad override and says the squad decided it', async () => {

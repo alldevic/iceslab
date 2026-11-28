@@ -78,6 +78,22 @@ describe('a blank optional setting does not stop the panel booting', () => {
     expect(bad.success).toBe(false);
   });
 
+  // 19.15 item 1: the panel's IPv6 for `--panel-ip`. Blank is unset; a literal is
+  // kept in its canonical spelling; anything else stops the boot.
+  it('reads PANEL_PUBLIC_IP6 blank as unset, canonicalises a literal, rejects a non-IPv6', () => {
+    expect(ConfigSchema.parse({ ...REQUIRED }).PANEL_PUBLIC_IP6).toBeUndefined();
+    expect(ConfigSchema.parse({ ...REQUIRED, PANEL_PUBLIC_IP6: '' }).PANEL_PUBLIC_IP6).toBeUndefined();
+    expect(ConfigSchema.parse({ ...REQUIRED, PANEL_PUBLIC_IP6: '  ' }).PANEL_PUBLIC_IP6).toBeUndefined();
+    expect(
+      ConfigSchema.parse({ ...REQUIRED, PANEL_PUBLIC_IP6: '2001:0DB8:5a5a:0:0:0:0:50' }).PANEL_PUBLIC_IP6,
+    ).toBe('2001:db8:5a5a::50');
+    for (const bad of ['203.0.113.10', 'not-an-ip', '2001:db8::zz', '[2001:db8::50]']) {
+      const r = ConfigSchema.safeParse({ ...REQUIRED, PANEL_PUBLIC_IP6: bad });
+      expect(r.success, bad).toBe(false);
+      if (!r.success) expect(JSON.stringify(r.error.issues)).toContain('PANEL_PUBLIC_IP6 must be an IPv6');
+    }
+  });
+
   // Guards the guard: if the compose pattern stops matching, the first test
   // would pass while checking nothing.
   it('finds the blankable keys it is supposed to check', () => {

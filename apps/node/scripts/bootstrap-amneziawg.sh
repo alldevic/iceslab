@@ -64,9 +64,9 @@ unwire_env() {
 # keys included, onto a node that gets AWG back), together with the state the
 # agent keeps beside each one (awg0.state.json, awg3.state.json: the server
 # key and the peers). A state file left behind would bring the old key and
-# peers back up on the next install instead of what the panel sends. Kept: IP forwarding
-# and accept_ra=2 (99-awg.conf) and ufw's FORWARD policy, which other traffic on the node may
-# rely on.
+# peers back up on the next install instead of what the panel sends. The sysctl
+# drop-in (99-awg.conf: forwarding, accept_ra=2) goes too. Kept: ufw's FORWARD
+# policy, which other traffic on the node may rely on.
 #
 # Running = any AmneziaWG interface up, the users' awg0 and a cascade leg's
 # awg-l<n> alike.
@@ -93,6 +93,7 @@ remove_core() {
   rm -f "$MARKER"
   rm -f /etc/amnezia/amneziawg/*.conf /etc/amnezia/amneziawg/*.state.json
   systemctl daemon-reload >/dev/null 2>&1 || true
+  remove_sysctl_conf /etc/sysctl.d/99-awg.conf
   unwire_env
   if amneziawg_loaded; then
     warn "the amneziawg module is still loaded (in use?); it goes with the next reboot"

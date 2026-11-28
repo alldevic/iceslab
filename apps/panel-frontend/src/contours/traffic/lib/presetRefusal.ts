@@ -41,6 +41,7 @@ export function presetRefusalWords(r: RoutingPresetRefusal, t: Translate): strin
       return t('routes.presetNameTaken');
     case 'ROUTING_PRESET_IN_USE': {
       const parts = [
+        r.isDefault ? t('routes.presetHeldDefault') : null,
         r.userCount > 0 ? t('routes.presetHeldUsers', { count: r.userCount, names: heldNames(r.users, r.userCount, t) }) : null,
         r.squadCount > 0 ? t('routes.presetHeldSquads', { count: r.squadCount, names: heldNames(r.squads, r.squadCount, t) }) : null,
       ].filter(Boolean);

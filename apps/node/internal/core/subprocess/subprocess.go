@@ -173,6 +173,7 @@ type Subprocess struct {
 	lastExit    error
 	lastExitSet bool
 	stderr      *logWriter
+	stdout      *logWriter
 }
 
 // New builds a Subprocess; nothing is spawned until Start is called.
@@ -208,7 +209,11 @@ func (s *Subprocess) spawnLocked(ctx context.Context) error {
 	if len(s.cfg.Env) > 0 {
 		cmd.Env = append(os.Environ(), s.cfg.Env...)
 	}
-	cmd.Stdout = newLogWriter(s.cfg.Logger, slog.LevelInfo, s.cfg.Name)
+	// xray writes its reason for dying ("Failed to start: ... bind: address
+	// already in use") to stdout and leaves stderr empty, so stdout keeps the
+	// last line that looks like a failure for ExitReason.
+	stdout := &logWriter{logger: s.cfg.Logger, level: slog.LevelInfo, source: s.cfg.Name, keep: isStartFailure}
+	cmd.Stdout = stdout
 	stderr := &logWriter{logger: s.cfg.Logger, level: slog.LevelError, source: s.cfg.Name, levelOf: s.cfg.StderrLevel}
 	cmd.Stderr = stderr
 	// N5 - put the child in its own process group so Stop (and ctx-cancel) can
@@ -228,6 +233,7 @@ func (s *Subprocess) spawnLocked(ctx context.Context) error {
 	s.cmd = cmd
 	s.ctx = ctx
 	s.stderr = stderr
+	s.stdout = stdout
 	s.lastSpawnAt = time.Now()
 	exited := make(chan struct{})
 	s.exited = exited
@@ -242,7 +248,9 @@ func (s *Subprocess) spawnLocked(ctx context.Context) error {
 			s.cfg.Logger.Error(s.cfg.Name+" memory watchdog NOT armed: needs MaxRestarts > 0",
 				"limitBytes", s.cfg.MemoryLimitBytes)
 		} else {
-			go s.watchMemory(cmd, exited, ctx)
+			// The thresholds are package vars; read them here, while the caller
+			// still holds the lock, so the watcher never touches them after Stop.
+			go s.watchMemory(cmd, exited, ctx, memoryBreachesToRestart, memoryMinUptime)
 		}
 	}
 	return nil
@@ -368,7 +376,7 @@ func (s *Subprocess) watch(cmd *exec.Cmd, exited chan struct{}, ctx context.Cont
 // It does not respawn anything itself: it signals the process and lets the
 // crash watcher's restart path bring it back, tagged via s.memKill. One
 // restart mechanism, not two.
-func (s *Subprocess) watchMemory(cmd *exec.Cmd, exited chan struct{}, ctx context.Context) {
+func (s *Subprocess) watchMemory(cmd *exec.Cmd, exited chan struct{}, ctx context.Context, breachesToRestart int, minUptime time.Duration) {
 	interval := s.cfg.MemoryCheckInterval
 	if interval <= 0 {
 		interval = defaultMemoryCheckInterval
@@ -422,13 +430,13 @@ func (s *Subprocess) watchMemory(cmd *exec.Cmd, exited chan struct{}, ctx contex
 			continue
 		}
 		breaches++
-		if breaches < memoryBreachesToRestart {
+		if breaches < breachesToRestart {
 			s.cfg.Logger.Warn(s.cfg.Name+" memory above ceiling",
 				"rssBytes", rss, "limitBytes", limit,
-				"breach", breaches, "needed", memoryBreachesToRestart)
+				"breach", breaches, "needed", breachesToRestart)
 			continue
 		}
-		if uptime := time.Since(spawnedAt); uptime < memoryMinUptime {
+		if uptime := time.Since(spawnedAt); uptime < minUptime {
 			// Over the ceiling this soon after a start means the ceiling is
 			// below the core's normal footprint. Restarting would just storm.
 			s.cfg.Logger.Error(s.cfg.Name+" memory above ceiling right after start, NOT restarting "+
@@ -619,6 +627,8 @@ func (s *Subprocess) AliveAfter(ctx context.Context, grace time.Duration) bool {
 // ExitReason says how the most recent process ended, in words an operator
 // can act on: the exit status ("signal: killed", "exit status 1") and the
 // last line it wrote to stderr, which is usually the engine's own reason.
+// An engine that reports its death on stdout instead (xray: "Failed to
+// start: ...") is read from there when stderr says nothing about a taken port.
 // Empty while nothing has exited yet.
 //
 // Kept past a crash-restart: the respawn clears the live exit state, and the
@@ -630,7 +640,7 @@ func (s *Subprocess) AliveAfter(ctx context.Context, grace time.Duration) bool {
 // withPortHolder.
 func (s *Subprocess) ExitReason() string {
 	s.mu.Lock()
-	set, err, stderr := s.lastExitSet, s.lastExit, s.stderr
+	set, err, stderr, stdout := s.lastExitSet, s.lastExit, s.stderr, s.stdout
 	s.mu.Unlock()
 	if !set {
 		return ""
@@ -639,10 +649,19 @@ func (s *Subprocess) ExitReason() string {
 	if err != nil {
 		reason = err.Error()
 	}
+	var errLine string
 	if stderr != nil {
-		if line := stderr.lastLine(); line != "" {
-			reason += "; last stderr line: " + withPortHolder(line)
+		errLine = stderr.lastLine()
+	}
+	if errLine == "" || !busyListen.MatchString(errLine) {
+		if stdout != nil {
+			if line := stdout.lastKept(); line != "" {
+				return reason + "; last stdout line: " + withPortHolder(line)
+			}
 		}
+	}
+	if errLine != "" {
+		reason += "; last stderr line: " + withPortHolder(errLine)
 	}
 	return reason
 }
@@ -663,6 +682,16 @@ type logWriter struct {
 	buf     []byte
 	// last is the most recent non-empty complete line, for ExitReason.
 	last string
+	// keep, when set, selects the lines worth remembering in kept (the most
+	// recent one that matched), so a later routine line does not push a
+	// failure out of ExitReason.
+	keep func(line string) bool
+	kept string
+}
+
+// isStartFailure picks the stdout lines that say why a core did not start.
+func isStartFailure(line string) bool {
+	return strings.Contains(line, "Failed to start") || busyListen.MatchString(line)
 }
 
 func (w *logWriter) Write(p []byte) (int, error) {
@@ -678,6 +707,9 @@ func (w *logWriter) Write(p []byte) (int, error) {
 		w.buf = w.buf[idx+1:]
 		if t := strings.TrimSpace(line); t != "" {
 			w.last = t
+			if w.keep != nil && w.keep(t) {
+				w.kept = t
+			}
 		}
 		level := w.level
 		if w.levelOf != nil {
@@ -710,3 +742,14 @@ func indexNewline(b []byte) int {
 
 // Sentinel for callers that want to assert "no error AND was running".
 var ErrNotStarted = errors.New("subprocess not started")
+
+// lastKept is the most recent line keep selected, counting an unterminated
+// tail like lastLine does.
+func (w *logWriter) lastKept() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if t := strings.TrimSpace(string(w.buf)); t != "" && w.keep != nil && w.keep(t) {
+		return t
+	}
+	return w.kept
+}

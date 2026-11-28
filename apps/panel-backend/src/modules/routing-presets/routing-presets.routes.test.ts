@@ -8,6 +8,7 @@ import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { matcherKind } from './routing-presets.rules.js';
 import { makeNode, makeSquad } from '../../../tests/helpers/preset-nodes.js';
 import { inboundSyncQueue } from '../inbounds/inbounds.queue.js';
+import { recomputeAfterChange } from './routing-presets.nodes.js';
 
 /**
  * A-229 part 2: /api/routing-presets. Built-ins listed and read-only on the
@@ -499,5 +500,120 @@ describe('19.12: GET /api/routing-presets/:id/nodes', () => {
   it('refuses a missing or malformed preset', async () => {
     await nodesOf('00000000-0000-4000-8000-000000000099', 404);
     await nodesOf('not-a-uuid', 400);
+  });
+});
+
+describe('19.15: a save is refused only for what it makes worse', () => {
+  const dns = (...rules: [string[], string][]) => rules.map(([match, server]) => ({ match, server, note: '' }));
+  const put = (id: string, payload: Record<string, unknown>) =>
+    app.inject({ method: 'PUT', url: `/api/routing-presets/${id}`, headers: auth(), payload });
+  const preset = async (name: string) => JSON.parse((await create({ name, rules: [] })).body).id as string;
+  const conflictsOf = async (nodeId: string) => (await prisma.node.findUniqueOrThrow({ where: { id: nodeId }, select: { presetDnsConflicts: true } })).presetDnsConflicts;
+
+  /** N5c: B names `x.com` with another server than A on a shared node; B was left out and the node says so. */
+  async function recordedConflict() {
+    const shared = await makeNode({ name: 'shared-node' });
+    const [pa, pb] = [await preset('Alpha'), await preset('Beta')];
+    await makeSquad([shared.id], { presetId: pa });
+    await makeSquad([shared.id], { presetId: pb });
+    expect((await put(pa, { dnsRules: dns([['x.com'], '10.99.0.1']) })).statusCode).toBe(200);
+    // Written under the panel's feet (the way a change of squads writes it: nothing is refused there).
+    await prisma.routingPreset.update({ where: { id: pb }, data: { dnsRules: dns([['x.com'], '10.99.0.2']) } });
+    await recomputeAfterChange();
+    expect(await conflictsOf(shared.id)).toEqual([{ kind: 'conflict', presetId: pb, otherPresetId: pa, domain: 'x.com', server: '10.99.0.2' }]);
+    return { shared, pa, pb };
+  }
+
+  it('a conflict already written on the node does not stop the save of a preset that is in it', async () => {
+    const { pa, pb } = await recordedConflict();
+    // An unrelated rule added, the conflicting one untouched.
+    const res = await put(pa, { dnsRules: dns([['x.com'], '10.99.0.1'], [['other.com'], '10.99.0.5']) });
+    expect(res.statusCode, res.body).toBe(200);
+    // And a save of the other side that leaves its rule alone.
+    expect((await put(pb, { name: 'Beta renamed' })).statusCode).toBe(200);
+  });
+
+  it('a change that gives the same name another server is a new conflict, 409 with the same code', async () => {
+    const { pa, pb } = await recordedConflict();
+    const a = await put(pa, { dnsRules: dns([['x.com'], '10.99.0.3']) });
+    expect(a.statusCode, a.body).toBe(409);
+    expect(JSON.parse(a.body)).toMatchObject({ error: 'ROUTING_PRESET_DNS_CONFLICT', preset: 'Beta', node: 'shared-node' });
+    // B moving to the very server A has is no conflict at all; to a third server it is a new one.
+    const c = await put(pb, { dnsRules: dns([['x.com'], '10.99.0.4']) });
+    expect(c.statusCode, c.body).toBe(409);
+    expect((await put(pb, { dnsRules: dns([['x.com'], '10.99.0.1']) })).statusCode).toBe(200);
+  });
+
+  it('a second name that clashes next to the recorded one is a new conflict', async () => {
+    const { shared, pa } = await recordedConflict();
+    const pc = await preset('Gamma');
+    await makeSquad([shared.id], { presetId: pc });
+    // Gamma names y.com; Alpha then names it with another server: that pair was not there.
+    expect((await put(pc, { dnsRules: dns([['y.com'], '10.99.0.7']) })).statusCode).toBe(200);
+    const res = await put(pa, { dnsRules: dns([['x.com'], '10.99.0.1'], [['y.com'], '10.99.0.8']) });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(JSON.parse(res.body)).toMatchObject({ error: 'ROUTING_PRESET_DNS_CONFLICT', domain: 'y.com' });
+  });
+
+  describe('the 16-server limit', () => {
+    const manual = (n: number) => ({ servers: Array.from({ length: n }, (_, i) => ({ address: `10.1.0.${i + 1}`, domains: [], expectIps: [], skipFallback: false })) });
+
+    /** 14 own servers + Alpha 2 = 16; Beta 2 more is left out whole by the limit. */
+    async function overLimit() {
+      const node = await makeNode({ name: 'full-node', dns: manual(13) });
+      const [pa, pb] = [await preset('Alpha'), await preset('Beta')];
+      await makeSquad([node.id], { presetId: pa });
+      await makeSquad([node.id], { presetId: pb });
+      expect((await put(pa, { dnsRules: dns([['a.com'], '10.2.0.1'], [['b.com'], '10.2.0.2']) })).statusCode).toBe(200);
+      await prisma.routingPreset.update({ where: { id: pb }, data: { dnsRules: dns([['c.com'], '10.3.0.1'], [['d.com'], '10.3.0.2']) } });
+      await recomputeAfterChange();
+      expect(await conflictsOf(node.id)).toEqual([{ kind: 'limit', presetId: pb, count: 17 }]);
+      return { node, pa, pb };
+    }
+
+    it('a save that does not add a server to a node over the limit is accepted', async () => {
+      const { pa } = await overLimit();
+      const res = await put(pa, { dnsRules: dns([['a.com'], '10.2.0.1'], [['b.com'], '10.2.0.2'], [['e.com'], '10.2.0.1']) });
+      expect(res.statusCode, res.body).toBe(200);
+    });
+
+    it('a save that adds one is refused, with the same code', async () => {
+      const { pa } = await overLimit();
+      const res = await put(pa, { dnsRules: dns([['a.com'], '10.2.0.1'], [['b.com'], '10.2.0.2'], [['e.com'], '10.2.0.9']) });
+      expect(res.statusCode, res.body).toBe(409);
+      expect(JSON.parse(res.body)).toMatchObject({ error: 'ROUTING_PRESET_DNS_NODE_LIMIT', node: 'full-node' });
+    });
+  });
+});
+
+describe('19.15: an own preset as the panel default', () => {
+  const put = (payload: Record<string, unknown>) => app.inject({ method: 'PUT', url: '/api/settings', headers: auth(), payload });
+  const dns = (...rules: [string[], string][]) => rules.map(([match, server]) => ({ match, server, note: '' }));
+
+  it('cannot be deleted while it is the default, 409 naming the default preset', async () => {
+    const id = JSON.parse((await create({ name: 'Default one', rules: [] })).body).id as string;
+    expect((await put({ subscriptionDefaultPresetId: id })).statusCode).toBe(200);
+    const res = await app.inject({ method: 'DELETE', url: `/api/routing-presets/${id}`, headers: auth() });
+    expect(res.statusCode, res.body).toBe(409);
+    const body = JSON.parse(res.body);
+    expect(body).toMatchObject({ error: 'ROUTING_PRESET_IN_USE', isDefault: true, userCount: 0, squadCount: 0 });
+    expect(body.message).toContain('default preset');
+    expect(await prisma.routingPreset.count()).toBe(1);
+    // Let go of it and it goes.
+    expect((await put({ subscriptionDefaultPresetId: null })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'DELETE', url: `/api/routing-presets/${id}`, headers: auth() })).statusCode).toBe(204);
+  });
+
+  it('is listed with the nodes of the squads without a preset, and carried there', async () => {
+    const [bare, held] = [await makeNode({ name: 'bare-node' }), await makeNode({ name: 'held-node' })];
+    const id = JSON.parse((await create({ name: 'Default one', rules: [], dnsRules: dns([['x.com'], '10.99.0.1']) })).body).id as string;
+    const q = JSON.parse((await create({ name: 'Q', rules: [] })).body).id as string;
+    await makeSquad([bare.id]);
+    await makeSquad([held.id], { presetId: q });
+    expect((await put({ subscriptionDefaultPresetId: id })).statusCode).toBe(200);
+    const res = await app.inject({ method: 'GET', url: `/api/routing-presets/${id}/nodes`, headers: auth() });
+    const list = JSON.parse(res.body) as { scope: string; nodes: { name: string; state: string; carried: number }[] };
+    expect(list.scope).toBe('preset');
+    expect(list.nodes.map((n) => [n.name, n.carried])).toEqual([['bare-node', 1]]);
   });
 });

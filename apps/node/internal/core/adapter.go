@@ -255,6 +255,26 @@ type CascadeReceiver interface {
 	ApplyCascade(fragments json.RawMessage) error
 }
 
+// CascadeCloser is an OPTIONAL interface for a CascadeReceiver that can be a
+// cascade ENTRY, 19.15 (item 4). An entry is drawn to the chain's loopback
+// socks and has no other way out; without a hand-off it would draw its own
+// `direct`, and a user with a working tunnel to the entry would leave from the
+// ENTRY country while the client shows the exit, with no error anywhere.
+//
+// CloseCascade says "this push made you the entry, and no hand-off reached you
+// that you can take" (a malformed userCore, an agent with no chain manager):
+// the core stays up, takes the handshake and closes every proxied connection
+// at once, until a hand-off it accepts (or a real nil) comes. It does nothing
+// when the core already holds a hand-off. A core whose own ApplyCascade refuses
+// a hand-off closes itself the same way.
+//
+// CascadeClosed is the reason it is closed, empty while it is not: the server
+// shows it as the core's error in /healthz.
+type CascadeCloser interface {
+	CloseCascade(reason string) error
+	CascadeClosed() string
+}
+
 // ChainAware is an OPTIONAL interface for a CascadeReceiver that also reads a
 // transitional copy of the cascade from somewhere else (xray: from its
 // inbound). E47, 26.09 on ru-02 and nl-01: with the chain process holding the

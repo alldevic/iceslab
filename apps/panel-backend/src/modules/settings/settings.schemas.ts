@@ -33,6 +33,9 @@ export const UpdateSettingsSchema = z.object({
     .optional(),
   subscriptionAnnounceTemplate: z.string().max(512).nullable().optional(),
   subscriptionRoutingPreset: z.enum(ROUTING_PRESET_IDS).optional(),
+  // 19.15: an own preset as the panel default (its id), or null for none. Stronger
+  // than subscriptionRoutingPreset when set; the route checks the preset exists.
+  subscriptionDefaultPresetId: z.uuid().nullable().optional(),
   // Entry pool cap. 0 = hand out every node the subscriber is entitled to,
   // which is the default and what an operator expects after deploying a
   // profile to a node. See SubscriptionSettings.entryPoolSize.

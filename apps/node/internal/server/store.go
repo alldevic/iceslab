@@ -181,9 +181,12 @@ func acceptedPush(prev, req dto.ApplyInboundsRequest, o pushOutcome) dto.ApplyIn
 	case o.userCoreRefused && req.Chain != nil:
 		// The chain process took the new block; the cores were told nothing and
 		// kept the hand-off they had.
+		//
+		// With no hand-off held before, the refused userCore stays in the store:
+		// the restore refuses it again and draws the entry closed (19.15), where
+		// none at all would draw `direct` after a restart.
 		c := *req.Chain
-		c.UserCore = nil
-		if prev.Chain != nil {
+		if prev.Chain != nil && prev.Chain.UserCore != nil {
 			c.UserCore = prev.Chain.UserCore
 		}
 		out.Chain = &c

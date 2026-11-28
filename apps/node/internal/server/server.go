@@ -556,6 +556,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// The host's resolver, asked beside the cores rather than after them, so a
 	// dead one costs the healthcheck its 2 s once and not on top of the rest.
 	resolverDown := false
+	cascadeClosed := false
 	if s.cfg.ResolverProbe != nil {
 		wg.Add(1)
 		go func() {
@@ -734,6 +735,18 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	wg.Wait()
 
+	// 19.15: a cascade entry drawn closed runs, takes the handshake and serves
+	// nobody. The core is not down, so `running` stays true, but the node is
+	// not well and the card says why, in the push's words.
+	for i, adapter := range s.cfg.Adapters {
+		if cc, ok := adapter.(core.CascadeCloser); ok && cores[i].Reason == "" {
+			if why := cc.CascadeClosed(); why != "" {
+				cores[i].Error = &why
+				cascadeClosed = true
+			}
+		}
+	}
+
 	// Only a CONFIGURED core that is down makes the node degraded. A core the
 	// operator never configured is idle by design and used to make every healthy
 	// node report `degraded` forever, which meant the status stopped changing
@@ -773,6 +786,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// happening. A node with no chain says nothing, and a panel must never read
 	// that silence as a failure.
 	if chainStatus != nil && !chainStatus.Running {
+		status = "degraded"
+	}
+	if cascadeClosed {
 		status = "degraded"
 	}
 	// E37, 25.09 on nl-01: the stub resolver stopped answering, every xray host
@@ -1452,6 +1468,10 @@ func (s *Server) applyPushKept(
 	// that knows it must therefore IGNORE the fragments: two processes drawing
 	// one chain fight over the link port, and the loser's users go nowhere.
 	chainInForce := false
+	// The entry core that is drawn closed in this push, and why (19.15, item 4):
+	// the userCore of a block whose hand-off no core was given.
+	var closeTarget *dto.ChainUserCore
+	closeReason := ""
 	// The block whose hand-off the user's core is drawn to: the pushed one,
 	// unless the chain refused it while an earlier one still runs.
 	handoffBlock := req.Chain
@@ -1489,6 +1509,13 @@ func (s *Server) applyPushKept(
 		o.chainInForce = req.Chain
 		failed++
 		reasons = append(reasons, "chain: this agent cannot run a chain process")
+		// 19.15: with no `cascade` block either, nothing below draws this
+		// node's entry, and a core told nothing draws `direct`. The entry the
+		// block names is closed instead.
+		if req.Cascade == nil && req.Chain.UserCore != nil {
+			closeTarget = req.Chain.UserCore
+			closeReason = "this agent cannot run a chain process"
+		}
 	}
 
 	var cascadeFragments json.RawMessage
@@ -1524,6 +1551,8 @@ func (s *Server) applyPushKept(
 				reasons = append(reasons, err.Error())
 				userCoreRefused = true
 				o.userCoreRefused = true
+				closeTarget = handoffBlock.UserCore
+				closeReason = err.Error()
 			} else {
 				cascadeFragments = payload
 				router = string(handoffBlock.UserCore.Engine)
@@ -1539,9 +1568,26 @@ func (s *Server) applyPushKept(
 	// one handed a non-empty cascade drawing here (xray on the exit of a legacy
 	// cascade has no inbound and must keep running for the leg).
 	named := make(map[core.CoreAdapter]bool, len(s.cfg.Adapters))
+	// The core a hand-off is drawn to: every sing-box instance answers to the
+	// engine, and only the protocol tells them apart.
+	isRouter := func(adapter core.CoreAdapter, engine, protocol string) bool {
+		return engine != "" && adapter.Engine() == engine &&
+			(engine != string(dto.EngineSingbox) || adapter.Name() == protocol)
+	}
 	for _, adapter := range s.cfg.Adapters {
+		// 19.15: an entry nobody gave a hand-off is drawn closed, where told
+		// nothing it would draw `direct`. Only the entry; the others are not
+		// told anything, as before (no `nil`: it would lift an earlier closing).
+		if closeTarget != nil && isRouter(adapter, string(closeTarget.Engine), string(closeTarget.Protocol)) {
+			if cc, ok := adapter.(core.CascadeCloser); ok {
+				if err := cc.CloseCascade(closeReason); err != nil {
+					s.logger.Error("cascade entry is closed: no hand-off to the chain", "core", adapter.Name(), "why", closeReason)
+				}
+			}
+			continue
+		}
 		if userCoreRefused {
-			break
+			continue
 		}
 		cr, ok := adapter.(core.CascadeReceiver)
 		if !ok {
@@ -1557,8 +1603,8 @@ func (s *Server) applyPushKept(
 		// A sing-box hand-off goes to the instance of its protocol and to no other
 		// one: the rest are other profiles of the node and keep leaving the way
 		// they did. Told "nothing" like every non-addressee below.
-		if router != "" && adapter.Engine() == router &&
-			(router != string(dto.EngineSingbox) || adapter.Name() == routerProtocol) {
+		addressee := isRouter(adapter, router, routerProtocol)
+		if addressee {
 			mine = cascadeFragments
 			deliveredCascade = true
 			if len(mine) > 0 && string(mine) != "null" {
@@ -1567,6 +1613,13 @@ func (s *Server) applyPushKept(
 		}
 		if err := cr.ApplyCascade(mine); err != nil {
 			s.logger.Error("adapter ApplyCascade failed", "core", adapter.Name(), "err", err)
+			// 19.15: the push named this core the entry and it could not take the
+			// hand-off. It is drawn closed (an adapter that can be), and the
+			// push says so instead of counting as done.
+			if addressee {
+				failed++
+				reasons = append(reasons, fmt.Sprintf("cascade (%s): %v", adapter.Name(), err))
+			}
 		}
 	}
 	// Loud, because the quiet version of this is the worst outcome the cascade

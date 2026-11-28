@@ -35,6 +35,12 @@ func TestHelperBind(t *testing.T) {
 			l.Close()
 		}
 	}
+	if os.Getenv("ICESLAB_BIND_STDOUT") != "" {
+		// xray: the reason goes to stdout, stderr stays empty, exit code 255.
+		fmt.Fprintf(os.Stdout, "Failed to start: app/proxyman/inbound: failed to listen TCP on 24444 > %v\n", err)
+		fmt.Fprintln(os.Stdout, "xray: shutting down")
+		os.Exit(255)
+	}
 	fmt.Fprintf(os.Stderr, "FATAL start service: start inbound/socks[in-d1]: %v\n", err)
 	os.Exit(1)
 }
@@ -127,5 +133,36 @@ func TestExitReasonNamesWhoHoldsADualStackPort(t *testing.T) {
 	want := fmt.Sprintf("(pid %d))", os.Getpid())
 	if !strings.Contains(reason, "(held by ") || !strings.HasSuffix(reason, want) {
 		t.Errorf("reason does not name the holder %s: %q", want, reason)
+	}
+}
+
+// xray reports a taken port on stdout, with an empty stderr and exit status
+// 255 (checked against xray 26.3.27); the holder must still be named.
+func TestExitReasonNamesWhoHoldsAPortWhenTheCoreReportsOnStdout(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	t.Setenv("ICESLAB_BIND_STDOUT", "1")
+	reason := exitReasonOfHelper(t, "tcp", l.Addr().String())
+	want := fmt.Sprintf("(pid %d))", os.Getpid())
+	if !strings.Contains(reason, "exit status 255") || !strings.Contains(reason, "last stdout line: Failed to start") ||
+		!strings.Contains(reason, "(held by ") || !strings.HasSuffix(reason, want) {
+		t.Errorf("reason does not carry the stdout failure and its holder %s: %q", want, reason)
+	}
+}
+
+func TestExitReasonKeepsStderrWhenStdoutHasNoFailure(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	reason := exitReasonOfHelper(t, "tcp", l.Addr().String())
+	if !strings.Contains(reason, "last stderr line: ") || strings.Contains(reason, "last stdout line") {
+		t.Errorf("a stderr reason must stay as before: %q", reason)
 	}
 }

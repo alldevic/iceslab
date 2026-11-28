@@ -165,6 +165,35 @@ describe('rotateNodeCert', () => {
     expect(a.confirms).toEqual([{ asked: out.fingerprint, servedOnThatConnection: out.fingerprint }]);
   });
 
+  it('names an address the node does not have yet beside the old ones, once (19.15)', async () => {
+    const a = await fakeAgent({ sans: [{ type: 'ip', value: '127.0.0.1' }, { type: 'dns', value: 'old-name.example' }] });
+    agents.push(a);
+    const id = await nodeAt(a.port);
+
+    await rotateNodeCert(id, { extraAddress: '[2001:db8::7]:1337' });
+    await rotateNodeCert(id, { extraAddress: '2001:db8:0:0:0:0:0:7' });
+
+    for (const r of a.rotations) {
+      const sans = new X509Certificate(r.certPem).subjectAltName ?? '';
+      expect(sans).toContain('IP Address:127.0.0.1');
+      expect(sans).toContain('DNS:old-name.example');
+      expect(sans.match(/IP Address:2001:DB8:0:0:0:0:0:7/gi)).toHaveLength(1);
+    }
+  });
+
+  it('says why a dial failed: a refused name check is not a timeout (19.15)', async () => {
+    const a = await fakeAgent({ sans: [{ type: 'ip', value: '127.0.0.1' }], host: '::' });
+    agents.push(a);
+    const id = await nodeAt(a.port, {}, '[::1]');
+    const err = (await rotateNodeCert(id).catch((e: unknown) => e)) as Error & { code?: string };
+    expect(err.code).toBe('UNREACHABLE');
+    expect(err.message).toMatch(/does not name the address the panel dials/);
+
+    const dead = await nodeAt(1, {}, '127.0.0.2');
+    const down = (await rotateNodeCert(dead).catch((e: unknown) => e)) as Error;
+    expect(down.message).not.toMatch(/does not name/);
+  });
+
   it('never confirms when the node keeps presenting the old leaf: the agent rolls back by itself', async () => {
     const a = await fakeAgent({ sans: [{ type: 'ip', value: '127.0.0.1' }], liesAboutRotation: true });
     agents.push(a);

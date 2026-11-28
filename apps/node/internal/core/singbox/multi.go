@@ -123,7 +123,19 @@ func (a *Adapter) renderAllWith(certPath, keyPath, statsListen string, held []he
 		return nil, fmt.Errorf("no inbound to render")
 	}
 	base["inbounds"] = inbounds
-	if handoff != nil {
+	if handoff != nil && handoff.Closed {
+		// 19.15: an entry with no hand-off it could take. The listeners stay and
+		// the handshake passes; every connection a user opens through them is
+		// rejected, and nothing leaves from here. First in the rules, ahead of
+		// the resolver rule the node's DNS draws.
+		route, _ := base["route"].(map[string]any)
+		if route == nil {
+			route = map[string]any{}
+		}
+		rules, _ := route["rules"].([]any)
+		route["rules"] = append([]any{map[string]any{"action": "reject"}}, rules...)
+		base["route"] = route
+	} else if handoff != nil {
 		// The only outbound, and the route's end: see chain.go.
 		base["outbounds"] = []any{handoff.outbound()}
 		delete(base, "dns") // the direct outbound's resolver, which is gone

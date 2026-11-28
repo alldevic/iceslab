@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DEFAULT_NODE_RESOLVERS } from '@iceslab/shared';
 import {
+  allDnsConflicts,
   carriesRule,
   findDnsConflict,
   mergeNodeDns,
@@ -70,6 +71,37 @@ describe('findDnsConflict', () => {
     expect(findDnsConflict([a, b, panel], { presetId: 'c' })).toBeNull();
     expect(findDnsConflict([a, b], { presetId: 'a' })).not.toBeNull();
     expect(findDnsConflict([a, b, src('c', 'C', [['y.com'], '10.0.0.4'])], { presetId: 'c' })).toBeNull();
+  });
+});
+
+describe('findDnsConflict with the conflicts that were already there (19.15)', () => {
+  const a = src('a', 'A', [['x.com'], '10.0.0.1']);
+  const b = src('b', 'B', [['x.com'], '10.0.0.2']);
+  const known = (...sources: NamedDnsSource[]) => new Set(allDnsConflicts(sources).map((c) => c.key));
+
+  it('a pair that was there before does not stop a save', () => {
+    expect(findDnsConflict([a, b], { presetId: 'a' }, known(a, b))).toBeNull();
+  });
+  it('the key does not depend on which side came first', () => {
+    expect(findDnsConflict([b, a], { presetId: 'a' }, known(a, b))).toBeNull();
+  });
+  it('the same name with another server is a new conflict', () => {
+    const a2 = src('a', 'A', [['x.com'], '10.0.0.9']);
+    expect(findDnsConflict([a2, b], { presetId: 'a' }, known(a, b))).toMatchObject({ a: { server: '10.0.0.9' }, b: { server: '10.0.0.2' } });
+  });
+  it('a pair with a third source is new, an old one next to it stays quiet', () => {
+    const c = src('c', 'C', [['x.com'], '10.0.0.3']);
+    expect(findDnsConflict([a, b, c], { presetId: 'c' }, known(a, b))).toMatchObject({ b: { presetId: 'c' } });
+    expect(findDnsConflict([a, b, c], { presetId: 'a' }, known(a, b))).toMatchObject({ a: { presetId: 'a' }, b: { presetId: 'c' } });
+  });
+  it('another name of the same pair is new', () => {
+    const a2 = src('a', 'A', [['x.com'], '10.0.0.1'], [['y.com'], '10.0.0.1']);
+    const b2 = src('b', 'B', [['x.com'], '10.0.0.2'], [['y.com'], '10.0.0.2']);
+    expect(findDnsConflict([a2, b2], { presetId: 'a' }, known(a, b))).toMatchObject({ domain: 'y.com' });
+  });
+  it('without known, the first conflict is found as before', () => {
+    expect(allDnsConflicts([a, b]).map((c) => c.domain)).toEqual(['x.com']);
+    expect(findDnsConflict([a, b], { presetId: 'a' })).not.toBeNull();
   });
 });
 

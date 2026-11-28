@@ -324,3 +324,77 @@ describe('19.10: the panel-wide DNS rules go to the nodes', () => {
     expect(await carried(idle.id)).toBeNull();
   });
 });
+
+describe('19.15: an own preset as the panel default', () => {
+  const rule = (name: string, server: string) => ({ match: [name], server, note: '' });
+  const putRaw = (payload: Record<string, unknown>) => app.inject({ method: 'PUT', url: '/api/settings', headers: auth(), payload });
+  const carried = async (id: string) => (await prisma.node.findUniqueOrThrow({ where: { id }, select: { presetDnsRules: true } })).presetDnsRules;
+  const own = async (name: string, ...dnsRules: ReturnType<typeof rule>[]) =>
+    (await prisma.routingPreset.create({ data: { name, dnsRules }, select: { id: true } })).id;
+
+  it('is stored and read back, null clears it, a preset that does not exist is a 400 naming the field', async () => {
+    const id = await own('Mine');
+    expect((await putRaw({ subscriptionDefaultPresetId: id })).statusCode).toBe(200);
+    expect((await prisma.appSetting.findUniqueOrThrow({ where: { key: 'subscriptionDefaultPresetId' } })).value).toBe(id);
+    invalidateSubscriptionSettingsCache();
+    expect((await getSubscriptionSettings()).defaultPresetId).toBe(id);
+    const read = JSON.parse((await app.inject({ method: 'GET', url: '/api/settings', headers: auth() })).body);
+    expect(read.subscriptionDefaultPresetId).toBe(id);
+
+    const missing = await putRaw({ subscriptionDefaultPresetId: '7b0d1c1e-0000-4000-8000-000000000000' });
+    expect(missing.statusCode, missing.body).toBe(400);
+    expect(JSON.parse(missing.body)).toMatchObject({ error: 'ROUTING_PRESET_NOT_FOUND', field: 'subscriptionDefaultPresetId' });
+    expect((await prisma.appSetting.findUniqueOrThrow({ where: { key: 'subscriptionDefaultPresetId' } })).value).toBe(id);
+    expect((await putRaw({ subscriptionDefaultPresetId: 'ru-split' })).statusCode).toBe(400);
+
+    expect((await putRaw({ subscriptionDefaultPresetId: null })).statusCode).toBe(200);
+    invalidateSubscriptionSettingsCache();
+    expect((await getSubscriptionSettings()).defaultPresetId).toBeNull();
+  });
+
+  it('puts the rules of the default on the nodes of squads without a preset, and takes them off when it changes', async () => {
+    const [bare, held] = [await makeNode(), await makeNode()];
+    const [d1, d2, q] = [await own('D1', rule('one.com', '10.99.0.1')), await own('D2', rule('two.com', '10.99.0.2')), await own('Q')];
+    await makeSquad([bare.id]);
+    await makeSquad([held.id], { presetId: q });
+    expect((await putRaw({ subscriptionDefaultPresetId: d1 })).statusCode).toBe(200);
+    expect(await carried(bare.id)).toEqual([{ presetId: d1, rules: [{ match: ['one.com'], server: '10.99.0.1' }] }]);
+    expect(await carried(held.id)).toBeNull();
+    expect((await putRaw({ subscriptionDefaultPresetId: d2 })).statusCode).toBe(200);
+    expect(await carried(bare.id)).toEqual([{ presetId: d2, rules: [{ match: ['two.com'], server: '10.99.0.2' }] }]);
+    expect((await putRaw({ subscriptionDefaultPresetId: null })).statusCode).toBe(200);
+    expect(await carried(bare.id)).toBeNull();
+  });
+
+  it('a default that makes a new conflict on a node is refused with nothing written', async () => {
+    const node = await makeNode({ name: 'shared-node' });
+    const [d, q] = [await own('D', rule('example.com', '10.99.0.1')), await own('Q', rule('example.com', '10.99.0.2'))];
+    await makeSquad([node.id], { presetId: q });
+    await makeSquad([node.id]);
+    const res = await putRaw({ subscriptionDefaultPresetId: d, brandName: 'Changed' });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(JSON.parse(res.body)).toMatchObject({ error: 'ROUTING_PRESET_DNS_CONFLICT', field: 'subscriptionDefaultPresetId', preset: 'Q', node: 'shared-node' });
+    expect(await prisma.appSetting.findUnique({ where: { key: 'subscriptionDefaultPresetId' } })).toBeNull();
+    expect(await prisma.appSetting.findUnique({ where: { key: 'brandName' } })).toBeNull();
+    expect(await carried(node.id)).toBeNull();
+  });
+
+  it('a panel-wide DNS save that repeats an already recorded conflict does not stop at it', async () => {
+    const node = await makeNode({ name: 'shared-node' });
+    const [a, b] = [await own('A', rule('example.com', '10.99.0.1')), await own('B', rule('example.com', '10.99.0.2'))];
+    await makeSquad([node.id], { presetId: a });
+    await makeSquad([node.id], { presetId: b });
+    const { recomputeAfterChange } = await import('../routing-presets/routing-presets.nodes.js');
+    await recomputeAfterChange();
+    // One of the two was left out (which one is the older preset's business, not this test's).
+    const recorded = (await prisma.node.findUniqueOrThrow({ where: { id: node.id }, select: { presetDnsConflicts: true } })).presetDnsConflicts as { kind: string; presetId: string; otherPresetId: string }[];
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]!.kind).toBe('conflict');
+    expect([recorded[0]!.presetId, recorded[0]!.otherPresetId].sort()).toEqual([a, b].sort());
+    // Panel-wide rules naming something else: 200, though A and B still clash on the node.
+    expect((await putRaw({ subscriptionDnsRules: [rule('other.com', '10.99.0.9')] })).statusCode).toBe(200);
+    // Panel-wide rules naming example.com with a third server meet both: a new conflict.
+    const bad = await putRaw({ subscriptionDnsRules: [rule('example.com', '10.99.0.3')] });
+    expect(bad.statusCode, bad.body).toBe(409);
+  });
+});

@@ -118,8 +118,20 @@ func TestBootstrapWireguardRemoveTakesOnlyWhatTheAgentWrote(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Its sysctl drop-in goes; the other core's (AmneziaWG) is not its to take.
+	sysctlD := r.dir + "/etc/sysctl.d"
+	_ = os.MkdirAll(sysctlD, 0o755)
+	for _, f := range []string{"99-wg.conf", "99-awg.conf"} {
+		_ = os.WriteFile(filepath.Join(sysctlD, f), []byte("net.ipv4.ip_forward=1\n"), 0o644)
+	}
 	if out, err := r.run(t, "--remove"); err != nil {
 		t.Fatalf("%v\n%s", err, out)
+	}
+	if _, err := os.Stat(sysctlD + "/99-wg.conf"); !os.IsNotExist(err) {
+		t.Errorf("--remove left 99-wg.conf: %v", err)
+	}
+	if _, err := os.Stat(sysctlD + "/99-awg.conf"); err != nil {
+		t.Errorf("--remove took the AmneziaWG drop-in: %v", err)
 	}
 	for f, want := range map[string]bool{"wg0.conf": false, "wg0.state.json": false, "wg1.conf": true} {
 		if _, err := os.Stat(filepath.Join(cfg, f)); (err == nil) != want {

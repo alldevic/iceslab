@@ -47,6 +47,8 @@ export interface AdminSettings extends PublicSettings {
   subscriptionSupportUrl?: string | null;
   subscriptionAnnounceTemplate?: string | null;
   subscriptionRoutingPreset?: RoutingPresetId;
+  /** 19.15: an own routing preset as the panel default (its id), stronger than `subscriptionRoutingPreset`; null = none. */
+  subscriptionDefaultPresetId?: string | null;
   /** TLS-fragment - split the ClientHello in the Xray JSON format so SNI-DPI
    *  cannot match the handshake. Xray JSON only. */
   subscriptionTlsFragment?: boolean;
@@ -159,6 +161,7 @@ export interface UpdateSettingsInput {
   subscriptionSupportUrl?: string | null;
   subscriptionAnnounceTemplate?: string | null;
   subscriptionRoutingPreset?: RoutingPresetId;
+  subscriptionDefaultPresetId?: string | null;
   subscriptionTlsFragment?: boolean;
   subscriptionWgDns?: string[] | null;
   subscriptionWgDropIpv6?: boolean;

@@ -60,9 +60,9 @@ wg_interfaces_up() {
 # --remove: the agent's env block and the config and state it rendered (the
 # server key and the peers: left behind, they would bring the old key back up on
 # the next install instead of what the panel sends; an operator's own wg0.conf
-# is not touched). Kept: the package, which
-# bootstrap-amneziawg.sh and the operator may rely on, IP forwarding and ufw's
-# FORWARD policy, which other traffic on the node may rely on.
+# is not touched), and the sysctl drop-in (99-wg.conf: forwarding, accept_ra=2).
+# Kept: the package, which bootstrap-amneziawg.sh and the operator may rely on,
+# and ufw's FORWARD policy, which other traffic on the node may rely on.
 remove_core() {
   local iface
   iface="$(node_env_keep WIREGUARD_INTERFACE wg0)"
@@ -72,6 +72,7 @@ remove_core() {
   if [[ -f "$CONFIG_DIR/$iface.state.json" ]]; then
     rm -f "$CONFIG_DIR/$iface.conf" "$CONFIG_DIR/$iface.state.json"
   fi
+  remove_sysctl_conf /etc/sysctl.d/99-wg.conf
   unwire_env
   log "WireGuard removed from the agent (the wireguard-tools package stays)"
 }

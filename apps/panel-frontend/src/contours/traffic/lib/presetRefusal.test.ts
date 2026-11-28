@@ -63,6 +63,13 @@ describe('presetRefusalWords', () => {
     expect(words).not.toContain('routes.presetHeldUsers');
   });
 
+  it('19.15: the default preset is one of the holders, and only when the server says so', () => {
+    const r = routingPresetRefusal(res(409, { error: 'ROUTING_PRESET_IN_USE', users: [], squads: [], userCount: 0, squadCount: 0, isDefault: true }));
+    expect(r).toEqual({ code: 'ROUTING_PRESET_IN_USE', users: [], squads: [], userCount: 0, squadCount: 0, isDefault: true });
+    expect(presetRefusalWords(r!, t)).toBe('routes.presetInUse {"holders":"routes.presetHeldDefault"}');
+    expect(routingPresetRefusal(res(409, { error: 'ROUTING_PRESET_IN_USE', isDefault: 'yes' }))).not.toHaveProperty('isDefault');
+  });
+
   it('gives every code its own sentence', () => {
     expect(presetRefusalWords({ code: 'ROUTING_PRESET_GEO_TAG_UNKNOWN', entries: ['geoip:zz'] }, t)).toBe(
       'routes.presetGeoTagUnknown {"entries":"geoip:zz"}',

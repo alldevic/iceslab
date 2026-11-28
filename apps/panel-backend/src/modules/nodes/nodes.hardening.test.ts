@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import type { EngineName } from '@iceslab/shared';
 import { appendHardeningFlags, buildInstallCommand, enginesFlag, installRefOf, panelInstallCommand } from './nodes.service.js';
 import { readCurrentVersion } from '../system/system.service.js';
@@ -104,6 +104,47 @@ describe('appendHardeningFlags (install-command generation)', () => {
     appendHardeningFlags(fromService, hardening);
     appendHardeningFlags(fromRoutes, hardening);
     expect(fromService.join('\n')).toBe(fromRoutes.join('\n'));
+  });
+});
+
+describe('buildInstallCommand: --panel-ip names every address the panel has', () => {
+  const base = { panelUrl: 'https://p', token: 't', engines: [] as EngineName[], acmeEmail: '' };
+
+  it('writes the IPv4 and the IPv6 as one comma list, in that order', () => {
+    const cmd = buildInstallCommand({ ...base, panelIp: ['198.51.100.7', '2001:db8:5a5a::50'] });
+    expect(cmd).toContain('  --panel-ip 198.51.100.7,2001:db8:5a5a::50');
+    expect(cmd).not.toContain('YOUR_PANEL_PUBLIC_IP');
+  });
+
+  it('a list of one is the old single address, byte for byte', () => {
+    expect(buildInstallCommand({ ...base, panelIp: ['198.51.100.7'] })).toBe(
+      buildInstallCommand({ ...base, panelIp: '198.51.100.7' }),
+    );
+  });
+
+  it('an empty list keeps the placeholder and its note', () => {
+    const cmd = buildInstallCommand({ ...base, panelIp: [] });
+    expect(cmd).toContain('--panel-ip YOUR_PANEL_PUBLIC_IP');
+    expect(cmd).toMatch(/^# panel IP auto-detect failed/m);
+  });
+});
+
+describe('getPanelPublicIps (PANEL_PUBLIC_IP, then PANEL_PUBLIC_IP6)', () => {
+  const load = async (v4: string | undefined, v6: string | undefined) => {
+    vi.resetModules();
+    vi.doMock('../../config.js', () => ({ config: { PANEL_PUBLIC_IP: v4, PANEL_PUBLIC_IP6: v6 } }));
+    return (await import('./panel-ip.js')).getPanelPublicIps;
+  };
+  afterEach(() => vi.doUnmock('../../config.js'));
+
+  it('IPv4 only: the one address', async () => {
+    expect(await (await load('198.51.100.7', undefined))()).toEqual(['198.51.100.7']);
+  });
+  it('both set: IPv4 first, then the IPv6', async () => {
+    expect(await (await load('198.51.100.7', '2001:db8:5a5a::50'))()).toEqual(['198.51.100.7', '2001:db8:5a5a::50']);
+  });
+  it('the same IPv6 given as the main address is named once', async () => {
+    expect(await (await load('2001:DB8:5a5a::50', '2001:db8:5a5a::50'))()).toEqual(['2001:DB8:5a5a::50']);
   });
 });
 

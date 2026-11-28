@@ -90,6 +90,51 @@ describe('subscription metadata page', () => {
   });
 });
 
+describe('subscription metadata page, an own preset as the default (19.15)', () => {
+  const OWN = { id: '6f1d1c1e-0000-4000-8000-000000000001', name: 'Team default', builtIn: false, rules: [], dnsRules: [] };
+
+  const mountWithPresets = (stored: Record<string, unknown>) => {
+    const api = installEmptyApi({
+      routes: [
+        { re: /^\/api\/settings$/, reply: stored },
+        { re: /^\/api\/routing-presets$/, reply: { presets: [OWN] } },
+      ],
+      onWrite: (r) => (r.method === 'PUT' && r.url === '/api/settings' ? { data: stored } : undefined),
+    });
+    const view = renderWithProviders(
+      <Routes>
+        <Route path="/subscription/metadata" element={<SubscriptionMetadataPage />} />
+      </Routes>,
+      { route: '/subscription/metadata' },
+    );
+    return { api, view };
+  };
+
+  it('picking an own preset sends its id, which the schema accepts, and leaves the built-in key alone', async () => {
+    const { api, view } = mountWithPresets(SUBSCRIPTION);
+    fireEvent.click(await screen.findByText(OWN.name, {}, FIRST));
+    fireEvent.click(await screen.findByRole('button', { name: view.i18n.t('common.save') }));
+    const body = await saved(api);
+    accepted(UpdateSettingsSchema, body);
+    expect(body.subscriptionDefaultPresetId).toBe(OWN.id);
+    // The built-in key is left as it was: it stays the default for panels that never pick an own preset.
+    expect(body.subscriptionRoutingPreset).toBe('ru-split');
+  });
+
+  it('a stored own default is shown as the chosen one and is sent back unchanged', async () => {
+    const stored = { ...SUBSCRIPTION, subscriptionDefaultPresetId: OWN.id };
+    const { api, view } = mountWithPresets(stored);
+    await screen.findByText(OWN.name, {}, FIRST);
+    const input = (await screen.findByLabelText(view.i18n.t('metadata.interval'), {}, FIRST)) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('12'), FIRST);
+    fireEvent.change(input, { target: { value: '48' } });
+    fireEvent.click(await screen.findByRole('button', { name: view.i18n.t('common.save') }));
+    const body = await saved(api);
+    accepted(UpdateSettingsSchema, body);
+    expect(body.subscriptionDefaultPresetId).toBe(OWN.id);
+  });
+});
+
 describe('subscription delivery page', () => {
   const STORED = {
     subscriptionDefaultFormat: 'plain',

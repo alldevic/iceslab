@@ -93,7 +93,7 @@ The flags a panel's command uses, for reading or adjusting it:
 | `--panel-url <url>` | The panel the agent belongs to. `https://` only. |
 | `--bootstrap <token>` | The one-time token from the panel. `--bootstrap-file <path>` reads it from a file instead, so it never shows in the process list. |
 | `--engines <list>` | The cores, comma-separated, in any order: `xray`, `singbox`, `hysteria`, `amneziawg`, `wireguard`, `mtproto`, `mieru`, `naive`. None: the agent alone. `--protocol wireguard` is the older spelling of the same. |
-| `--panel-ip <ip>[,<ip>]` | Only these addresses may reach the agent's port (ufw). |
+| `--panel-ip <ip>[,<ip>]` | Only these addresses may reach the agent's port (ufw). The panel names its IPv4 and, when `PANEL_PUBLIC_IP6` is set, its IPv6. |
 | `--port <n>` | The agent's mTLS port, default `1337`. |
 | `--hysteria-domain <name>` | The name Hysteria's certificate is issued for (ACME, HTTP-01). The panel sets it from the node's address when that is a name. |
 | `--hysteria-email <address>` | Optional: the contact of the ACME account. The certificate is issued without it; an `example.*` or `localhost` address is refused, as Let's Encrypt refuses it. |

@@ -1,15 +1,18 @@
 import { randomBytes } from 'node:crypto';
 import { Prisma } from '../../generated/prisma/client.js';
-import { bootstrapUsable, buildNodePayload } from './node-payload.js';
+import { bootstrapUsable, buildNodePayload, sanOf } from './node-payload.js';
+import { getLogger } from '../../lib/infra/logger.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { prisma } from '../../prisma.js';
 import { anyChanged } from '../../lib/util/same-value.js';
 import { NODE_LINK_FIELDS } from '../hosts/hosts.freshness.js';
 import * as repo from './nodes.repository.js';
-import { getPanelPublicIp } from './panel-ip.js';
+import { getPanelPublicIps } from './panel-ip.js';
 import { issueBootstrapToken } from './bootstrap.service.js';
 import { registerWarpDevice } from '../warp/warp.service.js';
+import { rotateNodeCert } from './node-cert-rotation.js';
 import { getHiddenCascadeNodes } from '../cascades/cascade.service.js';
+import { pushEntriesIfExitIpv6Moved } from '../cascades/cascade.exit-ipv6-push.js';
 import { assertPolicyFitsNode } from '../node-policies/node-policies.service.js';
 import { notifyTelegramAsync, escapeMarkdown } from '../../lib/notify/telegram-notify.js';
 import {
@@ -27,7 +30,7 @@ import type {
   HardeningFlags,
   HardeningInput,
 } from './nodes.schemas.js';
-import { resolveCoreVersions, type EngineName } from '@iceslab/shared';
+import { resolveCoreVersions, type EngineName, type NodeCores } from '@iceslab/shared';
 import { applyCoreVersionsPatch, readCoreVersions } from './node-core-versions.js';
 import { assertTunnelPrefixFree, hostsByEngine, withNeededBy } from './node-core-gate.js';
 import { cascadeNeedsByNode, type CascadeEngineNeed } from './node-cascade-needs.js';
@@ -253,8 +256,9 @@ export interface InstallCommandInput {
   nodeAddress?: string;
   hardening?: HardeningInput | null;
   engines: readonly EngineName[];
-  /** The panel's public IP, or null when every probe failed. */
-  panelIp: string | null;
+  /** The panel's public address (or addresses: IPv4, then the IPv6 of
+   *  PANEL_PUBLIC_IP6), or null / empty when none is known. */
+  panelIp: string | readonly string[] | null;
   /** ACME_DEFAULT_EMAIL, trimmed; empty when unset. */
   acmeEmail: string;
   /** The panel's own version (readCurrentVersion). A release version pins
@@ -305,8 +309,9 @@ export function buildInstallCommand(input: InstallCommandInput): string {
 
   // Slice S7: the panel's egress IP locks the agent's UFW to it. When every
   // probe failed (offline egress?) the operator substitutes it by hand.
-  if (input.panelIp) {
-    flags.push(`--panel-ip ${input.panelIp}`);
+  const panelIps = typeof input.panelIp === 'string' ? [input.panelIp] : (input.panelIp ?? []);
+  if (panelIps.length > 0) {
+    flags.push(`--panel-ip ${panelIps.join(',')}`);
   } else {
     flags.push('--panel-ip YOUR_PANEL_PUBLIC_IP');
     notes.push('# panel IP auto-detect failed: replace YOUR_PANEL_PUBLIC_IP below with the panel public IP');
@@ -386,7 +391,7 @@ export async function installOf(
     nodeAddress,
     hardening,
     engines,
-    panelIp: await getPanelPublicIp(),
+    panelIp: await getPanelPublicIps(),
     acmeEmail: (process.env.ACME_DEFAULT_EMAIL ?? '').trim(),
   });
   return { command, payloadOnly };
@@ -503,7 +508,10 @@ export async function rotateNodeHysteriaTls(id: string): Promise<PublicHysteriaT
   return publicHysteriaTls(fresh)!;
 }
 
-export async function updateNode(id: string, input: UpdateNodeInput): Promise<PublicNodeDto> {
+/** A node save's answer: the node, and what the save could not make good (19.15). */
+export type UpdatedNode = PublicNodeDto & { warnings?: string[] };
+
+export async function updateNode(id: string, input: UpdateNodeInput): Promise<UpdatedNode> {
   const existing = await repo.findActiveById(id);
   if (!existing) throw new NodeNotFoundError(id);
 
@@ -621,6 +629,19 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
   // name and country only in its label (NODE_LINK_FIELDS).
   if (anyChanged(existing, data as Partial<typeof existing>, NODE_LINK_FIELDS)) data.linkChangedAt = new Date();
 
+  // 19.15: the certificate first, then the address. The node's mTLS pair names
+  // the address it was installed at; the panel checks that name on every call,
+  // so a node moved to an address the pair does not carry (an IPv6 one, from
+  // 18.3 on) answered nothing at all, and the one fix, a new pair, needed that
+  // very connection: 502 CERT_UNREACHABLE. The new pair is issued over the
+  // address that still works and names both. A node that cannot be asked keeps
+  // the save, and the answer says what it did not do.
+  const warnings: string[] = [];
+  if (addressChanged && input.address !== undefined) {
+    const warning = await prepareCertForAddress(id, existing, input.address);
+    if (warning) warnings.push(warning);
+  }
+
   let updated;
   try {
     updated = await repo.updateById(id, data);
@@ -628,6 +649,16 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
     throw nodeClashOf(err, input) ?? err;
   }
 
+  // 19.15: the entries of the cascades this node exits are drawn by whether it
+  // leaves by IPv6, and the mode is half of that answer. Their pushes are
+  // queued here, beside the node's own below, not at their next push.
+  if (ipv6ModeChanged) {
+    await pushEntriesIfExitIpv6Moved(
+      id,
+      { cores: existing.cores as NodeCores | null, ipv6Mode: existing.ipv6Mode },
+      { cores: existing.cores as NodeCores | null, ipv6Mode: updated.ipv6Mode },
+    );
+  }
   if (domainChanged || addressChanged || dnsChanged || ipv6ModeChanged || tunnelPrefixChanged) {
     eventBus.emit('node.updated', { nodeId: id, nodeName: updated.name });
   }
@@ -649,8 +680,41 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
     eventBus.emit('node.status-changed', { nodeId: id, from: existing.status, to: updated.status });
   }
 
-  return mapNodeToPublic(updated);
+  return warnings.length > 0 ? { ...mapNodeToPublic(updated), warnings } : mapNodeToPublic(updated);
 }
+
+/**
+ * Put the new address into the node's certificate before the address is saved.
+ * Returns the warning to answer with, or null when nothing is left to say:
+ * the pair was reissued, the name did not change (a port edit), or the node
+ * was never installed, whose pair is issued for the address it is installed at.
+ */
+async function prepareCertForAddress(
+  id: string,
+  existing: { name: string; address: string; status: string },
+  newAddress: string,
+): Promise<string | null> {
+  if (sanOf(newAddress).value === sanOf(existing.address).value) return null;
+  if (existing.status !== 'online' && existing.status !== 'degraded') {
+    // Down since it was installed: the old address cannot be asked, and whether
+    // the pair carries the new one is not known.
+    if (existing.status === 'unreachable') return CERT_NOT_PREPARED;
+    return null;
+  }
+  try {
+    await rotateNodeCert(id, { extraAddress: newAddress });
+    return null;
+  } catch (err) {
+    getLogger().warn(
+      { node: existing.name, err: err instanceof Error ? err.message : String(err) },
+      '[nodes] the certificate was not prepared for the new address',
+    );
+    return CERT_NOT_PREPARED;
+  }
+}
+
+const CERT_NOT_PREPARED =
+  "The node's certificate may not contain the new address: reinstall the agent, or rotate the certificate from that address.";
 
 /**
  * A-279: what a deleted node no longer keeps, the fields of models/nodes.prisma

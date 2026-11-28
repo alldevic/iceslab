@@ -194,6 +194,7 @@ export const traffic = {
     presetHeldSquads_many: '{{count}} сквадам ({{names}})',
     presetHeldSquads_other: '{{count}} сквадам ({{names}})',
     presetHeldMore: '{{names}} и ещё {{count}}',
+    presetHeldDefault: 'как пресет панели по умолчанию',
     // Стоит там, где у двух соседних вкладок кнопка удаления. Пустой угол
     // читается как забытая кнопка, поэтому отсутствие названо словом.
     presetNoDelete: 'встроенный, удалить нельзя',

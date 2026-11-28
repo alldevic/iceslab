@@ -234,7 +234,7 @@ export function useNodeEditForm() {
         ...statusPut(node, form.values.inService),
       });
     },
-    onSuccess: () => {
+    onSuccess: (saved) => {
       setPolicyRefusal(null);
       setCoreRefusal(null);
       setEnginesRefusal(null);
@@ -246,6 +246,15 @@ export function useNodeEditForm() {
       qc.invalidateQueries({ queryKey: ['policy-drawing', id] });
       form.resetDirty(form.values);
       notifications.show({ color: 'green', message: t('nodeEdit.saved') });
+      // 19.15: the address is written, but its certificate could not be reissued; the server's words.
+      if (saved.warnings?.length) {
+        notifications.show({
+          color: 'yellow',
+          title: t('nodeEdit.savedWithWarnings'),
+          message: saved.warnings.join('\n'),
+          autoClose: false,
+        });
+      }
     },
     onError: (err) => {
       // A policy this machine cannot carry out comes back naming the node and

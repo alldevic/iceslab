@@ -51,6 +51,35 @@ const XRAY_BIN = process.env.XRAY_BIN ?? ['/usr/local/bin/xray'].find((p) => exi
 const children: ChildProcess[] = [];
 
 /** Like run, for xray (the legacy drawing of a leg). */
+/**
+ * `localhost` is answered inside each engine's own config, never by the host's
+ * resolver: with a VPN interface holding the default DNS route and no servers
+ * (systemd-resolved: "link has no DNS servers configured") the engines' system
+ * lookup fails, and the test is about the dial family, not about the host.
+ */
+const LOCALHOST_ADDRS = ['127.0.0.1', '::1'];
+const OWN_DNS_TAG = 'live-localhost';
+function withOwnLocalhost(config: unknown): unknown {
+  const c = structuredClone(config) as {
+    dns?: { servers?: { type: string; tag: string; predefined?: unknown }[] };
+    route?: { default_domain_resolver?: unknown };
+  };
+  const hosts = { type: 'hosts', predefined: { localhost: LOCALHOST_ADDRS } };
+  const servers = c.dns?.servers ?? [];
+  // A server the config already names (the leg resolver) is answered from the
+  // table under the same tag, so the outbounds that point at it stay valid.
+  const own = servers.map((x) => ({ ...hosts, tag: x.tag }));
+  if (own.length === 0) own.push({ ...hosts, tag: OWN_DNS_TAG });
+  c.dns = { ...c.dns, servers: own };
+  c.route = { ...c.route, default_domain_resolver: own[0]!.tag };
+  return c;
+}
+
+/** The xray form: its own `dns.hosts` table, the host's resolver never asked. */
+function withOwnLocalhostXray<T extends object>(config: T): T {
+  return { ...config, dns: { hosts: { localhost: LOCALHOST_ADDRS } } };
+}
+
 function runXray(name: string, config: unknown): { log: () => string } {
   const dir = mkdtempSync(join(tmpdir(), `iceslab-live-${name}-`));
   const file = join(dir, 'config.json');
@@ -321,7 +350,7 @@ describe('a leg carries a request between two engines', () => {
       }) as { inbounds: { type: string; listen_port: number }[] };
       for (const i of entry.inbounds) if (i.type === 'socks') i.listen_port = socksPort;
 
-      const exitRun = run('policy-exit', pair.exit);
+      const exitRun = run('policy-exit', withOwnLocalhost(pair.exit));
       const entryRun = run('policy-entry', entry);
       const through = (user: string, host?: string) =>
         getThroughSocks(socksPort, password, httpPort, { user, ...(host ? { host } : {}) });
@@ -466,7 +495,7 @@ describe('a leg carries a request between two engines', () => {
     for (const i of entry.inbounds) if (i.type === 'socks') i.listen_port = socksPort;
     const exit = pair.exit as { inbounds: { listen?: string }[] };
     for (const i of exit.inbounds) i.listen = '127.0.0.1';
-    return { entry, exit, socksPort, password, cred };
+    return { entry: withOwnLocalhost(entry) as typeof entry, exit, socksPort, password, cred };
   };
 
   it.skipIf(!SINGBOX_BIN)(
@@ -525,7 +554,7 @@ describe('a leg carries a request between two engines', () => {
         const p = await pinnedPair(selfHost);
         const entry = legacyEntry(selfHost, p.cred, p.socksPort, p.password);
         expect(JSON.stringify(entry)).toContain(arrives ? 'ForceIPv4' : 'ForceIPv6');
-        const { exit, ...entryConfig } = entry;
+        const { exit, ...entryConfig } = withOwnLocalhostXray(entry);
         const exitRun = runXray(`xray-pin-${arrives ? 'v4' : 'v6'}-exit`, exit);
         const entryRun = runXray(`xray-pin-${arrives ? 'v4' : 'v6'}-entry`, entryConfig);
         try {

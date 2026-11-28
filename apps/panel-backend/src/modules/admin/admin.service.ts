@@ -6,13 +6,6 @@ import { notifyTelegramAsync, escapeMarkdown } from '../../lib/notify/telegram-n
 
 const BCRYPT_COST = 12;
 
-export class AdminAlreadyExistsError extends Error {
-  constructor(public username: string) {
-    super(`Admin "${username}" already exists`);
-    this.name = 'AdminAlreadyExistsError';
-  }
-}
-
 export class AdminNotFoundError extends Error {
   constructor() {
     super('Admin not found');
