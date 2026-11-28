@@ -771,7 +771,7 @@ export function parseCertNotAfter(raw: string | undefined): Date | undefined {
 export function statusFromHealth(
   res: {
     status: string;
-    cores: { name: string; running: boolean; provisioned?: boolean }[];
+    cores: { name: string; running: boolean; provisioned?: boolean; error?: string }[];
     chain?: { running: boolean; error?: string } | null;
     reason?: string;
   },
@@ -833,9 +833,15 @@ export function statusFromHealth(
     // The node's own reason travels beside the cores (E37: the host's resolver
     // not answering, every core running). Put before the down cores when both
     // hold, so the 200-char cut drops a core's name and not the node's reason.
+    // A core can run and still say why the node is degraded: a cascade entry
+    // drawn closed keeps its listener (19.15) and puts the reason in `error`.
+    const said = res.cores
+      .filter((c) => c.running && c.error)
+      .map((c) => `${c.name}: ${c.error}`);
     const parts: string[] = [];
     if (res.reason) parts.push(res.reason);
     if (down.length) parts.push(`not running: ${down.join(', ')}`);
+    parts.push(...said);
     return {
       status: 'degraded',
       // No core reports itself down, yet the agent called the node degraded.

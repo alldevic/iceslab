@@ -91,6 +91,22 @@ describe('statusFromHealth', () => {
     expect(v.message).toBe('agent reports degraded without a core reason');
   });
 
+  it('names a running core that says why the node is degraded (19.15)', () => {
+    // A cascade entry drawn closed keeps listening, so the core runs; the
+    // agent puts the closure in that core's error.
+    const v = statusFromHealth({
+      status: 'degraded',
+      cores: [
+        { name: 'singbox', running: true, error: 'cascade entry closed: chain userCore carries no socks hand-off' },
+        { name: 'xray', running: true },
+      ],
+    });
+    expect(v).toEqual({
+      status: 'degraded',
+      message: 'singbox: cascade entry closed: chain userCore carries no socks hand-off',
+    });
+  });
+
   it("carries the node's own reason when every core runs (E37)", () => {
     // nl-01, 25.09: the host's resolver stopped answering, every xray host died,
     // every core ran, and the node read online. The agent now says why.
