@@ -68,6 +68,17 @@ All notable changes to Iceslab are documented here. Format loosely follows
 
 ### Fixed
 
+- **Restore brings the panel up from the current build** (`iceslab-restore.sh`).
+  Step 5 ran `docker compose start backend frontend`, which started whatever
+  containers were left, of any build (a newer build over the restored older
+  database applied its migrations to it), and failed on the missing `migrate`
+  dependency when none were left. It now runs `up -d backend frontend` from the
+  current compose file and images. A backup records `gitSha` (in a git checkout)
+  and `migrations` (count and last name) in `manifest.json`; the restore prints
+  them and warns, without refusing, when the archive's database has migrations
+  the code does not have. Older archives restore as before. New
+  `docs/rollback.md` (`.ru.md`): `migrate-from-fork.sh --rollback` first, then
+  the rollback of an ordinary upgrade, and a note on the `v0.3.1` restore.
 - The agent's unit written by the installer lists `/etc/wireguard` among its
   writable paths, as it does every other core's directory; without it the
   agent could not write the config of a WireGuard interface under

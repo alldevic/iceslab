@@ -509,7 +509,12 @@ export async function rotateNodeHysteriaTls(id: string): Promise<PublicHysteriaT
 }
 
 /** A node save's answer: the node, and what the save could not make good (19.15). */
-export type UpdatedNode = PublicNodeDto & { warnings?: string[] };
+/**
+ * A save that went through with a caveat. `code` is what a UI translates (19.15),
+ * `message` is the English text for an API client that does not know the code.
+ */
+export type NodeWarning = { code: string; message: string };
+export type UpdatedNode = PublicNodeDto & { warnings?: NodeWarning[] };
 
 export async function updateNode(id: string, input: UpdateNodeInput): Promise<UpdatedNode> {
   const existing = await repo.findActiveById(id);
@@ -636,7 +641,7 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Up
   // very connection: 502 CERT_UNREACHABLE. The new pair is issued over the
   // address that still works and names both. A node that cannot be asked keeps
   // the save, and the answer says what it did not do.
-  const warnings: string[] = [];
+  const warnings: NodeWarning[] = [];
   if (addressChanged && input.address !== undefined) {
     const warning = await prepareCertForAddress(id, existing, input.address);
     if (warning) warnings.push(warning);
@@ -685,7 +690,7 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Up
 
 /**
  * Put the new address into the node's certificate before the address is saved.
- * Returns the warning to answer with, or null when nothing is left to say:
+ * Returns the warning ({ code, message }) to answer with, or null when nothing is left to say:
  * the pair was reissued, the name did not change (a port edit), or the node
  * was never installed, whose pair is issued for the address it is installed at.
  */
@@ -693,7 +698,7 @@ async function prepareCertForAddress(
   id: string,
   existing: { name: string; address: string; status: string },
   newAddress: string,
-): Promise<string | null> {
+): Promise<NodeWarning | null> {
   if (sanOf(newAddress).value === sanOf(existing.address).value) return null;
   if (existing.status !== 'online' && existing.status !== 'degraded') {
     // Down since it was installed: the old address cannot be asked, and whether
@@ -713,8 +718,11 @@ async function prepareCertForAddress(
   }
 }
 
-const CERT_NOT_PREPARED =
-  "The node's certificate may not contain the new address: reinstall the agent, or rotate the certificate from that address.";
+const CERT_NOT_PREPARED: NodeWarning = {
+  code: 'CERT_NOT_PREPARED',
+  message:
+    "The node's certificate may not contain the new address: reinstall the agent, or rotate the certificate from that address.",
+};
 
 /**
  * A-279: what a deleted node no longer keeps, the fields of models/nodes.prisma

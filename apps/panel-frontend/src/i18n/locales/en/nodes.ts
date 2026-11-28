@@ -542,6 +542,10 @@ export const nodes = {
     exposureCheck: 'Check open ports',
     saved: 'Node saved',
     savedWithWarnings: 'Saved, with a warning',
+    warnings: {
+      CERT_NOT_PREPARED:
+        "The node's certificate may not contain the new address: reinstall the agent, or rotate the certificate from that address.",
+    },
     warpError: 'Could not switch WARP',
     exposureSkipped: 'The check is unavailable: {{note}}.',
     exposureClean: 'No unexpected open ports.',

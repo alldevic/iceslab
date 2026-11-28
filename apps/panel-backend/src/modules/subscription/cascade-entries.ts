@@ -1,4 +1,4 @@
-import { isPlainXray, type SubscriptionEndpoint } from './subscription.formats.js';
+import { isPlainXray, type SubscriptionEndpoint, type XraySubscriptionEndpoint } from './subscription.formats.js';
 import { endpointKey } from './endpoint-identity.js';
 
 /**
@@ -13,6 +13,16 @@ export function withVlessRouteTag(uuid: string, tag: number): string {
   if (parts.length !== 5 || parts[2]!.length !== 4) return uuid;
   parts[2] = (tag & 0xffff).toString(16).padStart(4, '0');
   return parts.join('-');
+}
+
+/**
+ * Whether an entry can carry the lines of a cascade at all: xray, not plain
+ * (socks / http), VLESS. The one predicate for both sides, the deal of the
+ * lines between entries (collapseCascadeLines) and their expansion
+ * (expandCascadeEntry), so a line is never dealt to an entry that cannot show it.
+ */
+export function canCarryCascadeLines(e: SubscriptionEndpoint): e is XraySubscriptionEndpoint {
+  return e.protocol === 'xray' && !isPlainXray(e) && (e.subprotocol ?? 'vless') === 'vless';
 }
 
 /**
@@ -31,13 +41,7 @@ export function withVlessRouteTag(uuid: string, tag: number): string {
  * entries go out once, untagged, as they always reached the entry.
  */
 export function expandCascadeEntry(e: SubscriptionEndpoint): SubscriptionEndpoint[] {
-  if (
-    e.protocol !== 'xray' ||
-    isPlainXray(e) ||
-    (e.subprotocol ?? 'vless') !== 'vless' ||
-    !e.cascadeExits ||
-    e.cascadeExits.length === 0
-  ) {
+  if (!canCarryCascadeLines(e) || !e.cascadeExits || e.cascadeExits.length === 0) {
     return [e];
   }
   const hashIdx = e.uri.indexOf('#');

@@ -75,7 +75,7 @@ import { hysteriaPinFor } from '../nodes/hysteria-tls-shape.js';
 import { ensureAwg3Geometry, readAwg3Geometry } from '../nodes/awg3-geometry.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { endpointId, endpointKey, isLaterDevice } from './endpoint-identity.js';
-import { expandCascadeEntry } from './cascade-entries.js';
+import { canCarryCascadeLines, expandCascadeEntry } from './cascade-entries.js';
 import { markExitsIpv6 } from './subscription.exit-ipv6.js';
 import { resolveBindingConfig } from '../profiles/profiles.service.js';
 import { normalizeHost } from '../../lib/util/ip.js';
@@ -564,6 +564,11 @@ export function collapseCascadeLines(
   const entriesByCascade = new Map<string, Map<string, SubscriptionEndpoint>>();
   const cascadeIdOfGroup = new Map<string, string>();
   for (const e of endpoints) {
+    // Only an entry that can carry lines takes part in the deal. A trojan or
+    // vmess host of the same entry and transport would be dealt lines
+    // expandCascadeEntry never expands, and they would vanish from the
+    // subscription; it goes out once, as it is, beside the VLESS ones.
+    if (!canCarryCascadeLines(e)) continue;
     for (const x of e.cascadeExits ?? []) {
       if (!x.cascadeId) continue;
       const group = `${x.cascadeId}\u0000${transportOf(e)}`;

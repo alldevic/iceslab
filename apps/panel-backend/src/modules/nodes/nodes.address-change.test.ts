@@ -165,7 +165,9 @@ describe('saving a new address', () => {
 
     const res = await put(id, `[::1]:${port}`);
     expect(res.statusCode, res.body).toBe(200);
-    expect(JSON.parse(res.body).warnings?.[0]).toMatch(/certificate may not contain the new address/);
+    const warning = JSON.parse(res.body).warnings?.[0];
+    expect(warning.code).toBe('CERT_NOT_PREPARED');
+    expect(warning.message).toMatch(/certificate may not contain the new address/);
     expect((await prisma.node.findUniqueOrThrow({ where: { id } })).address).toBe(`[::1]:${port}`);
   });
 
@@ -173,7 +175,7 @@ describe('saving a new address', () => {
     const id = await nodeAt('127.0.0.1:65001', 'unreachable');
     const res = await put(id, '[::1]:65001');
     expect(res.statusCode, res.body).toBe(200);
-    expect(JSON.parse(res.body).warnings).toHaveLength(1);
+    expect(JSON.parse(res.body).warnings).toMatchObject([{ code: 'CERT_NOT_PREPARED' }]);
   });
 
   it('asks nothing when the name stays (a port edit) or the node was never installed', async () => {

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # selftest.sh: runs the self-tests of the ops scripts, one after the other.
 #
-#   ./scripts/ops/selftest.sh              # all six
-#   ./scripts/ops/selftest.sh --light      # the four that need only bash and git
-#   ./scripts/ops/selftest.sh lib deploy   # the named ones (lib deploy logs migrate-from-fork cleanup backup-restore)
+#   ./scripts/ops/selftest.sh              # all seven
+#   ./scripts/ops/selftest.sh --light      # the five that need only bash and git
+#   ./scripts/ops/selftest.sh lib deploy   # the named ones (lib deploy logs migrate-from-fork restore cleanup backup-restore)
 #
 # This is the one command for a developer machine, and what the `ops-selftests`
 # job of ci.yml runs on every change under scripts/** (GitHub Actions may be
@@ -20,14 +20,14 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ALL=(lib deploy logs migrate-from-fork cleanup backup-restore)
+ALL=(lib deploy logs migrate-from-fork restore cleanup backup-restore)
 
 names=()
 for arg in "$@"; do
     case "$arg" in
-        --light) names+=(lib deploy logs migrate-from-fork) ;;
+        --light) names+=(lib deploy logs migrate-from-fork restore) ;;
         -h|--help) sed -n '2,20p' "$0" | sed 's/^# \?//'; exit 0 ;;
-        lib|deploy|logs|migrate-from-fork|cleanup|backup-restore) names+=("$arg") ;;
+        lib|deploy|logs|migrate-from-fork|restore|cleanup|backup-restore) names+=("$arg") ;;
         *) echo "selftest.sh: unknown argument: $arg" >&2; exit 2 ;;
     esac
 done

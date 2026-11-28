@@ -123,6 +123,8 @@ systemctl daemon-reload
 
 ## Возврат
 
+Общий порядок отката (в том числе обычного обновления этого форка) — в [rollback.ru.md](rollback.ru.md).
+
 ```bash
 cd /opt/iceslab-new
 scripts/ops/migrate-from-fork.sh --rollback --panel-dir /opt/iceslab

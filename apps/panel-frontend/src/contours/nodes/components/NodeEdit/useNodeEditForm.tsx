@@ -246,12 +246,15 @@ export function useNodeEditForm() {
       qc.invalidateQueries({ queryKey: ['policy-drawing', id] });
       form.resetDirty(form.values);
       notifications.show({ color: 'green', message: t('nodeEdit.saved') });
-      // 19.15: the address is written, but its certificate could not be reissued; the server's words.
+      // 19.15: the address is written, but its certificate could not be reissued. The text is ours by
+      // code; a code this build does not know is shown in the server's words.
       if (saved.warnings?.length) {
         notifications.show({
           color: 'yellow',
           title: t('nodeEdit.savedWithWarnings'),
-          message: saved.warnings.join('\n'),
+          message: saved.warnings
+            .map((w) => (w.code === 'CERT_NOT_PREPARED' ? t('nodeEdit.warnings.CERT_NOT_PREPARED') : w.message))
+            .join('\n'),
           autoClose: false,
         });
       }

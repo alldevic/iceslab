@@ -8,7 +8,9 @@
 #   4. Drop + recreate the postgres database, then `psql` the dump.
 #   5. Stop redis, replace dump.rdb on its volume, restart redis.
 #   6. Replace the host .env.production (only if the archive's was preserved).
-#   7. Start the panel back up.
+#   7. Bring the panel back up from the CURRENT compose file and images
+#      (`up -d`, with the migrate step), not `start` of whatever containers
+#      are left.
 #
 # DESTRUCTIVE: overwrites the database and redis state. Take a fresh
 # `iceslab-backup.sh` of the current host first.
@@ -123,6 +125,29 @@ log_info "manifest:"
 cat "${STAGE}/manifest.json"
 echo
 
+# What the archive's database is, against the code this checkout will run. The
+# manifest has `gitSha` and `migrations` since m20.4; an older archive has
+# neither and goes on as before. A database NEWER than the code (migrations the
+# checkout does not have) is a warning, not a refusal: the operator may be
+# about to check the old code out right after, but the order matters.
+manifest_line="$(tr -d '\n' < "${STAGE}/manifest.json")"
+arch_sha="$(sed -n 's/.*"gitSha": *"\([^"]*\)".*/\1/p' <<<"$manifest_line")"
+arch_mig_count="$(sed -n 's/.*"migrations": *{[^}]*"count": *\([0-9][0-9]*\).*/\1/p' <<<"$manifest_line")"
+arch_mig_last="$(sed -n 's/.*"migrations": *{[^}]*"last": *"\([^"]*\)".*/\1/p' <<<"$manifest_line")"
+[[ -z "$arch_sha" ]] || log_info "archive taken at commit ${arch_sha}"
+[[ -z "$arch_mig_count" ]] || log_info "archive database: ${arch_mig_count} migrations, the last is ${arch_mig_last:-none}"
+MIGRATIONS_DIR="${ICESLAB_MIGRATIONS_DIR:-apps/panel-backend/prisma/migrations}"
+if [[ -n "$arch_mig_count" && -d "$MIGRATIONS_DIR" ]]; then
+    code_mig_count="$(find "$MIGRATIONS_DIR" -mindepth 1 -maxdepth 1 -type d | wc -l)"
+    if [[ -n "$arch_mig_last" && ! -d "${MIGRATIONS_DIR}/${arch_mig_last}" ]] || (( arch_mig_count > code_mig_count )); then
+        log_warn "the archive's database is NEWER than this code: it has ${arch_mig_count} migrations (last ${arch_mig_last:-?}), the code in $(pwd) has ${code_mig_count}."
+        log_warn "  Migrations are not rolled back, and the panel of this code cannot run on that database."
+        log_warn "  The order for a rollback: 1) check the old code out${arch_sha:+ (git checkout ${arch_sha})} and run"
+        log_warn "  ICESLAB_REF=<that ref> scripts/ops/deploy.sh, 2) only then run this restore. After a move from"
+        log_warn "  the old fork use scripts/ops/migrate-from-fork.sh --rollback instead. See docs/rollback.md."
+    fi
+fi
+
 if [[ $ASSUME_YES -ne 1 ]]; then
     printf '%b[%s]%b %bthis WILL drop and recreate the live database.%b continue? (yes/no) ' \
         "$C_INFO" "$LIB_PREFIX" "$C_RST" "$C_WARN" "$C_RST"
@@ -232,8 +257,14 @@ rebuild_redis_aof || exit 1
 step_done
 
 # ───── Step 5: bring panel back up ─────
-step 5 "start panel services (backend, frontend)"
-"${DC[@]}" start backend frontend
+step 5 "bring panel services up (backend, frontend) from the current compose file and images"
+# `up -d`, not `start`: `start` revives the containers that are left, of whatever
+# build they were (m20.1: a newer build over the restored older database applied
+# 13 migrations to it), and with none left it fails on the `migrate` dependency.
+# `up -d` creates them from the current compose file and images, the migrate step
+# included, as deploy.sh and migrate-from-fork.sh --rollback do. No --build: the
+# images are the ones this checkout's last deploy made.
+"${DC[@]}" up -d backend frontend
 step_done
 
 # The archive's env is kept outside the checkout, mode 600: the stage is removed

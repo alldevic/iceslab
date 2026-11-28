@@ -7,6 +7,7 @@ import { notifications } from '@mantine/notifications';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import type { Node } from '@/lib/domain/nodes';
 import * as nodesApi from '@/lib/domain/nodes';
+import { nodes as ruNodes } from '@/i18n/locales/ru/nodes';
 import { useNodeEditForm } from '@/contours/nodes/components/NodeEdit/useNodeEditForm';
 
 /*
@@ -26,9 +27,16 @@ vi.mock('@/lib/domain/nodes', async (orig) => ({
   disableNodeWarp: vi.fn(async () => ({})),
   updateNode: vi.fn(),
 }));
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (k: string) => k, i18n: { language: 'en' } }),
-}));
+// The keys come back as they are, except the save warning: that one reads the real ru table.
+vi.mock('react-i18next', async () => {
+  const { nodes } = await import('@/i18n/locales/ru/nodes');
+  return {
+    useTranslation: () => ({
+      t: (k: string) => (k === 'nodeEdit.warnings.CERT_NOT_PREPARED' ? nodes.nodeEdit.warnings.CERT_NOT_PREPARED : k),
+      i18n: { language: 'ru' },
+    }),
+  };
+});
 vi.mock('@/lib/domain/profiles', () => ({ listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []) }));
 vi.mock('@/lib/domain/cascades', () => ({ listCascades: vi.fn(async () => []) }));
 vi.mock('@/lib/domain/hosts', () => ({ listHosts: vi.fn(async () => []) }));
@@ -132,9 +140,12 @@ describe('useNodeEditForm: WARP', () => {
 describe('useNodeEditForm: save warnings (19.15)', () => {
   const update = vi.mocked(nodesApi.updateNode);
 
-  it('a save with warnings shows them after the saved toast', async () => {
+  it('a known code shows its Russian text, not the server English', async () => {
     const show = vi.spyOn(notifications, 'show').mockReturnValue('x');
-    update.mockResolvedValue({ ...node('a', {}), warnings: ['node unreachable, certificate not reissued'] });
+    update.mockResolvedValue({
+      ...node('a', {}),
+      warnings: [{ code: 'CERT_NOT_PREPARED', message: 'Thell node certificate may not contain the new address' }],
+    });
     const { result } = renderInRoute('a');
     await waitFor(() => expect(result.current?.form.values.name).toBe('node-a'));
     await act(async () => {
@@ -144,8 +155,23 @@ describe('useNodeEditForm: save warnings (19.15)', () => {
     expect(show.mock.calls[1][0]).toMatchObject({
       color: 'yellow',
       title: 'nodeEdit.savedWithWarnings',
-      message: 'node unreachable, certificate not reissued',
+      message: ruNodes.nodeEdit.warnings.CERT_NOT_PREPARED,
     });
+  });
+
+  it('an unknown code shows the server message', async () => {
+    const show = vi.spyOn(notifications, 'show').mockReturnValue('x');
+    update.mockResolvedValue({
+      ...node('a', {}),
+      warnings: [{ code: 'SOMETHING_NEW', message: 'node unreachable, certificate not reissued' }],
+    });
+    const { result } = renderInRoute('a');
+    await waitFor(() => expect(result.current?.form.values.name).toBe('node-a'));
+    await act(async () => {
+      result.current?.saveMutation.mutate();
+    });
+    await waitFor(() => expect(show).toHaveBeenCalledTimes(2));
+    expect(show.mock.calls[1][0]).toMatchObject({ message: 'node unreachable, certificate not reissued' });
   });
 
   it('a save without warnings shows only the saved toast', async () => {

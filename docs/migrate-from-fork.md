@@ -132,7 +132,7 @@ scripts/ops/migrate-from-fork.sh --rollback --panel-dir /opt/iceslab
 The database named `<db>_pre_fork` is put back, the migrated one is kept as
 `<db>_migrated_<time>`, `origin` and the commit of the old checkout return, the
 images tagged `:pre-fork` start. What changed in the panel after the move is
-lost. Run `--run` again later if you wish. The old database and images are kept
+lost. Run `--run` again later if you wish. Rolling back an ordinary upgrade of this fork afterwards is in [rollback.md](rollback.md). The old database and images are kept
 until you delete them; do so only when you are sure.
 
 ## Reading the findings of the pre-check

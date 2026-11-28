@@ -156,6 +156,8 @@ bash scripts/iceslab.sh
 
 Стоит старый форк (`040410ac`)? [docs/migrate-from-fork.ru.md](docs/migrate-from-fork.ru.md) переносит установку на этот форк с данными (одноразово, `scripts/ops/migrate-from-fork.sh`).
 
+Что-то пошло не так после обновления или переноса? [docs/rollback.ru.md](docs/rollback.ru.md): сначала `migrate-from-fork.sh --rollback`, затем откат обычного обновления (бэкап, старая ссылка, restore).
+
 ## Протоколы
 
 | Протокол | Что запускается на ноде | Native или Xray |

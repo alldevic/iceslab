@@ -158,10 +158,29 @@ step_done
 step 3 "env file + manifest"
 cp "$ENV_FILE" "${STAGE}/env"
 
+# What this database is and what code it was taken under, so a restore can warn
+# when the code it lands in is older than the database (m20.4). Both are best
+# effort: no git checkout means no gitSha, no _prisma_migrations table (or no
+# answer) means no migrations; neither stops the backup. The values are cut to
+# [A-Za-z0-9_.-] since they go into JSON by hand.
+manifest_extra=""
+git_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+git_sha="${git_sha//[^A-Za-z0-9_.-]/}"
+if [[ -n "$git_sha" ]]; then
+    manifest_extra+=$'\n  "gitSha": "'"${git_sha}"$'",'
+fi
+mig_row="$(docker exec "$POSTGRES_CONTAINER" \
+    psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tA -F '|' \
+    -c "SELECT count(*), coalesce(max(migration_name), '') FROM _prisma_migrations WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL" \
+    2>/dev/null || true)"
+if [[ "$mig_row" =~ ^([0-9]+)\|([A-Za-z0-9_.-]*)$ ]]; then
+    manifest_extra+=$'\n  "migrations": {"count": '"${BASH_REMATCH[1]}"$', "last": "'"${BASH_REMATCH[2]}"$'"},'
+fi
+
 # Manifest lets restore sanity-check what it's about to overwrite.
 cat > "${STAGE}/manifest.json" <<EOF
 {
-  "createdAt": "${TS}",
+  "createdAt": "${TS}",${manifest_extra}
   "compose": "${COMPOSE_FILE}",
   "envFile": "${ENV_FILE}",
   "postgresUser": "${POSTGRES_USER}",

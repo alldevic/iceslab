@@ -156,6 +156,8 @@ It opens a menu that explains each action (deploy, backend/frontend-only deploy,
 
 Running the old fork (`040410ac`)? [docs/migrate-from-fork.md](docs/migrate-from-fork.md) moves the installation to this fork with its data (one-off, `scripts/ops/migrate-from-fork.sh`).
 
+Something went wrong after an upgrade or a move? [docs/rollback.md](docs/rollback.md): `migrate-from-fork.sh --rollback` first, then the rollback of an ordinary upgrade (backup, old ref, restore).
+
 ## Protocols
 
 | Protocol | What runs on the node | Native or Xray |

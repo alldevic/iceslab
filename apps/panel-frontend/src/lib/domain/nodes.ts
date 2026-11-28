@@ -578,7 +578,8 @@ export async function createNode(input: CreateNodeInput): Promise<NodeWithPayloa
 }
 
 /** PUT /api/nodes/:id: the node; `warnings` only when the save went through with a caveat (19.15). */
-export type UpdatedNode = Node & { warnings?: string[] };
+export type NodeWarning = { code: string; message: string };
+export type UpdatedNode = Node & { warnings?: NodeWarning[] };
 
 export async function updateNode(id: string, input: UpdateNodeInput): Promise<UpdatedNode> {
   const { data } = await api.put<UpdatedNode>(`/api/nodes/${id}`, input);

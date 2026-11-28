@@ -244,3 +244,44 @@ describe('collapseCascadeLines across transports', () => {
     expect(collapseCascadeLines.length).toBe(2);
   });
 });
+
+describe('entries that cannot carry the lines stay out of the deal', () => {
+  // vlessRoute is a VLESS field: a trojan or vmess host of the same entry on the
+  // same transport used to be dealt lines expandCascadeEntry then never expands.
+  const raw = { network: 'raw' };
+  const vless = (over: Partial<SubscriptionEndpoint> = {}) =>
+    entry({ ...raw, nodeName: 'ru-01', host: 'ru-01.example', cascadeExits: lines(), ...over });
+  const other = (subprotocol: 'trojan' | 'vmess') =>
+    entry({
+      ...raw,
+      subprotocol,
+      nodeName: 'ru-01',
+      host: 'ru-01-alt.example',
+      cascadeExits: lines(),
+    } as never);
+
+  for (const subprotocol of ['trojan', 'vmess'] as const) {
+    it(`keeps every line on the VLESS host beside a ${subprotocol} host of one transport`, () => {
+      for (const user of ['user-1', 'user-2', 'user-3', 'user-4']) {
+        const v = vless();
+        const o = other(subprotocol);
+        collapseCascadeLines([v, o], user);
+        expect((v.cascadeExits ?? []).map((x) => x.tag).sort()).toEqual([AUTO, NL, SE].sort());
+        expect(o.cascadeExits).toHaveLength(3);
+      }
+    });
+  }
+
+  it('leaves a lone trojan host as it was', () => {
+    const o = other('trojan');
+    collapseCascadeLines([o], 'user-1');
+    expect(o.cascadeExits).toHaveLength(3);
+  });
+
+  it('still deals between two VLESS hosts of one transport', () => {
+    const endpoints = [vless(), vless({ nodeName: 'ru-02', host: 'ru-02.example' })];
+    collapseCascadeLines(endpoints, 'user-1');
+    expect(labels(endpoints).sort()).toEqual(['⚡ ru → Auto', '🇳🇱 ru → NL', '🇸🇪 ru → SE'].sort());
+    expect(endpoints.filter((e) => (e.cascadeExits ?? []).length > 0)).toHaveLength(2);
+  });
+});
