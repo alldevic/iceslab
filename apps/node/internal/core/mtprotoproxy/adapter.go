@@ -213,6 +213,10 @@ func (a *Adapter) Start(ctx context.Context) error {
 }
 
 func (a *Adapter) Stop(ctx context.Context) error {
+	// Behind restartMu: a restart or a config rewrite in flight finishes before
+	// Stop returns, so nothing writes the config (or starts a process) after it.
+	a.restartMu.Lock()
+	defer a.restartMu.Unlock()
 	a.mu.Lock()
 	a.started = false
 	a.stopExpiryTimerLocked()
@@ -866,8 +870,14 @@ func (a *Adapter) onProcessRestart(ev subprocess.RestartEvent) {
 		a.restartMu.Lock()
 		defer a.restartMu.Unlock()
 		a.mu.Lock()
-		a.newProcessLocked()
+		gone := a.proc == nil // Stop or Idle came first: nothing is left to respawn
+		if !gone {
+			a.newProcessLocked()
+		}
 		a.mu.Unlock()
+		if gone {
+			return
+		}
 		if _, err := a.renderSettled(); err != nil {
 			a.logger.Error("mtprotoproxy: config not rewritten for the restarted process", "err", err)
 		}

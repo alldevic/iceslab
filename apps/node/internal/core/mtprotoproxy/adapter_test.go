@@ -1574,3 +1574,24 @@ func TestACrashRestartAfterSpendWithNoPanelWritesTheTrueRemainder(t *testing.T) 
 		t.Errorf("quota = %v after the crash-restart, want the true remainder 300 (not 900)", q)
 	}
 }
+
+func TestStop_NoConfigRewriteForARestartAnnouncedAfterIt(t *testing.T) {
+	// The supervisor announces a respawn from its own goroutine; the rewrite it
+	// asks for must not land after Stop, where it outlives the adapter's files.
+	f := processFixture(t, true)
+	a := f.a
+	if err := a.ApplyInbound(2083, domainPush); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(a.cfg.ConfigPath); err != nil {
+		t.Fatal(err)
+	}
+	a.onProcessRestart(subprocess.RestartEvent{Reason: subprocess.RestartReasonCrash, Attempt: 1, Max: 5})
+	time.Sleep(100 * time.Millisecond)
+	if _, err := os.Stat(a.cfg.ConfigPath); err == nil {
+		t.Error("the config was rewritten after Stop")
+	}
+}
