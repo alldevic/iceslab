@@ -24,7 +24,7 @@ export async function lossStep(c: Client, report: Report): Promise<void> {
   }
   for (const b of await rows<{ id: string; name: string; overrides: Record<string, unknown> | null }>(
     c,
-    `SELECT b.id, p.name, b.overrides FROM profile_node_bindings b JOIN profiles p ON p.id = b.profile_id WHERE b.overrides IS NOT NULL`,
+    `SELECT b.id, p.name, b.overrides FROM profile_node_bindings b JOIN profiles p ON p.id = b.profile_id WHERE jsonb_typeof(b.overrides) = 'object'`,
   )) {
     const s = stripLossy(b.overrides);
     if (!s) continue;

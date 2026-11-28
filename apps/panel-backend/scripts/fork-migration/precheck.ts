@@ -124,7 +124,7 @@ async function lossy(c: Client, r: Report, acceptLoss: boolean): Promise<void> {
     const k = Object.keys(p.config ?? {}).filter((x) => keys.includes(x) && (p.config as Record<string, unknown>)[x] != null);
     if (k.length) hits.push({ where: 'profile config', profile: p.name, keys: k, users: await users(p.id) });
   }
-  const overrides = await rows<{ id: string; profile_id: string; name: string; overrides: Record<string, unknown> }>(c, `SELECT b.id, b.profile_id, p.name, b.overrides FROM profile_node_bindings b JOIN profiles p ON p.id = b.profile_id WHERE b.overrides IS NOT NULL`);
+  const overrides = await rows<{ id: string; profile_id: string; name: string; overrides: Record<string, unknown> }>(c, `SELECT b.id, b.profile_id, p.name, b.overrides FROM profile_node_bindings b JOIN profiles p ON p.id = b.profile_id WHERE jsonb_typeof(b.overrides) = 'object'`);
   for (const b of overrides) {
     const k = Object.keys(b.overrides).filter((x) => keys.includes(x) && b.overrides[x] != null);
     if (k.length) hits.push({ where: 'binding overrides', profile: b.name, keys: k, users: await users(b.profile_id) });

@@ -101,9 +101,14 @@ The agent of the old fork speaks a different contract (no `/addUsers`,
 `/assets`, `/connLog`, `/rotateCert` on one side, `/applyEgress` and
 `/generateKeys` on the other). **Compatibility of the new panel with the old
 agent is not promised**: reinstall every node right after the move. In the
-panel: node, "Refresh bootstrap", run the command it shows on the node. Then
-check the version in `/healthz`, a push of the config, and that port hopping is
-back in the subscription.
+panel: node, "Refresh bootstrap", run the command it shows on the node **with
+`--reset`** (an agent is already installed; without it the installer asks on the
+terminal). Then check the version in `/healthz`, a push of the config, and that
+port hopping is back in the subscription.
+
+Panel logins: the new panel does not accept the old administrator sessions (the
+token has no `jti`): log in again with the same password and 2FA code. API
+tokens keep working.
 
 Leftovers of zapret2 on a node the move does not touch (remove by hand, only
 where it was enabled):
