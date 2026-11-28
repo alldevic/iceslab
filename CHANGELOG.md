@@ -7,6 +7,14 @@ All notable changes to Iceslab are documented here. Format loosely follows
 
 ### Added
 
+- **A move from the old fork** (`040410ac`) with the data kept:
+  `scripts/ops/migrate-from-fork.sh --check | --run | --rollback`, one-off, see
+  `docs/migrate-from-fork.md`. It works on a copy of the database (the old one
+  is kept, rollback puts it back), bridges the two migration chains, converts
+  egress policies, geo settings and `hardening`, and reports what the new fork
+  does not carry (zapret2, post-quantum profile fields) instead of losing it
+  silently. The panel image carries its compiled script
+  (`dist-fork-migration/`).
 - **Plain WireGuard**, beside AmneziaWG. A profile of the new protocol
   `wireguard` (a subnet and the server keypair, generated in the form; no
   obfuscation block) goes to a node that carries the engine, and the user's

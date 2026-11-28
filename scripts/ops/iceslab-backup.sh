@@ -30,8 +30,10 @@ ENV_FILE=".env.production"
 OUT_DIR="./backups"
 PASSWORD=""
 
-POSTGRES_CONTAINER="iceslab-prod-postgres"
-REDIS_CONTAINER="iceslab-prod-redis"
+# The names are the compose file's; the env overrides are for a host that names them otherwise
+# (migrate-from-fork.sh passes them on, the local stand uses omega-stand-*).
+POSTGRES_CONTAINER="${ICESLAB_POSTGRES_CONTAINER:-iceslab-prod-postgres}"
+REDIS_CONTAINER="${ICESLAB_REDIS_CONTAINER:-iceslab-prod-redis}"
 
 # ───── Args ─────
 while [[ $# -gt 0 ]]; do

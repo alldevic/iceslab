@@ -1,0 +1,170 @@
+[
+  {
+    "name": "Hiddify",
+    "uaPattern": "(?i)hiddify",
+    "format": "singbox",
+    "proto": null,
+    "priority": 10,
+    "enabled": true
+  },
+  {
+    "name": "NekoBox/NekoRay",
+    "uaPattern": "(?i)nekobox|nekoray",
+    "format": "singbox",
+    "proto": null,
+    "priority": 20,
+    "enabled": true
+  },
+  {
+    "name": "sing-box",
+    "uaPattern": "(?i)sing-box|sfi|sfa|sfm|sft",
+    "format": "singbox",
+    "proto": null,
+    "priority": 30,
+    "enabled": true
+  },
+  {
+    "name": "Clash",
+    "uaPattern": "(?i)clash|clashx|flclash|stash|mihomo",
+    "format": "clash",
+    "proto": null,
+    "priority": 40,
+    "enabled": true
+  },
+  {
+    "name": "v2rayN",
+    "uaPattern": "(?i)v2rayn|v2rayng",
+    "format": "plain",
+    "proto": null,
+    "priority": 50,
+    "enabled": true
+  },
+  {
+    "name": "AmneziaWG-app",
+    "uaPattern": "(?i)amneziavpn|amneziawg",
+    "format": "wgconf",
+    "proto": "amneziawg",
+    "priority": 55,
+    "enabled": true
+  },
+  {
+    "name": "WireGuard",
+    "uaPattern": "(?i)wireguard|wg-?tunnel|wiresock",
+    "format": "wgconf",
+    "proto": "wireguard",
+    "priority": 60,
+    "enabled": true
+  },
+  {
+    "name": "Karing",
+    "uaPattern": "(?i)karing",
+    "format": "singbox",
+    "proto": null,
+    "priority": 100,
+    "enabled": true
+  },
+  {
+    "name": "Throne",
+    "uaPattern": "(?i)throne",
+    "format": "singbox",
+    "proto": null,
+    "priority": 110,
+    "enabled": true
+  },
+  {
+    "name": "FoXray",
+    "uaPattern": "(?i)foxray",
+    "format": "xrayjson",
+    "proto": null,
+    "priority": 120,
+    "enabled": true
+  },
+  {
+    "name": "Surfboard",
+    "uaPattern": "(?i)surfboard",
+    "format": "surge",
+    "proto": null,
+    "priority": 130,
+    "enabled": true
+  },
+  {
+    "name": "Surge",
+    "uaPattern": "(?i)surge",
+    "format": "surge",
+    "proto": null,
+    "priority": 140,
+    "enabled": true
+  },
+  {
+    "name": "Quantumult X",
+    "uaPattern": "(?i)quantumult",
+    "format": "quantumultx",
+    "proto": null,
+    "priority": 150,
+    "enabled": true
+  },
+  {
+    "name": "Loon",
+    "uaPattern": "(?i)loon",
+    "format": "loon",
+    "proto": null,
+    "priority": 160,
+    "enabled": true
+  },
+  {
+    "name": "Outline",
+    "uaPattern": "(?i)outline",
+    "format": "outline",
+    "proto": null,
+    "priority": 170,
+    "enabled": true
+  },
+  {
+    "name": "XKeen",
+    "uaPattern": "(?i)xkeen",
+    "format": "xkeen",
+    "proto": null,
+    "priority": 180,
+    "enabled": true
+  },
+  {
+    "name": "Shadowrocket",
+    "uaPattern": "(?i)shadowrocket",
+    "format": "plain",
+    "proto": null,
+    "priority": 200,
+    "enabled": true
+  },
+  {
+    "name": "Streisand",
+    "uaPattern": "(?i)streisand",
+    "format": "plain",
+    "proto": null,
+    "priority": 210,
+    "enabled": true
+  },
+  {
+    "name": "V2Box",
+    "uaPattern": "(?i)v2box",
+    "format": "plain",
+    "proto": null,
+    "priority": 220,
+    "enabled": true
+  },
+  {
+    "name": "Happ",
+    "uaPattern": "(?i)happ",
+    "format": "xrayjson-array",
+    "proto": null,
+    "priority": 230,
+    "enabled": true
+  },
+  {
+    "name": "Default",
+    "uaPattern": ".*",
+    "format": "plain",
+    "proto": null,
+    "priority": 900,
+    "enabled": true
+  }
+]

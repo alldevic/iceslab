@@ -154,6 +154,8 @@ bash scripts/iceslab.sh
 
 It opens a menu that explains each action (deploy, backend/frontend-only deploy, logs, cleanup, backup, restore) and runs the one you pick. Deploys auto-apply DB migrations. For scripting, run an action directly: `bash scripts/iceslab.sh deploy`. The individual scripts live in `scripts/ops/`; `iceslab.sh` only explains and routes to them.
 
+Running the old fork (`040410ac`)? [docs/migrate-from-fork.md](docs/migrate-from-fork.md) moves the installation to this fork with its data (one-off, `scripts/ops/migrate-from-fork.sh`).
+
 ## Protocols
 
 | Protocol | What runs on the node | Native or Xray |

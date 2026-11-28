@@ -1,0 +1,15 @@
+{
+  // Milestone 20.3: the one-off move from the old fork, compiled for the image.
+  // The panel image carries no tsx and no scripts/ (Dockerfile), so the script
+  // runs as plain node from dist-fork-migration/scripts/fork-migration/cli.js.
+  // rootDir is the package so the few modules of src/ it imports (the Zod
+  // schemas omega validates with) are emitted beside it.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "./dist-fork-migration",
+    "sourceMap": false
+  },
+  "include": ["scripts/fork-migration/**/*"],
+  "exclude": ["node_modules", "dist", "dist-fork-migration", "**/*.test.ts", "scripts/fork-migration/testdb.ts"]
+}

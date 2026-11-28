@@ -114,6 +114,15 @@ RUN for i in 1 2 3 4 5; do \
     echo "prisma generate failed after 5 attempts" >&2; exit 1
 RUN pnpm exec tsc
 
+# Milestone 20.3: the one-off move from the old fork (scripts/ops/migrate-from-fork.sh).
+# The image has no tsx and loses scripts/ below, so the TypeScript of the move is
+# compiled here, beside dist/, with the few data files it reads (the old fork's
+# schema, journal and seed lists). Run as `node dist-fork-migration/scripts/
+# fork-migration/cli.js` from /app/apps/panel-backend.
+RUN pnpm exec tsc -p tsconfig.fork-migration.json \
+    && find scripts/fork-migration -maxdepth 1 -type f ! -name '*.ts' \
+         -exec cp {} dist-fork-migration/scripts/fork-migration/ \;
+
 # Compile the @iceslab/shared workspace package in-place (emit .js siblings
 # next to the .ts in its src/). Its package.json points the package entry at
 # `src/index.ts` so dev tooling (tsx / vitest / vite) reads TS source directly.
@@ -164,6 +173,7 @@ RUN rm -rf \
       /repo/apps/panel-backend/vitest.config.ts \
       /repo/apps/panel-backend/tsconfig.json \
       /repo/apps/panel-backend/tsconfig.scripts.json \
+      /repo/apps/panel-backend/tsconfig.fork-migration.json \
       /repo/apps/panel-backend/eslint.config.js \
       /repo/apps/panel-backend/Dockerfile \
       /repo/apps/panel-backend/README.md \

@@ -5,6 +5,7 @@
 # Per-package build artefacts and dep trees
 **/node_modules
 **/dist
+**/dist-fork-migration
 **/*.tsbuildinfo
 **/coverage
 

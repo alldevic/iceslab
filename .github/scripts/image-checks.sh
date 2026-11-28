@@ -48,7 +48,7 @@ check_content() {
     app=/app/apps/panel-backend
     shared=/app/packages/shared
     for p in "$app/src" "$app/tests" "$app/scripts" "$app/Dockerfile" \
-             "$app/vitest.config.ts" "$app/tsconfig.json" "$app/tsconfig.scripts.json" \
+             "$app/vitest.config.ts" "$app/tsconfig.json" "$app/tsconfig.scripts.json" "$app/tsconfig.fork-migration.json" \
              "$app/eslint.config.js" /app/.git "$shared/testdata"; do
       [ ! -e "$p" ] || echo "present, must not be: $p"
     done
@@ -58,6 +58,7 @@ check_content() {
     for p in "$shared/src/index.ts" "$shared/src/index.js" "$shared/src/recipes.snapshot.json" \
              "$shared/recipe.schema.json" "$shared/package.json" \
              "$app/prisma" "$app/prisma.config.ts" "$app/package.json" "$app/dist/index.js" \
+             "$app/dist-fork-migration/scripts/fork-migration/cli.js" "$app/dist-fork-migration/scripts/fork-migration/old-schema.prisma" \
              /app/package.json /app/pnpm-workspace.yaml /app/cores; do
       [ -e "$p" ] || echo "missing, must be there: $p"
     done

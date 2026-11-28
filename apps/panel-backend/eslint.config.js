@@ -18,7 +18,7 @@ import { defineConfig, globalIgnores } from 'eslint/config'
 // ⚠ ГЕНЕРАТ НЕ ЛИНТУЕТСЯ. `src/generated/prisma` пишет генератор, править его
 // нельзя, а весит он больше остального кода вместе взятого.
 export default defineConfig([
-  globalIgnores(['dist', 'src/generated']),
+  globalIgnores(['dist', 'dist-fork-migration', 'src/generated']),
   {
     files: ['**/*.ts'],
     extends: [js.configs.recommended, tseslint.configs.recommended],

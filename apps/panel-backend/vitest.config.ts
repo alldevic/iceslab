@@ -31,7 +31,8 @@ export default defineConfig({
   test: {
     globals: false,
     environment: 'node',
-    include: ['src/**/*.test.ts', 'tests/**/*.test.ts'],
+    // scripts/fork-migration: the tests of the one-off move from the old fork (20.3).
+    include: ['src/**/*.test.ts', 'tests/**/*.test.ts', 'scripts/**/*.test.ts'],
     env: testEnv,
     // Integration tests share a single test Postgres, serialize across files
     // to avoid collisions on cleanDatabase() / unique constraints.

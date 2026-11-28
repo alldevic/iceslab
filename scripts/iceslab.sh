@@ -17,8 +17,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/ops/_lib.sh"
 
 # Parallel arrays; index order = menu order. KEYS also accepted as direct args.
-KEYS=(deploy deploy-backend deploy-frontend logs cleanup backup restore)
-RUN=(deploy.sh deploy-backend.sh deploy-frontend.sh logs.sh cleanup.sh iceslab-backup.sh iceslab-restore.sh)
+KEYS=(deploy deploy-backend deploy-frontend logs cleanup backup restore migrate-from-fork)
+RUN=(deploy.sh deploy-backend.sh deploy-frontend.sh logs.sh cleanup.sh iceslab-backup.sh iceslab-restore.sh migrate-from-fork.sh)
 WHAT=(
     "Full re-deploy: rebuild backend+frontend, migrate the DB, restart."
     "Backend only: rebuild + migrate + restart (frontend untouched)."
@@ -27,6 +27,7 @@ WHAT=(
     "Prune dangling Docker images + build cache left by past deploys."
     "Back up Postgres + Redis + .env.production into one tarball."
     "Restore a backup tarball. DESTRUCTIVE: overwrites the DB + redis."
+    "ONE-OFF: move an installation of the OLD fork (040410ac) onto this fork, data kept. Run from a checkout of this fork: --check, --run, --rollback."
 )
 WHEN=(
     "after any change, or to pull the latest release."
@@ -36,6 +37,7 @@ WHEN=(
     "the panel-host disk fills up after several deploys."
     "before a risky op or restore, or on a schedule."
     "recovery, or moving the panel to a new host."
+    "you still run the old fork; see docs/migrate-from-fork.md. Not for an update of this fork."
 )
 
 print_guide() {
