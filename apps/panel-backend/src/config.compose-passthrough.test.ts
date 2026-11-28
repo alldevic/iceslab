@@ -90,3 +90,22 @@ describe('PANEL_PUBLIC_IP6 is passed through and documented', () => {
     expect(src).toMatch(/^PANEL_PUBLIC_IP6=$/m);
   });
 });
+
+// 20.1: the fork's switches reach the container from the ready-made images too,
+// not only from the source build.
+describe('the fork switches are passed through by both compose files', () => {
+  const keys = [
+    'CLIENT_PORTAL_URL',
+    'EXT_VPTECH_POOL_ENABLED',
+    'EXT_VPTECH_POOL_ANSIBLE_PLAYBOOK',
+    'EXT_VPTECH_POOL_ANSIBLE_INVENTORY',
+    'EXT_VPTECH_POOL_ANSIBLE_BIN',
+    'PANEL_PUBLIC_IP6',
+    'REMNAWAVE_COMPAT_ENABLED',
+    'GEO_SELF_HOST',
+  ];
+  it.each(['docker-compose.prod.yml', 'docker-compose.ghcr.yml'])('%s', (file) => {
+    const src = readFileSync(resolve(repoRoot, file), 'utf8');
+    for (const k of keys) expect(src, k).toMatch(new RegExp(`^\\s+${k}: \\$\\{${k}:-`, 'm'));
+  });
+});
